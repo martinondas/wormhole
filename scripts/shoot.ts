@@ -34,16 +34,40 @@ await page.waitForTimeout(waitMs)
 
 // Optional: hold one or more keys (KeyboardEvent.code, comma-separated) for
 // SHOOT_HOLD_MS before the capture, to verify steering/throttle in a still.
+const setTheta = process.env.SHOOT_SET_THETA
 const hold = (process.env.SHOOT_HOLD ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-if (hold.length) {
+if (setTheta !== undefined) {
+  // Force a specific craft angle (radians) for a deterministic still, e.g. to
+  // check that theta = 2*PI (bottom after a loop) renders fully upright.
+  await page.evaluate((t) => {
+    const wh = (globalThis as Record<string, unknown>).WH as
+      | { craft?: { theta: number; omega: number; steerSignal: number } }
+      | undefined
+    if (wh?.craft) { wh.craft.theta = t; wh.craft.omega = 0; wh.craft.steerSignal = 0 }
+  }, Number(setTheta))
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: out })
+} else if (hold.length) {
   const holdMs = Number(process.env.SHOOT_HOLD_MS ?? 1200)
+  const settleMs = Number(process.env.SHOOT_SETTLE_MS ?? 0) // if >0, release then settle before the shot
   for (const k of hold) await page.keyboard.down(k)
   await page.waitForTimeout(holdMs)
+  if (settleMs > 0) {
+    for (const k of hold) await page.keyboard.up(k)
+    await page.waitForTimeout(settleMs)
+  }
   await page.screenshot({ path: out })
-  for (const k of hold) await page.keyboard.up(k)
+  if (settleMs <= 0) for (const k of hold) await page.keyboard.up(k)
 } else {
   await page.screenshot({ path: out })
 }
+
+const theta = await page.evaluate(() => {
+  const wh = (globalThis as Record<string, unknown>).WH as { craft?: { theta: number } } | undefined
+  return wh?.craft ? wh.craft.theta : null
+})
+if (theta !== null) console.log('craft.theta =', theta)
+
 await browser.close()
 
 if (errors.length) {

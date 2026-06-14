@@ -17,9 +17,15 @@ export function createCameraRig(camera: PerspectiveCamera): CameraRig {
 
   return {
     update(craft: CraftState, frameDt: number): void {
+      // Drive the camera from theta wrapped to [-PI, PI], NOT the raw unbounded
+      // theta. Gravity's rest point is the bottom (any multiple of 2*PI), which
+      // all wrap to 0 - so "down" stays fixed at screen-down and the view
+      // returns fully upright whenever the craft settles, even after loops.
+      const wrapped = Math.atan2(Math.sin(craft.theta), Math.cos(craft.theta))
+
       // orbit only a little, smoothed (frame-rate independent)
       const k = 1 - Math.exp(-frameDt / Math.max(CAMERA.FOLLOW_LAG, 1e-4))
-      camTheta += (craft.theta * CAMERA.ORBIT_FOLLOW - camTheta) * k
+      camTheta += (wrapped * CAMERA.ORBIT_FOLLOW - camTheta) * k
 
       camera.position.set(
         Math.sin(camTheta) * camRadius,
@@ -28,14 +34,14 @@ export function createCameraRig(camera: PerspectiveCamera): CameraRig {
       )
 
       // subtle bank: roll only a fraction of theta (unit vector, no normalize)
-      const rollPhi = craft.theta * CAMERA.ROLL_FOLLOW
+      const rollPhi = wrapped * CAMERA.ROLL_FOLLOW
       up.set(-Math.sin(rollPhi), Math.cos(rollPhi), 0)
       camera.up.copy(up)
 
       // aim down the tube, biased partway toward the craft so it stays framed
       camera.lookAt(
-        Math.sin(craft.theta) * lookRadius * CAMERA.AIM_FOLLOW,
-        -Math.cos(craft.theta) * lookRadius * CAMERA.AIM_FOLLOW,
+        Math.sin(wrapped) * lookRadius * CAMERA.AIM_FOLLOW,
+        -Math.cos(wrapped) * lookRadius * CAMERA.AIM_FOLLOW,
         SHIP.Z - CAMERA.LOOK_AHEAD,
       )
     },
