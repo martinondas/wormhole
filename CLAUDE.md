@@ -46,8 +46,11 @@ The craft's position is an angle `theta` around the circular cross-section of th
             THROTTLE_ACCEL, BOOST_ACCEL, EASE_DECEL
 - tube:     TUBE_RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES
 - camera:   CAM_BACK, CAM_RISE, CAM_FOV, CAM_ROLL_FOLLOW, CAM_ROLL_LAG
-- render:   LINE_CORE, LINE_GLOW, BG_COLOR, FOG_NEAR, FOG_FAR, RENDER_SCALE,
-            BLOOM_ENABLED (on), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD, SHIP_LINE_WIDTH
+- render:   RING_RGB, LONG_RGB, SHIP_RGB, FOG_NEAR, FOG_FAR, RENDER_SCALE, MSAA_SAMPLES,
+            BLOOM_ENABLED (on), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD
+- background:BACKGROUND.{CENTER,MID,EDGE,MID_STOP} gradient; STARS, STAR_ALPHA, STAR_SPREAD_DEG
+- pickup:   RADIUS, EDGE_RGB, GLOW_RGB, GLOW_OPACITY, SPIN/BOB; COUNT, SPAWN_*, CAPTURE_Z,
+            CAPTURE_ANGLE, POP_TIME
 
 ### Camera feel (decided default, easy to change)
 Chase cam sits behind and slightly above the craft AT the craft's angular position, so it
@@ -85,17 +88,23 @@ and on-aesthetic.
 ## Repo structure
     index.html, package.json, tsconfig.json, vite.config.ts, CLAUDE.md
     src/
-      main.ts              bootstrap, canvas, resize, start loop
+      main.ts              bootstrap, canvas, resize, start loop, WH debug handle
       config.ts            ALL tunable constants, grouped (see above)
       loop.ts              fixed-timestep accumulator; update vs render split
       input.ts             keyboard -> steering + throttle/boost signals
+      craft.ts             player state: pendulum + speed + smoothed steer
+      util/math.ts         clamp / approach / lerp
       physics/pendulum.ts  theta integrator (damped driven pendulum)
       world/tube.ts        build + scroll the wireframe tube mesh
       world/ship.ts        procedural 3D spacecraft hull (edge-lit); place on wall from theta
+      world/pickup.ts      one blue health orb (wireframe icosphere + blue fill)
+      world/pickups.ts     orb pool: spawn around wall, scroll, ride-into collect
       render/scene.ts      Three scene/camera/renderer + bloom composer, fog/fade
-      render/camera.ts     chase follow + bank from theta/omega
+      render/camera.ts     chase follow + bank from theta (sin-based, smooth loops)
+      render/background.ts deep-space gradient backdrop (scene.background)
+      render/stars.ts      world-space starfield (follows camera pos, holds orientation)
     test/                  vitest (pendulum math) - added when useful
-    scripts/shoot.ts       Playwright screenshot of the running canvas (self-verify)
+    scripts/shoot.ts       Playwright screenshot (SET_THETA/HOLD/SETTLE; logs state)
 
 ## Dev commands
 - Install:    `npm install`
@@ -125,11 +134,15 @@ and on-aesthetic.
 - [x] M0  Scaffold: Vite + TS (strict) + Three.js, bloom composer, git, Playwright shoot.
 - [x] M1  Scrolling wireframe tube (Tron neon + bloom) + procedural 3D ship (edge-lit, banks
           with the swing) + pendulum physics + banking chase cam + throttle/boost (no halt),
-          controllable, constants exposed. NO pickups/shooting/HUD yet.
-          BUILT - awaiting playtest + feel tuning before M2.
+          controllable, constants exposed. BUILT + playtested + tuned (stable
+          wormhole cam, gravity-down, smooth loops, framing).
+- [~] M2  Pickups + atmosphere. Blue wireframe health orbs (edge-lit), deep-space
+          gradient backdrop + world-space stars, muted tube green. Spawner +
+          ride-into collection (pop + WH.pickups.count) DONE. Scoring display +
+          the health/energy meter + HUD still to come.
 
 ### Backlog (recorded, not built yet)
-- [ ] Pickups and scoring
+- [ ] Scoring display + health/energy meter + HUD + game-over loop
 - [ ] Obstacles and collisions
 - [ ] Forward gun and enemies
 - [ ] Energy/time meter and game-over loop

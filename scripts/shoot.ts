@@ -63,11 +63,17 @@ if (setTheta !== undefined) {
   await page.screenshot({ path: out })
 }
 
-const theta = await page.evaluate(() => {
-  const wh = (globalThis as Record<string, unknown>).WH as { craft?: { theta: number } } | undefined
-  return wh?.craft ? wh.craft.theta : null
+const state = await page.evaluate(() => {
+  const wh = (globalThis as Record<string, unknown>).WH as
+    | { craft?: { theta: number; distance: number }; pickups?: { count: number } }
+    | undefined
+  return {
+    theta: wh?.craft?.theta ?? null,
+    distance: wh?.craft?.distance ?? null,
+    pickups: wh?.pickups?.count ?? null,
+  }
 })
-if (theta !== null) console.log('craft.theta =', theta)
+console.log(`craft.theta=${state.theta}  distance=${state.distance}  pickups=${state.pickups}`)
 
 await browser.close()
 

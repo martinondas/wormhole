@@ -3,7 +3,7 @@ import { createCameraRig } from './render/camera'
 import { createStarfield } from './render/stars'
 import { createTube } from './world/tube'
 import { createShip } from './world/ship'
-import { createPickup } from './world/pickup'
+import { createPickups } from './world/pickups'
 import { Input } from './input'
 import { createCraft, updateCraft } from './craft'
 import { startLoop } from './loop'
@@ -28,23 +28,9 @@ const rig = createCameraRig(stage.camera)
 const input = new Input()
 const craft = createCraft()
 
-// TEMP (M2 slice 1): static orbs to tune the pickup look; replaced by a spawner.
-const testPickups = [
-  createPickup(),
-  createPickup(),
-  createPickup(),
-]
-const testPositions: [number, number, number][] = [
-  [-2.6, -1.2, -4],
-  [3.0, -2.6, -9],
-  [0.0, 3.0, -16],
-]
-testPickups.forEach((p, i) => {
-  const pos = testPositions[i]!
-  p.object.position.set(pos[0], pos[1], pos[2])
-  stage.scene.add(p.object)
-  stage.onResize((w, h) => p.setResolution(w, h))
-})
+const pickups = createPickups()
+stage.scene.add(pickups.object)
+stage.onResize((w, h) => pickups.setResolution(w, h))
 
 const fixedDt = 1 / PHYSICS.HZ
 const debug = { paused: false } // freeze physics (rendering continues) for poses
@@ -52,14 +38,16 @@ const debug = { paused: false } // freeze physics (rendering continues) for pose
 startLoop(
   fixedDt,
   (dt) => {
-    if (!debug.paused) updateCraft(craft, input.state, dt)
+    if (debug.paused) return
+    updateCraft(craft, input.state, dt)
+    // collection lives in the fixed step so a fast pass never skips the window
+    pickups.update(craft, dt)
   },
   (frameDt) => {
     ship.update(craft)
     rig.update(craft, frameDt)
     stars.update(stage.camera)
     tube.update(craft.distance)
-    for (const p of testPickups) p.update(frameDt)
     stage.render()
   },
 )
@@ -70,5 +58,6 @@ startLoop(
 ;(window as unknown as { WH: unknown }).WH = {
   craft,
   debug,
+  pickups,
   config: { PHYSICS, SPEED, CAMERA, TUBE, SHIP, RENDER, PICKUP, BACKGROUND },
 }

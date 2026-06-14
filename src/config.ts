@@ -109,6 +109,16 @@ export const PICKUP = {
   SPIN_SPEED: 0.8,    // rad/s about the vertical axis
   BOB_AMP: 0.14,      // bob height (world units)
   BOB_SPEED: 2.2,     // bob rad/s
+
+  // --- spawn / collection mechanic ---
+  COUNT: 12,          // orbs alive in the pool at once
+  SPAWN_START: 40,    // distance ahead of the first orb
+  SPAWN_SPACING: 26,  // nominal distance between orbs along the tube
+  SPAWN_JITTER: 10,   // random extra distance per orb
+  RECYCLE_BEHIND: 22, // recycle once an orb is this far behind the ship
+  CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
+  CAPTURE_ANGLE: 0.42,// angular window (rad) for a catch (~24 deg)
+  POP_TIME: 0.18,     // collect pop duration (s)
 }
 
 // --- input key bindings (KeyboardEvent.code) --------------------------------

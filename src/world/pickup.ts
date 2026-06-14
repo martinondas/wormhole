@@ -19,6 +19,7 @@ export interface Pickup {
   object: Group
   update(dt: number): void
   setResolution(w: number, h: number): void
+  setOpacity(o: number): void // 1 = normal; used for the collect fade
 }
 
 // Shared geometry/material would couple lifetimes awkwardly while we are still
@@ -29,14 +30,12 @@ export function createPickup(): Pickup {
   // inner fill: a darker, less-transparent blue ball (normal blend so it reads
   // as a solid body, not an additive glow). depthWrite occludes the back edges
   // and the tube behind, so the orb looks like a real object.
-  const glow = new Mesh(
-    new SphereGeometry(PICKUP.RADIUS * 0.9, 20, 14),
-    new MeshBasicMaterial({
-      color: new Color().setRGB(...PICKUP.GLOW_RGB),
-      transparent: true,
-      opacity: PICKUP.GLOW_OPACITY,
-    }),
-  )
+  const fillMat = new MeshBasicMaterial({
+    color: new Color().setRGB(...PICKUP.GLOW_RGB),
+    transparent: true,
+    opacity: PICKUP.GLOW_OPACITY,
+  })
+  const glow = new Mesh(new SphereGeometry(PICKUP.RADIUS * 0.9, 20, 14), fillMat)
   inner.add(glow)
 
   // faceted wireframe shell (all triangle edges -> geodesic-sphere look)
@@ -49,6 +48,7 @@ export function createPickup(): Pickup {
     worldUnits: false,
     transparent: true,
     depthTest: true, // normal blend (not additive) so edges stay blue over the fill, not white
+    fog: true, // fade in through the tube fog as they approach
   })
   lineMat.color.setRGB(...PICKUP.EDGE_RGB) // keep HDR (>1) values for strong bloom
   const shell = new LineSegments2(lineGeo, lineMat)
@@ -70,6 +70,10 @@ export function createPickup(): Pickup {
     },
     setResolution(w: number, h: number): void {
       lineMat.resolution.set(w, h)
+    },
+    setOpacity(o: number): void {
+      fillMat.opacity = PICKUP.GLOW_OPACITY * o
+      lineMat.opacity = o
     },
   }
 }
