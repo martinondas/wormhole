@@ -69,8 +69,8 @@ export const RENDER = {
   FOG_NEAR: 22,
   FOG_FAR: 250,       // fade the deep rings so they don't pile into a bright core
 
-  RING_RGB: [0.12, 0.92, 0.42] as [number, number, number],
-  LONG_RGB: [0.07, 0.52, 0.26] as [number, number, number],
+  RING_RGB: [0.18, 0.60, 0.40] as [number, number, number], // softer, less neon green (easier on the eye)
+  LONG_RGB: [0.11, 0.36, 0.24] as [number, number, number],
   SHIP_RGB: [0.50, 1.50, 0.85] as [number, number, number],
   SHIP_FILL_RGB: [0.01, 0.04, 0.03] as [number, number, number],
 
@@ -82,6 +82,31 @@ export const RENDER = {
   BLOOM_STRENGTH: 0.45,
   BLOOM_RADIUS: 0.45,
   BLOOM_THRESHOLD: 0.0,
+}
+
+// --- background (subtle deep-space gradient + stars behind the tube) --------
+// Colors are CSS strings (drawn to a canvas). Tweak + save to regenerate (HMR).
+export const BACKGROUND = {
+  ENABLED: true,
+  CENTER: '#01040b',  // near the vanishing point (the "hole")
+  MID: '#050d22',     // deep, dark blue band
+  EDGE: '#010207',    // corners / outer
+  MID_STOP: 0.42,     // 0..1 radius where MID sits
+  STARS: 330,         // world-space star count (0 = none)
+  STAR_ALPHA: 0.7,    // max star brightness
+}
+
+// --- pickups (blue health orbs, Descent-balloon flavour) --------------------
+export const PICKUP = {
+  RADIUS: 0.8,
+  DETAIL: 1,          // icosphere subdivision (1 = faceted geodesic look)
+  LINE_WIDTH: 2.2,    // edge line width in pixels (Line2)
+  EDGE_RGB: [0.00, 0.22, 1.00] as [number, number, number], // bright blue facet lines (contrast vs fill; no red so bloom can't whiten)
+  GLOW_RGB: [0.02, 0.09, 0.72] as [number, number, number], // deep saturated blue inside
+  GLOW_OPACITY: 0.82,                                        // solid, more blue fill
+  SPIN_SPEED: 0.8,    // rad/s about the vertical axis
+  BOB_AMP: 0.14,      // bob height (world units)
+  BOB_SPEED: 2.2,     // bob rad/s
 }
 
 // --- input key bindings (KeyboardEvent.code) --------------------------------

@@ -12,7 +12,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
-import { RENDER, CAMERA } from '../config'
+import { RENDER, CAMERA, BACKGROUND } from '../config'
+import { createBackgroundTexture } from './background'
 
 export type ResizeCb = (bufferW: number, bufferH: number) => void
 
@@ -30,8 +31,11 @@ export function createStage(container: HTMLElement): Stage {
   container.appendChild(renderer.domElement)
 
   const scene = new Scene()
-  scene.background = new Color(RENDER.BG_COLOR)
-  scene.fog = new Fog(RENDER.BG_COLOR, RENDER.FOG_NEAR, RENDER.FOG_FAR)
+  // Subtle deep-space backdrop (gradient + stars); fog fades far lines into the
+  // gradient's dark center so the tube dissolves into the "hole".
+  const fogColor = new Color(BACKGROUND.ENABLED ? BACKGROUND.CENTER : RENDER.BG_COLOR)
+  scene.background = BACKGROUND.ENABLED ? createBackgroundTexture() : new Color(RENDER.BG_COLOR)
+  scene.fog = new Fog(fogColor, RENDER.FOG_NEAR, RENDER.FOG_FAR)
 
   const camera = new PerspectiveCamera(CAMERA.FOV, 1, 0.1, RENDER.FOG_FAR + 60)
 
