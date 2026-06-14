@@ -41,11 +41,12 @@ if (setTheta !== undefined) {
   // check that theta = 2*PI (bottom after a loop) renders fully upright.
   await page.evaluate((t) => {
     const wh = (globalThis as Record<string, unknown>).WH as
-      | { craft?: { theta: number; omega: number; steerSignal: number } }
+      | { craft?: { theta: number; omega: number; steerSignal: number }; debug?: { paused: boolean } }
       | undefined
+    if (wh?.debug) wh.debug.paused = true // freeze physics so the angle holds
     if (wh?.craft) { wh.craft.theta = t; wh.craft.omega = 0; wh.craft.steerSignal = 0 }
   }, Number(setTheta))
-  await page.waitForTimeout(400)
+  await page.waitForTimeout(250)
   await page.screenshot({ path: out })
 } else if (hold.length) {
   const holdMs = Number(process.env.SHOOT_HOLD_MS ?? 1200)

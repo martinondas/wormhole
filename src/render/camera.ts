@@ -17,15 +17,16 @@ export function createCameraRig(camera: PerspectiveCamera): CameraRig {
 
   return {
     update(craft: CraftState, frameDt: number): void {
-      // Drive the camera from theta wrapped to [-PI, PI], NOT the raw unbounded
-      // theta. Gravity's rest point is the bottom (any multiple of 2*PI), which
-      // all wrap to 0 - so "down" stays fixed at screen-down and the view
-      // returns fully upright whenever the craft settles, even after loops.
-      const wrapped = Math.atan2(Math.sin(craft.theta), Math.cos(craft.theta))
+      // Drive the small camera follows from sin(theta): a smooth, 2*PI-periodic
+      // signal. It is zero at every bottom rest point (theta = k*2*PI), so
+      // gravity stays locked to screen-down when settled, AND it is continuous
+      // across the top (theta = PI) so loops are smooth - no jump. For small
+      // swings sin(theta) ~= theta, so the everyday feel is unchanged.
+      const s = Math.sin(craft.theta)
 
       // orbit only a little, smoothed (frame-rate independent)
       const k = 1 - Math.exp(-frameDt / Math.max(CAMERA.FOLLOW_LAG, 1e-4))
-      camTheta += (wrapped * CAMERA.ORBIT_FOLLOW - camTheta) * k
+      camTheta += (s * CAMERA.ORBIT_FOLLOW - camTheta) * k
 
       camera.position.set(
         Math.sin(camTheta) * camRadius,
@@ -33,15 +34,15 @@ export function createCameraRig(camera: PerspectiveCamera): CameraRig {
         SHIP.Z + CAMERA.BACK,
       )
 
-      // subtle bank: roll only a fraction of theta (unit vector, no normalize)
-      const rollPhi = wrapped * CAMERA.ROLL_FOLLOW
+      // subtle bank (unit vector, no normalize needed)
+      const rollPhi = s * CAMERA.ROLL_FOLLOW
       up.set(-Math.sin(rollPhi), Math.cos(rollPhi), 0)
       camera.up.copy(up)
 
       // aim down the tube, biased partway toward the craft so it stays framed
       camera.lookAt(
-        Math.sin(wrapped) * lookRadius * CAMERA.AIM_FOLLOW,
-        -Math.cos(wrapped) * lookRadius * CAMERA.AIM_FOLLOW,
+        Math.sin(craft.theta) * lookRadius * CAMERA.AIM_FOLLOW,
+        -Math.cos(craft.theta) * lookRadius * CAMERA.AIM_FOLLOW,
         SHIP.Z - CAMERA.LOOK_AHEAD,
       )
     },

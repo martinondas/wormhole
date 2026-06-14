@@ -24,10 +24,13 @@ const input = new Input()
 const craft = createCraft()
 
 const fixedDt = 1 / PHYSICS.HZ
+const debug = { paused: false } // freeze physics (rendering continues) for poses
 
 startLoop(
   fixedDt,
-  (dt) => updateCraft(craft, input.state, dt),
+  (dt) => {
+    if (!debug.paused) updateCraft(craft, input.state, dt)
+  },
   (frameDt) => {
     ship.update(craft)
     rig.update(craft, frameDt)
@@ -41,5 +44,6 @@ startLoop(
 //   WH.craft.theta   // inspect current state
 ;(window as unknown as { WH: unknown }).WH = {
   craft,
+  debug,
   config: { PHYSICS, SPEED, CAMERA, TUBE, SHIP, RENDER },
 }
