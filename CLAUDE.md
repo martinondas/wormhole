@@ -1,17 +1,19 @@
 # CLAUDE.md - Wormhole (working name "Vector Tube")
 
 ## Overview
-Wormhole is a small, polished retro "tube flyer": a first-person / chase-cam craft on a
-constant forward run down the inside of a long circular tube, drawn entirely as glowing
-green wireframe lines on black (a phosphor-CRT homage in the spirit of Psyborg, S.T.U.N.
-Runner, and Tunnels of Armageddon). The soul of the game is the movement: the craft is not
-free-flying - it hangs near the bottom of the tube under a gravity-like pull and steers only
-left / right, climbing the curved wall like a pendulum. Pumping left-right-left builds
-amplitude and lets you ride high up the wall, or all the way over the top. Getting that swing
-to feel weighty and momentum-driven is the single most important thing in this project.
+Wormhole is a small, polished retro-inspired "tube flyer": a first-person / chase-cam craft on
+a constant forward run down the inside of a long circular tube, rendered as glowing neon
+wireframe on near-black in a Tron aesthetic (spirit of Psyborg, S.T.U.N. Runner, Tunnels of
+Armageddon, but with modern execution). It is retro-INSPIRED, not retro-cheap: the look should
+read as a modern machine doing a vector look, not a 1990s mockup. The soul of the game is the
+movement: the craft is not free-flying - it hangs near the bottom of the tube under a
+gravity-like pull and steers only left / right, climbing the curved wall like a pendulum.
+Pumping left-right-left builds amplitude to ride high up the wall, or all the way over the top.
+Getting that swing to feel weighty and momentum-driven is the single most important thing here.
 
 ## Game design spec (condensed)
-- Constant forward motion down the tube. Player cannot stop; later can modulate speed in a range.
+- Constant forward motion; the craft never halts. Speed is changeable: a cruise baseline,
+  throttle/boost to accelerate, ease off to slow toward a floor above zero (never to a stop).
 - Steer left / right to ride up the walls (pendulum swing, see Physics).
 - Collect pickups around the tube wall (rings / energy pods) for score and to refill energy.
 - Dodge obstacles fixed to the tube (rocks, struts, gates); hits cost energy or a life.
@@ -40,10 +42,12 @@ The craft's position is an angle `theta` around the circular cross-section of th
 
 ### Tunable constants (live in `src/config.ts`, grouped; values are starting points, tune freely)
 - physics:  GRAVITY_K, DAMPING_C, STEER_TORQUE, STEER_ATTACK, STEER_RELEASE, PHYSICS_HZ
-- speed:    FORWARD_SPEED (fixed for M1); later SPEED_MIN, SPEED_MAX, SPEED_ACCEL
+- speed:    SPEED_CRUISE, SPEED_MIN (floor > 0, never halt), SPEED_MAX (boost cap),
+            THROTTLE_ACCEL, BOOST_ACCEL, EASE_DECEL
 - tube:     TUBE_RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES
 - camera:   CAM_BACK, CAM_RISE, CAM_FOV, CAM_ROLL_FOLLOW, CAM_ROLL_LAG
-- render:   LINE_COLOR, BG_COLOR, FOG_NEAR, FOG_FAR, DPR_CAP, BLOOM_ENABLED (off in M1)
+- render:   LINE_CORE, LINE_GLOW, BG_COLOR, FOG_NEAR, FOG_FAR, RENDER_SCALE,
+            BLOOM_ENABLED (on), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD, SHIP_LINE_WIDTH
 
 ### Camera feel (decided default, easy to change)
 Chase cam sits behind and slightly above the craft AT the craft's angular position, so it
@@ -53,14 +57,29 @@ you still see a little wall ahead. Going over the top rolls the view through the
 
 ## Tech stack and why
 - TypeScript (strict) + Vite + Three.js. No game engine, no heavy frameworks.
-- Three.js + WebGL chosen over hand-rolled 2D canvas: GPU does projection + depth + distance
-  fog, banking is a cheap quaternion, and `UnrealBloomPass` gives the CRT glow on the GPU.
-  WebGL clamps line width to 1px on most drivers, but with bloom a thin bright core + halo IS
-  the phosphor look. Canvas-2D glow (`shadowBlur`) and bloom are fill-rate killers on the
-  target 2020 Intel iMac (AMD Radeon), which is the machine we must not assume is fast.
-- Wireframe via `LineSegments` (and `Line2`/`LineMaterial` only if fat lines are ever needed).
+- Three.js + WebGL over hand-rolled 2D canvas: GPU does projection + depth + distance fog,
+  banking is a cheap quaternion, and `UnrealBloomPass` delivers the neon glow on the GPU.
+  Canvas-2D glow (`shadowBlur`) and any bloom-style pass are fill-rate killers; we want the GPU.
+- Lines: `Line2` / `LineMaterial` (fat lines) for hero and width-controlled glowing strokes
+  (ship edges, key tube lines) so strokes look premium and consistent, not 1px; `LineSegments`
+  where width does not matter. The ship hull uses `EdgesGeometry(geom, thresholdAngle)` over a
+  near-black emissive fill so it reads as an edge-lit SOLID form, not a see-through wire cage.
+- Bloom (`UnrealBloomPass`) is ON by default - it is the look, not an afterthought.
 - No backend, no accounts. Builds to a static bundle that runs fully offline from a local folder.
 - Target browsers: current Chrome and Safari on macOS.
+
+## Visual style (Tron, modern, not basic)
+Green neon on near-black, glowing wireframe in the spirit of Tron: bright near-white line cores
+that bloom into green, additive glow, depth fog/gradient into the distance. Modern post-
+processing and a polished hero ship from M1 on. Hard nos: flat solid-color planes (no "Roblox"
+look) and, for now, fully textured/lit surfaces. The Descent II direction (real 3D corridors)
+is a possible FUTURE step; the early game stays wireframe / edge-lit, not fully rendered surfaces.
+
+## Ship
+Hand-built procedural low-poly spacecraft (a sleek angular interceptor), rendered as glowing
+edge lines (`Line2`) over a near-black emissive fill. Banks with the swing. Must already look
+polished in M1 - this is the hero asset, no placeholder arrowhead. Built in code (no external
+model files) to stay offline, readable, and on-aesthetic.
 
 ## Repo structure
     index.html, package.json, tsconfig.json, vite.config.ts, CLAUDE.md
@@ -68,11 +87,11 @@ you still see a little wall ahead. Going over the top rolls the view through the
       main.ts              bootstrap, canvas, resize, start loop
       config.ts            ALL tunable constants, grouped (see above)
       loop.ts              fixed-timestep accumulator; update vs render split
-      input.ts             keyboard -> steering signal (held = torque)
+      input.ts             keyboard -> steering + throttle/boost signals
       physics/pendulum.ts  theta integrator (damped driven pendulum)
       world/tube.ts        build + scroll the wireframe tube mesh
-      world/ship.ts        craft wireframe; place on wall from theta
-      render/scene.ts      Three scene/camera/renderer, fog/fade
+      world/ship.ts        procedural 3D spacecraft hull (edge-lit); place on wall from theta
+      render/scene.ts      Three scene/camera/renderer + bloom composer, fog/fade
       render/camera.ts     chase follow + bank from theta/omega
     test/                  vitest (pendulum math) - added when useful
     scripts/shoot.ts       Playwright screenshot of the running canvas (self-verify)
@@ -88,9 +107,11 @@ you still see a little wall ahead. Going over the top rolls the view through the
 - TypeScript strict mode. Small, typed, modular files. No premature abstraction - refactor
   when a third case appears, not before. Match surrounding style.
 - All feel constants stay grouped in `config.ts` for fast tuning; Vite HMR gives near-instant feedback.
-- Performance budget: steady 60 fps with headroom on a 2020 Intel iMac. Cap devicePixelRatio
-  (`DPR_CAP`). Reuse geometries/materials; avoid per-frame allocations in update/render. Profile
-  and flag anything that risks the budget.
+- Performance budget: steady 60 fps with headroom on the dev machine - 2020 27" iMac, Retina 5K
+  (5120x2880), Radeon Pro 5300/5500 (4GB), capable (runs Assetto Corsa well). Push visual
+  quality, but DO NOT render bloom at native 5K. Main perf lever is `RENDER_SCALE`: render scene
+  + bloom at a capped resolution (target ~1440-1800p) and upscale; bloom hides the softness.
+  Reuse geometries/materials; no per-frame allocations in update/render. Profile and flag risks.
 - No em / en dashes in any text output (house style): use a spaced hyphen " - ".
 
 ## Working agreement
@@ -100,9 +121,11 @@ you still see a little wall ahead. Going over the top rolls the view through the
 - Git from the first commit. Small, descriptive commits. Never leave the repo in a broken state.
 
 ## Milestones / TODO (living)
-- [x] M0  Scaffold: Vite + TS (strict) + Three.js, blank green canvas, git, Playwright shoot. (in progress)
-- [ ] M1  Scrolling wireframe tube + pendulum craft + banking chase cam, controllable, 60 fps,
-          constants exposed. NO pickups/shooting/HUD yet. <- current target, then stop for playtest.
+- [x] M0  Scaffold: Vite + TS (strict) + Three.js, blank canvas + bloom composer, git, Playwright shoot. (in progress)
+- [ ] M1  Scrolling wireframe tube (Tron neon + bloom) + polished procedural 3D ship (edge-lit,
+          banks with the swing) + pendulum physics + banking chase cam + throttle/boost (no halt),
+          controllable, 60 fps with headroom, constants exposed. NO pickups/shooting/HUD yet.
+          <- current target, then stop for playtest.
 
 ### Backlog (recorded, not built yet)
 - [ ] Pickups and scoring
@@ -110,9 +133,10 @@ you still see a little wall ahead. Going over the top rolls the view through the
 - [ ] Forward gun and enemies
 - [ ] Energy/time meter and game-over loop
 - [ ] Difficulty ramp with distance
-- [ ] CRT bloom / scanline toggle
+- [ ] CRT scanline toggle (bloom already on)
 - [ ] Web Audio synthesis (bleeps, engine hum rising with speed)
 - [ ] High-score persistence (localStorage)
 - [ ] Title screen
 - [ ] Full-loop (360) tube sections
+- [ ] Fully rendered surfaces (Descent II direction)
 - [ ] Gamepad support
