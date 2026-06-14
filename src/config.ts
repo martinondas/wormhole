@@ -47,7 +47,9 @@ export const SHIP = {
 
 // --- camera (chase cam, orbits with theta, rolls through loops) -------------
 export const CAMERA = {
-  FOV: 64,            // tighter than wide-angle: gentler convergence, see ahead
+  FOV: 62,            // vertical FOV used on square/tall windows
+  HFOV_MAX: 80,       // cap on horizontal FOV: wide windows no longer widen the
+                      // view (calms edge strobe), and keeps convergence gentle
   BACK: 11,           // distance behind the ship along the tube axis
   RISE: 3.0,          // pulled toward tube center ("above" the ship)
   LOOK_AHEAD: 34,     // how far ahead down the tube the camera aims
@@ -60,20 +62,20 @@ export const CAMERA = {
 // bloom strongly in the HDR composer (near-white center, green halo).
 export const RENDER = {
   BG_COLOR: 0x00060a,
-  FOG_NEAR: 26,
-  FOG_FAR: 360,
+  FOG_NEAR: 24,
+  FOG_FAR: 300,       // fade the deep rings so they don't pile into a bright core
 
-  RING_RGB: [0.16, 1.25, 0.55] as [number, number, number],
-  LONG_RGB: [0.10, 0.85, 0.40] as [number, number, number],
-  SHIP_RGB: [0.55, 1.70, 0.95] as [number, number, number],
+  RING_RGB: [0.13, 1.00, 0.45] as [number, number, number],
+  LONG_RGB: [0.08, 0.62, 0.30] as [number, number, number],
+  SHIP_RGB: [0.50, 1.50, 0.85] as [number, number, number],
   SHIP_FILL_RGB: [0.01, 0.04, 0.03] as [number, number, number],
 
   DPR_CAP: 1.5,       // cap devicePixelRatio before scaling
   RENDER_SCALE: 0.85, // render below native res, upscale (main 60fps lever)
 
   BLOOM_ENABLED: true,
-  BLOOM_STRENGTH: 0.9,
-  BLOOM_RADIUS: 0.5,
+  BLOOM_STRENGTH: 0.55,
+  BLOOM_RADIUS: 0.45,
   BLOOM_THRESHOLD: 0.0,
 }
 

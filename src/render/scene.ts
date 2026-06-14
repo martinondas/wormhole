@@ -60,7 +60,15 @@ export function createStage(container: HTMLElement): Stage {
     renderer.setSize(w, h)
     composer.setPixelRatio(pr)
     composer.setSize(w, h)
-    camera.aspect = w / h
+
+    // Cap the horizontal FOV. Three's camera.fov is vertical, so a wide window
+    // would otherwise balloon the horizontal view and make the side walls race
+    // past. Shrink the vertical FOV on wide aspects so horizontal stays bounded.
+    const aspect = w / h
+    camera.aspect = aspect
+    const vBase = (CAMERA.FOV * Math.PI) / 180
+    const vFromHCap = 2 * Math.atan(Math.tan((CAMERA.HFOV_MAX * Math.PI) / 180 / 2) / aspect)
+    camera.fov = (Math.min(vBase, vFromHCap) * 180) / Math.PI
     camera.updateProjectionMatrix()
 
     bufW = Math.floor(w * pr)
