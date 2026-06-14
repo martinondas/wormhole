@@ -76,10 +76,11 @@ look) and, for now, fully textured/lit surfaces. The Descent II direction (real 
 is a possible FUTURE step; the early game stays wireframe / edge-lit, not fully rendered surfaces.
 
 ## Ship
-Hand-built procedural low-poly spacecraft (a sleek angular interceptor), rendered as glowing
-edge lines (`Line2`) over a near-black emissive fill. Banks with the swing. Must already look
-polished in M1 - this is the hero asset, no placeholder arrowhead. Built in code (no external
-model files) to stay offline, readable, and on-aesthetic.
+Hand-built procedural low-poly spacecraft - a winged fighter (X-wing-ish): central fuselage,
+cockpit, swept wings, engine pods. Rendered as glowing edge lines (`Line2`) over a near-black
+emissive fill. Banks with the swing. Must already look polished in M1 - this is the hero asset,
+no placeholder arrowhead. Built in code (no external model files) to stay offline, readable,
+and on-aesthetic.
 
 ## Repo structure
     index.html, package.json, tsconfig.json, vite.config.ts, CLAUDE.md
@@ -121,11 +122,11 @@ model files) to stay offline, readable, and on-aesthetic.
 - Git from the first commit. Small, descriptive commits. Never leave the repo in a broken state.
 
 ## Milestones / TODO (living)
-- [x] M0  Scaffold: Vite + TS (strict) + Three.js, blank canvas + bloom composer, git, Playwright shoot. (in progress)
-- [ ] M1  Scrolling wireframe tube (Tron neon + bloom) + polished procedural 3D ship (edge-lit,
-          banks with the swing) + pendulum physics + banking chase cam + throttle/boost (no halt),
-          controllable, 60 fps with headroom, constants exposed. NO pickups/shooting/HUD yet.
-          <- current target, then stop for playtest.
+- [x] M0  Scaffold: Vite + TS (strict) + Three.js, bloom composer, git, Playwright shoot.
+- [x] M1  Scrolling wireframe tube (Tron neon + bloom) + procedural 3D ship (edge-lit, banks
+          with the swing) + pendulum physics + banking chase cam + throttle/boost (no halt),
+          controllable, constants exposed. NO pickups/shooting/HUD yet.
+          BUILT - awaiting playtest + feel tuning before M2.
 
 ### Backlog (recorded, not built yet)
 - [ ] Pickups and scoring
