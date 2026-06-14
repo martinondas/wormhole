@@ -138,14 +138,19 @@ and on-aesthetic.
           wormhole cam, gravity-down, smooth loops, framing).
 - [~] M2  Pickups + atmosphere. Blue wireframe health orbs (edge-lit), deep-space
           gradient backdrop + world-space stars, muted tube green. Spawner +
-          ride-into collection (pop + WH.pickups.count) DONE. Scoring display +
-          the health/energy meter + HUD still to come.
+          ride-into collection DONE (orbs are energy, NOT points; ~1/3 density).
 
-### Backlog (recorded, not built yet)
-- [ ] Scoring display + health/energy meter + HUD + game-over loop
-- [ ] Obstacles and collisions
-- [ ] Forward gun and enemies
-- [ ] Energy/time meter and game-over loop
+### Object types on the tube (color-coded language)
+- [x] Health/energy orbs - BLUE wireframe sphere. Refill energy. Not points. BUILT.
+- [ ] Treasures / jewels - faceted GEM (gold or cyan), spins; SCORE points on collect.
+- [ ] Hazards - RED spiky mine / coronavirus look; hitting costs energy/a life; avoid.
+- [ ] Enemy ships - approach you; destroy with the forward gun.
+  (Orbs/treasures/hazards are all "ride into / avoid" wall objects -> expect to
+   refactor world/pickups.ts into a shared wall-field system once the 3rd lands.)
+
+### Systems / backlog (recorded, not built yet)
+- [ ] HUD + score + energy/time meter (drains over time; orbs refill) + game-over loop
+- [ ] Forward gun + projectiles
 - [ ] Difficulty ramp with distance
 - [ ] CRT scanline toggle (bloom already on)
 - [ ] Web Audio synthesis (bleeps, engine hum rising with speed)

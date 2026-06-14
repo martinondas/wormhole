@@ -111,10 +111,13 @@ export const PICKUP = {
   BOB_SPEED: 2.2,     // bob rad/s
 
   // --- spawn / collection mechanic ---
-  COUNT: 12,          // orbs alive in the pool at once
-  SPAWN_START: 40,    // distance ahead of the first orb
-  SPAWN_SPACING: 26,  // nominal distance between orbs along the tube
-  SPAWN_JITTER: 10,   // random extra distance per orb
+  // Energy orbs are meant to be occasional: ~1/3 the old density. Density is
+  // set by SPACING (encounter rate = speed / spacing); COUNT just keeps the
+  // visible range filled so they fade in from the far fog rather than popping.
+  COUNT: 5,           // orbs alive in the pool at once
+  SPAWN_START: 50,    // distance ahead of the first orb
+  SPAWN_SPACING: 75,  // nominal distance between orbs along the tube
+  SPAWN_JITTER: 14,   // random extra distance per orb
   RECYCLE_BEHIND: 22, // recycle once an orb is this far behind the ship
   CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
   CAPTURE_ANGLE: 0.42,// angular window (rad) for a catch (~24 deg)
