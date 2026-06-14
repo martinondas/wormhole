@@ -37,7 +37,9 @@ export function createStage(container: HTMLElement): Stage {
   scene.background = BACKGROUND.ENABLED ? createBackgroundTexture() : new Color(RENDER.BG_COLOR)
   scene.fog = new Fog(fogColor, RENDER.FOG_NEAR, RENDER.FOG_FAR)
 
-  const camera = new PerspectiveCamera(CAMERA.FOV, 1, 0.1, RENDER.FOG_FAR + 60)
+  // far plane must clear the world-space starfield sphere (radius ~500); fog
+  // still fades the tube long before this, so the big far plane costs nothing.
+  const camera = new PerspectiveCamera(CAMERA.FOV, 1, 0.1, 1200)
 
   // Multisampled, HDR (half-float) target so the offscreen pass is anti-aliased
   // (thin scrolling rings stop shimmering) and bloom keeps its bright cores.
