@@ -40,7 +40,7 @@ export const TUBE = {
 export const SHIP = {
   Z: 0,               // ship sits at world z=0; camera is behind at +Z
   RADIAL_OFFSET: 1.35,// how far the belly floats inside the tube wall
-  SCALE: 0.8,         // overall hull scale
+  SCALE: 0.9,         // overall hull scale
   BANK: 0.5,          // extra roll (rad) leaned into a full steer input
   LINE_WIDTH: 2.4,    // edge line width in pixels (Line2)
 }
@@ -50,14 +50,14 @@ export const CAMERA = {
   FOV: 62,            // vertical FOV used on square/tall windows
   HFOV_MAX: 80,       // cap on horizontal FOV: wide windows no longer widen the
                       // view (calms edge strobe), and keeps convergence gentle
-  BACK: 11,           // distance behind the ship along the tube axis
-  RISE: 3.0,          // pulled toward tube center ("above" the ship)
+  BACK: 14,           // distance behind the ship along the tube axis
+  RISE: 3.7,          // pulled toward tube center ("above" the ship)
   LOOK_AHEAD: 34,     // how far ahead down the tube the camera aims
   // Keep the wormhole mostly STILL when steering; the craft rides the walls
   // within a stable tube. These add just a little movement for life.
   ORBIT_FOLLOW: 0.15, // how much the camera orbits the tube with the craft (0 = fixed)
   ROLL_FOLLOW: 0.12,  // how much the view banks/rolls with the craft
-  AIM_FOLLOW: 0.35,   // how much the camera aims toward the craft (keeps it framed)
+  AIM_FOLLOW: 0.40,   // how much the camera aims toward the craft (keeps it framed)
   FOLLOW_LAG: 0.10,   // smoothing on the orbit follow (weight)
 }
 
