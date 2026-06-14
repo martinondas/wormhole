@@ -1,5 +1,7 @@
 import {
   WebGLRenderer,
+  WebGLRenderTarget,
+  HalfFloatType,
   Scene,
   PerspectiveCamera,
   Color,
@@ -33,7 +35,10 @@ export function createStage(container: HTMLElement): Stage {
 
   const camera = new PerspectiveCamera(CAMERA.FOV, 1, 0.1, RENDER.FOG_FAR + 60)
 
-  const composer = new EffectComposer(renderer)
+  // Multisampled, HDR (half-float) target so the offscreen pass is anti-aliased
+  // (thin scrolling rings stop shimmering) and bloom keeps its bright cores.
+  const rt = new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: RENDER.MSAA_SAMPLES })
+  const composer = new EffectComposer(renderer, rt)
   composer.addPass(new RenderPass(scene, camera))
   if (RENDER.BLOOM_ENABLED) {
     composer.addPass(

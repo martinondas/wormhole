@@ -19,19 +19,19 @@ export const PHYSICS = {
 // --- speed: forward motion. Never halts. -----------------------------------
 // Units are world units per second (tube radius ~ 6, ring spacing ~ 7).
 export const SPEED = {
-  CRUISE: 36,         // resting speed with no throttle/brake input
-  MIN: 22,            // floor: easing/braking never drops below this (no halt)
-  MAX: 90,            // boost ceiling
-  THROTTLE_ACCEL: 34, // accel while throttle held (units/s^2)
-  BOOST_ACCEL: 78,    // accel while boost held
-  EASE_DECEL: 30,     // decel while braking, and ease-back toward CRUISE
+  CRUISE: 30,         // resting speed with no throttle/brake input
+  MIN: 18,            // floor: easing/braking never drops below this (no halt)
+  MAX: 75,            // boost ceiling
+  THROTTLE_ACCEL: 28, // accel while throttle held (units/s^2)
+  BOOST_ACCEL: 64,    // accel while boost held
+  EASE_DECEL: 26,     // decel while braking, and ease-back toward CRUISE
 }
 
 // --- tube geometry ----------------------------------------------------------
 export const TUBE = {
   RADIUS: 6,
-  RING_SPACING: 7,        // distance between cross-section rings
-  RINGS_VISIBLE: 56,      // rings drawn ahead (render distance = this * spacing)
+  RING_SPACING: 9,        // distance between cross-section rings (wider = calmer)
+  RINGS_VISIBLE: 36,      // rings drawn ahead (render distance = this * spacing)
   SEGMENTS_PER_RING: 48,  // smoothness of each ring circle
   LONGITUDINAL_LINES: 24, // lines running down the length of the tube
 }
@@ -53,8 +53,12 @@ export const CAMERA = {
   BACK: 11,           // distance behind the ship along the tube axis
   RISE: 3.0,          // pulled toward tube center ("above" the ship)
   LOOK_AHEAD: 34,     // how far ahead down the tube the camera aims
-  ROLL_FOLLOW: 0.85,  // 0 = world-upright, 1 = fully rolls with theta
-  ROLL_LAG: 0.10,     // seconds of lag on the orbit/roll follow (weight)
+  // Keep the wormhole mostly STILL when steering; the craft rides the walls
+  // within a stable tube. These add just a little movement for life.
+  ORBIT_FOLLOW: 0.15, // how much the camera orbits the tube with the craft (0 = fixed)
+  ROLL_FOLLOW: 0.12,  // how much the view banks/rolls with the craft
+  AIM_FOLLOW: 0.35,   // how much the camera aims toward the craft (keeps it framed)
+  FOLLOW_LAG: 0.10,   // smoothing on the orbit follow (weight)
 }
 
 // --- render / look (Tron: green neon on near-black, GPU bloom) --------------
@@ -62,19 +66,20 @@ export const CAMERA = {
 // bloom strongly in the HDR composer (near-white center, green halo).
 export const RENDER = {
   BG_COLOR: 0x00060a,
-  FOG_NEAR: 24,
-  FOG_FAR: 300,       // fade the deep rings so they don't pile into a bright core
+  FOG_NEAR: 22,
+  FOG_FAR: 250,       // fade the deep rings so they don't pile into a bright core
 
-  RING_RGB: [0.13, 1.00, 0.45] as [number, number, number],
-  LONG_RGB: [0.08, 0.62, 0.30] as [number, number, number],
+  RING_RGB: [0.12, 0.92, 0.42] as [number, number, number],
+  LONG_RGB: [0.07, 0.52, 0.26] as [number, number, number],
   SHIP_RGB: [0.50, 1.50, 0.85] as [number, number, number],
   SHIP_FILL_RGB: [0.01, 0.04, 0.03] as [number, number, number],
 
   DPR_CAP: 1.5,       // cap devicePixelRatio before scaling
   RENDER_SCALE: 0.85, // render below native res, upscale (main 60fps lever)
+  MSAA_SAMPLES: 4,    // anti-alias the offscreen pass so thin rings don't shimmer
 
   BLOOM_ENABLED: true,
-  BLOOM_STRENGTH: 0.55,
+  BLOOM_STRENGTH: 0.45,
   BLOOM_RADIUS: 0.45,
   BLOOM_THRESHOLD: 0.0,
 }
