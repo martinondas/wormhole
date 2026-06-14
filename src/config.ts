@@ -19,12 +19,12 @@ export const PHYSICS = {
 // --- speed: forward motion. Never halts. -----------------------------------
 // Units are world units per second (tube radius ~ 6, ring spacing ~ 7).
 export const SPEED = {
-  CRUISE: 48,         // resting speed with no throttle/brake input
-  MIN: 28,            // floor: easing/braking never drops below this (no halt)
-  MAX: 115,           // boost ceiling
-  THROTTLE_ACCEL: 42, // accel while throttle held (units/s^2)
-  BOOST_ACCEL: 95,    // accel while boost held
-  EASE_DECEL: 38,     // decel while braking, and ease-back toward CRUISE
+  CRUISE: 36,         // resting speed with no throttle/brake input
+  MIN: 22,            // floor: easing/braking never drops below this (no halt)
+  MAX: 90,            // boost ceiling
+  THROTTLE_ACCEL: 34, // accel while throttle held (units/s^2)
+  BOOST_ACCEL: 78,    // accel while boost held
+  EASE_DECEL: 30,     // decel while braking, and ease-back toward CRUISE
 }
 
 // --- tube geometry ----------------------------------------------------------
@@ -40,17 +40,17 @@ export const TUBE = {
 export const SHIP = {
   Z: 0,               // ship sits at world z=0; camera is behind at +Z
   RADIAL_OFFSET: 1.35,// how far the belly floats inside the tube wall
-  SCALE: 0.5,         // overall hull scale
+  SCALE: 0.8,         // overall hull scale
   BANK: 0.5,          // extra roll (rad) leaned into a full steer input
   LINE_WIDTH: 2.4,    // edge line width in pixels (Line2)
 }
 
 // --- camera (chase cam, orbits with theta, rolls through loops) -------------
 export const CAMERA = {
-  FOV: 80,
-  BACK: 13,           // distance behind the ship along the tube axis
-  RISE: 2.6,          // pulled toward tube center ("above" the ship)
-  LOOK_AHEAD: 22,     // how far ahead down the tube the camera aims
+  FOV: 64,            // tighter than wide-angle: gentler convergence, see ahead
+  BACK: 11,           // distance behind the ship along the tube axis
+  RISE: 3.0,          // pulled toward tube center ("above" the ship)
+  LOOK_AHEAD: 34,     // how far ahead down the tube the camera aims
   ROLL_FOLLOW: 0.85,  // 0 = world-upright, 1 = fully rolls with theta
   ROLL_LAG: 0.10,     // seconds of lag on the orbit/roll follow (weight)
 }

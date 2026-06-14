@@ -7,7 +7,7 @@ import {
   Color,
   Group,
 } from 'three'
-import { TUBE, RENDER } from '../config'
+import { TUBE, RENDER, CAMERA } from '../config'
 
 // A wireframe tube: evenly spaced cross-section rings plus longitudinal lines.
 // The geometry is static; we scroll it toward the camera by ring-spacing and
@@ -24,7 +24,10 @@ function wallY(a: number): number { return -Math.cos(a) * TUBE.RADIUS }
 export function createTube(): Tube {
   const seg = TUBE.SEGMENTS_PER_RING
   const spacing = TUBE.RING_SPACING
-  const behind = 1                 // one ring behind the camera plane for seamless wrap
+  // Extend the field far enough behind the camera that the modulo wrap (and the
+  // nearest-ring boundary) sit out of sight behind the lens. Rings then fly
+  // through the camera smoothly with no pop/blink; the far boundary hides in fog.
+  const behind = Math.ceil((CAMERA.BACK + spacing) / spacing) + 1
   const ahead = TUBE.RINGS_VISIBLE
 
   // --- rings ---
