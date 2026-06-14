@@ -23,14 +23,18 @@ export function createStarfield(): Starfield {
   const pos = new Float32Array(n * 3)
   const col = new Float32Array(n * 3)
 
+  // Place stars in a forward cone around -Z (the view direction) so they land on
+  // screen instead of being wasted behind/beside the camera. cos(theta) uniform
+  // in [cos(spread), 1] gives an even spread across the cap.
+  const cosMax = Math.cos((BACKGROUND.STAR_SPREAD_DEG * Math.PI) / 180)
+
   for (let i = 0; i < n; i++) {
-    // uniform random direction on the unit sphere
-    const u = Math.random() * 2 - 1
+    const cosT = cosMax + Math.random() * (1 - cosMax)
+    const sinT = Math.sqrt(1 - cosT * cosT)
     const phi = Math.random() * Math.PI * 2
-    const s = Math.sqrt(1 - u * u)
-    pos[i * 3] = s * Math.cos(phi) * radius
-    pos[i * 3 + 1] = u * radius
-    pos[i * 3 + 2] = s * Math.sin(phi) * radius
+    pos[i * 3] = sinT * Math.cos(phi) * radius
+    pos[i * 3 + 1] = sinT * Math.sin(phi) * radius
+    pos[i * 3 + 2] = -cosT * radius // -Z = forward
 
     // brightness biased low (a few bright, many faint); cool blue-white tint
     const b = 0.3 + Math.random() * Math.random() * BACKGROUND.STAR_ALPHA

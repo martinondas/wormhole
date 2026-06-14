@@ -92,8 +92,10 @@ export const BACKGROUND = {
   MID: '#050d22',     // deep, dark blue band
   EDGE: '#010207',    // corners / outer
   MID_STOP: 0.42,     // 0..1 radius where MID sits
-  STARS: 330,         // world-space star count (0 = none)
+  STARS: 330,         // world-space star count (these now mostly land on screen)
   STAR_ALPHA: 0.7,    // max star brightness
+  STAR_SPREAD_DEG: 52, // half-angle of the forward cone stars are placed in
+                       // (wider than the FOV so banking never reveals an edge)
 }
 
 // --- pickups (blue health orbs, Descent-balloon flavour) --------------------
