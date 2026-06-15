@@ -8,12 +8,15 @@ import { type WallObject } from './world/wallObject'
 import { createPickup } from './world/pickup'
 import { createTreasure } from './world/treasure'
 import { createHazard } from './world/hazard'
+import { createProjectiles } from './world/projectiles'
+import { createEnemies } from './world/enemies'
 import { Input } from './input'
 import { createCraft, updateCraft, resetCraft } from './craft'
 import { createGame } from './game'
+import { createGun } from './gun'
 import { createHud } from './hud'
 import { startLoop } from './loop'
-import { PHYSICS, SPEED, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE } from './config'
+import { PHYSICS, SPEED, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -95,10 +98,43 @@ for (const f of fields) {
   stage.onResize((w, h) => f.setResolution(w, h))
 }
 
+// --- combat: forward gun + pooled bolts + magenta raiders -------------------
+// projectiles is one shared pool (player + enemy bolts). enemies is a sibling of
+// the fields - NOT a Field, because raiders fly in / hold station / peel off (own
+// worldDistance). Both are dependency-injected here (the single wiring point), so
+// they import neither game nor each other: enemy fire, rams, kills, and bolt hits
+// all call back through these closures, exactly like field onHit effects do.
+const projectiles = createProjectiles()
+const gun = createGun()
+const enemies = createEnemies({
+  spawnEnemyBolt: (theta, z, vz) => projectiles.spawn('enemy', theta, z, vz),
+  onRam: () => game.hitHazard(), // lethal hull contact (enemy survives)
+  onKill: () => {
+    game.addScore(ENEMY.SCORE)
+    game.addEnergy(ENEMY.ENERGY_REFUND)
+  },
+})
+for (const sys of [enemies, projectiles]) {
+  stage.scene.add(sys.object)
+  stage.onResize((w, h) => sys.setResolution(w, h))
+}
+
+// Hoisted projectile-update context (mutated each step, not re-allocated) so the
+// fixed update does no per-frame allocation; the two callbacks are stable.
+const projCtx = {
+  tryKillEnemy: (theta: number, z: number): boolean => enemies.tryKill(theta, z),
+  shipTheta: 0,
+  onShipHit: (): boolean => game.hitHazard(),
+}
+
 function restart(): void {
   resetCraft(craft)
   for (const f of fields) f.reset(craft.distance)
+  projectiles.reset()
+  gun.reset()
+  enemies.reset(craft.distance)
   game.restart()
+  input.releaseFireKeys() // a Space held to restart must not auto-fire on step 1
 }
 
 // restart from the game-over screen
@@ -118,9 +154,17 @@ startLoop(
     if (debug.paused || game.over) return
     updateCraft(craft, input.state, dt)
     // collection / hits live in the fixed step so a fast pass never skips the
-    // window; game.update runs LAST so a hazard hit this step ends the run this
-    // step (lives <= 0 -> over), with no one-frame lag.
+    // window; game.update runs LAST so a hazard / enemy hit this step ends the
+    // run this step (lives <= 0 -> over), with no one-frame lag.
     for (const f of fields) f.update(craft, dt)
+    // gun: spend energy + emit a forward bolt at the craft's current theta.
+    const shot = gun.tryFire(craft, game, dt, input.state.fire)
+    if (shot.fire) projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)
+    // enemies move + fire + ram BEFORE projectiles, so a bolt fired/spawned this
+    // step and a raider's new position are both resolved in projectiles.update.
+    enemies.update(craft, dt)
+    projCtx.shipTheta = craft.theta
+    projectiles.update(dt, projCtx)
     game.update(dt, craft.distance)
   },
   (frameDt) => {
@@ -154,6 +198,9 @@ startLoop(
   craft,
   debug,
   fields,
+  enemies,
+  projectiles,
+  gun,
   game,
-  config: { PHYSICS, SPEED, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE },
+  config: { PHYSICS, SPEED, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE },
 }

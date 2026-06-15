@@ -9,13 +9,15 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "shoot": "node scripts/shoot.ts"
+    "shoot": "node scripts/shoot.ts",
+    "sim": "esbuild scripts/combat-sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combat-sim.mjs && node node_modules/.cache/combat-sim.mjs"
   },
   "dependencies": {
     "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/three": "^0.184.1",
+    "esbuild": "^0.28.0",
     "playwright": "^1.60.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.16"

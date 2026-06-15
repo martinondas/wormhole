@@ -5,15 +5,16 @@ export interface InputState {
   throttle: boolean
   brake: boolean
   boost: boolean
+  fire: boolean
 }
 
 const ALL_CODES = new Set<string>([
-  ...INPUT.left, ...INPUT.right, ...INPUT.throttle, ...INPUT.brake, ...INPUT.boost,
+  ...INPUT.left, ...INPUT.right, ...INPUT.throttle, ...INPUT.brake, ...INPUT.boost, ...INPUT.fire,
 ])
 
 export class Input {
   private pressed = new Set<string>()
-  readonly state: InputState = { steerTarget: 0, throttle: false, brake: false, boost: false }
+  readonly state: InputState = { steerTarget: 0, throttle: false, brake: false, boost: false, fire: false }
 
   constructor() {
     window.addEventListener('keydown', this.onDown)
@@ -53,6 +54,15 @@ export class Input {
     this.state.throttle = this.has(INPUT.throttle)
     this.state.brake = this.has(INPUT.brake)
     this.state.boost = this.has(INPUT.boost)
+    this.state.fire = this.has(INPUT.fire)
+  }
+
+  // Forget the fire key as if released. Called on restart so a Space held to
+  // restart the run does not immediately fire a bolt (and spend energy) on the
+  // first live step; the player must re-press to shoot.
+  releaseFireKeys(): void {
+    for (const c of INPUT.fire) this.pressed.delete(c)
+    this.refresh()
   }
 
   dispose(): void {

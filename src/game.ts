@@ -1,4 +1,4 @@
-import { ENERGY, SCORE, LIVES } from './config'
+import { ENERGY, SCORE, LIVES, GUN } from './config'
 
 // Run state. Two independent fail conditions:
 //  - energy drains over time (refilled by orbs); hitting zero ends the run.
@@ -16,6 +16,8 @@ export interface Game {
   score(distance: number): number
   addEnergy(n: number): void
   addScore(n: number): void
+  canFire(): boolean // enough energy (and not over) to fire one shot
+  spendEnergy(n: number): void // gun cost; clamps at 0 but NEVER ends the run (only update() does)
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
   update(dt: number, distance: number): void
   restart(): void
@@ -66,6 +68,17 @@ export function createGame(): Game {
 
     addScore(n: number): void {
       this.scoreBonus += n
+    },
+
+    canFire(): boolean {
+      return !this.over && this.energy >= GUN.COST
+    },
+
+    // Spend energy on a shot. Clamp at 0 but do NOT call endRun here: firing must
+    // never be a fail condition. If a shot empties the meter, update() finalizes
+    // game-over on the next step exactly like the drain clock does.
+    spendEnergy(n: number): void {
+      this.energy = Math.max(0, this.energy - n)
     },
 
     // Check invuln FIRST, before spending a life: if two mines overlap the ship

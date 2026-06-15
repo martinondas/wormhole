@@ -92,6 +92,41 @@ if (process.env.SHOOT_GAMEOVER) {
   })
   await page.waitForTimeout(300)
   await page.screenshot({ path: out })
+} else if (process.env.SHOOT_COMBAT) {
+  // Freeze physics and stage a combat tableau: one magenta raider up the wall
+  // ahead, a player bolt streaking forward, an enemy bolt closing on the ship -
+  // a side-by-side look check of the new combat art against the existing palette.
+  const combat = {
+    et: Number(process.env.ENEMY_THETA ?? 0.18),
+    ez: Number(process.env.ENEMY_Z ?? -11),
+    bolts: !process.env.NO_BOLTS,
+  }
+  const visN = await page.evaluate((c) => {
+    const wh = (globalThis as Record<string, unknown>).WH as
+      | {
+          debug?: { paused: boolean }
+          enemies?: { debugStage(theta: number, z: number): void }
+          projectiles?: {
+            object: { children: { visible: boolean }[] }
+            spawn(side: string, theta: number, z: number, vz: number): void
+          }
+        }
+      | undefined
+    if (!wh?.debug) return -1
+    wh.debug.paused = true // freeze physics so the staged pose holds
+    wh.enemies?.debugStage(c.et, c.ez) // raider up the wall, close ahead
+    if (c.bolts) {
+      // a stream of player bolts forward + one enemy bolt closing on the ship
+      wh.projectiles?.spawn('player', -0.1, -8, -110)
+      wh.projectiles?.spawn('player', -0.1, -22, -110)
+      wh.projectiles?.spawn('enemy', c.et, c.ez + 6, 90)
+    }
+    // count visible bolt meshes (diagnostic: confirm they render)
+    return wh.projectiles?.object.children.filter((m) => m.visible).length ?? -2
+  }, combat)
+  console.log(`visible bolt meshes = ${visN}`)
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: out })
 } else if (hold.length) {
   const holdMs = Number(process.env.SHOOT_HOLD_MS ?? 1200)
   const settleMs = Number(process.env.SHOOT_SETTLE_MS ?? 0) // if >0, release then settle before the shot
@@ -113,6 +148,7 @@ const state = await page.evaluate(() => {
         craft?: { theta: number; distance: number }
         game?: { energy: number; lives: number; over: boolean }
         fields?: { consumed: number }[]
+        enemies?: { killed: number }
       }
     | undefined
   return {
@@ -122,10 +158,11 @@ const state = await page.evaluate(() => {
     lives: wh?.game?.lives ?? null,
     over: wh?.game?.over ?? null,
     consumed: wh?.fields?.map((f) => f.consumed) ?? null,
+    killed: wh?.enemies?.killed ?? null,
   }
 })
 console.log(
-  `theta=${state.theta} dist=${state.distance} energy=${state.energy} lives=${state.lives} over=${state.over} consumed=${JSON.stringify(state.consumed)}`,
+  `theta=${state.theta} dist=${state.distance} energy=${state.energy} lives=${state.lives} over=${state.over} consumed=${JSON.stringify(state.consumed)} killed=${state.killed}`,
 )
 
 await browser.close()

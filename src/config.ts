@@ -231,11 +231,100 @@ export const SCORE = {
   DIST_RATE: 1.0, // points per world unit travelled (treasures add bonus later)
 }
 
+// --- gun (forward energy weapon: Space fires; each shot spends energy) -------
+// The gun is the player's risk/reward against their OWN survival meter: a shot
+// costs energy, a kill scores big AND refunds energy (see ENEMY). Bolts freeze
+// theta at fire time and travel down -Z along that theta, so you AIM by lining
+// up the pendulum onto a target's theta - aiming reuses the swing.
+export const GUN = {
+  COST: 3,            // energy spent per shot (~0.86s of survival at DRAIN 3.5)
+  COOLDOWN: 0.25,     // seconds between shots (tap or hold -> ~4/s)
+  BOLT_SPEED: 110,    // player bolt speed down -Z (units/s; > SPEED.MAX so it pulls ahead)
+  BOLT_TTL: 1.4,      // seconds before a player bolt recycles (~154u reach)
+  HIT_ANGLE: 0.22,    // angular window (rad) for a player bolt to hit an enemy (~13 deg)
+  HIT_Z: 3.0,         // along-tube window (units) for a player bolt hit (no tunnelling at 240Hz)
+  BULLET_HIT_ANGLE: 0.30, // player dodge window vs an enemy bolt (wider: the hit is lethal)
+  BULLET_HIT_Z: 2.5,  // along-tube window where an enemy bolt registers at the ship plane
+}
+
+// --- enemy (magenta raider: a forward-swept dart that flies in, strafes, and --
+// shoots back). LETHAL: any hit (its bullet OR ramming its hull) costs a life,
+// routed through the existing game.hitHazard() (i-frames + one-life-per-step).
+// Its OWN worldDistance advances each step (unlike a static wall object), so it
+// can fly in -> hold an engagement band ahead of you -> peel off.
+export const ENEMY = {
+  HP: 2,              // hits to kill (burst-to-kill: one quick double-tap once aligned)
+  SCORE: 500,         // points per kill (2x a gem; the highest-value event)
+  ENERGY_REFUND: 12,  // energy returned on a kill (clamped at MAX; below PER_ORB so it is not a farm)
+  COUNT: 2,           // enemies alive in the pool at once (one engaging, one approaching/departing)
+
+  // --- spawn / lifecycle ---
+  SPAWN_AHEAD: 220,   // units ahead of the ship an enemy enters APPROACH (fades in from fog)
+  SPAWN_JITTER: 40,   // random extra spawn distance so they do not arrive in lockstep
+  SPAWN_THETA_SPREAD: 0.5, // |rand| angle offset from the player's theta at spawn (rad)
+  SPAWN_COOLDOWN: 3.0,// seconds a dead/recycled slot waits before re-entering APPROACH
+  RECYCLE_BEHIND: 26, // recycle once the enemy z passes this far behind the ship
+
+  // --- engagement band (z negative = ahead of the ship) ---
+  ENGAGE_Z_FAR: -55,  // far edge: enemy switches APPROACH -> ENGAGE here
+  ENGAGE_Z_NEAR: -25, // near edge: a ~30u band, visible, outside all capture distances
+  ENGAGE_BREAK_Z: 8,  // if the player boosts past so the enemy slips behind (z > this), force DEPART
+  ENGAGE_TIME: 10,    // seconds it holds the band before peeling off if not killed
+  ENGAGE_TIME_JITTER: 2,
+
+  // --- closing speeds (all relative to craft.speed, so correct at any cruise/boost) ---
+  CLOSE_SPEED_DELTA: -14, // APPROACH: slower than you, so the gap closes it into the band
+  STATION_SPRING_K: 0.6,  // ENGAGE: speed = craft.speed + k*(z - bandCenter) to hover in the band
+  STATION_SPEED_CLAMP: 18,// ENGAGE: clamp |speed - craft.speed| so a full boost (75 vs 30) always escapes
+  DEPART_SPEED_DELTA: -22,// DEPART: falls behind and recycles
+  APPROACH_TRACK: 1.2,    // rad/s the raider homes its theta toward yours while approaching (caps a snap)
+
+  // --- strafe (must stay HITTABLE: peak strafe << player STEER_OMEGA_MAX 7) ---
+  STRAFE_AMP: 0.6,    // theta = thetaCenter + AMP*sin(phase) in ENGAGE
+  STRAFE_W: 2.6,      // strafe phase rad/s -> peak |omega| ~1.56 (~22% of the player cap)
+  STRAFE_OMEGA_MAX: 2.0, // hard per-step clamp on strafe angular speed (the hittability guarantee)
+
+  // --- firing (telegraphed so a lethal shot is always fairly dodgeable) ---
+  FIRE_COOLDOWN: 2.0, // seconds between shots, ENGAGE only
+  FIRE_JITTER: 0.4,   // +/- on the cooldown so volleys are not metronomic
+  CHARGE_TIME: 0.45,  // nose brightens toward white-hot for this long before each shot (the tell)
+  BULLET_SPEED: 90,   // enemy bolt speed toward +Z (> player top speed so it leads in)
+  RAM_ANGLE: 0.55,    // ram hit window (rad); mirrors HAZARD.CAPTURE_ANGLE (wingspan + body)
+  RAM_Z: 2.8,         // ram hit window (units); mirrors HAZARD.CAPTURE_Z
+
+  // --- look (edge-lit solid like the ship/mine, but NORMAL blend like the mine) ---
+  EDGE_RGB: [1.5, 0.1, 1.3] as [number, number, number], // hot magenta-violet (>1 cores bloom; near-zero green)
+  FILL_RGB: [0.05, 0.005, 0.05] as [number, number, number], // near-black, faint violet bias (occludes)
+  CHARGE_RGB: [2.4, 1.6, 2.4] as [number, number, number], // edge lerps toward this white-hot while charging
+  EDGE_THRESHOLD: 22, // EdgesGeometry threshold (deg): keeps wing/fuselage ridges
+  LINE_WIDTH: 2.2,    // edge line width in px (wall-object weight; player ship stays heavier at 2.4)
+  SCALE: 0.7,         // overall hull scale (a lean dart, smaller than the player's 0.9)
+  BANK: 0.5,          // roll leaned into the strafe direction (like the ship banks into a steer)
+  THROB_SPEED: 3.0,   // idle breathing rad/s
+  THROB_AMP: 0.04,    // +/- scale throb
+  POP_TIME: 0.28,     // death-burst duration (s)
+  POP_SCALE: 3.0,     // death-burst peak scale (expand + fade at the frozen kill z)
+}
+
+// --- projectiles (one pooled bolt system; player + enemy bolts, opposite z) --
+// Both sides are the same axis-aligned fat-line streak; only the z direction and
+// color differ. Fixed pools -> zero per-frame allocation. They ride at the same
+// RIDE_RADIUS as everything else so the angle-only hit tests are valid.
+export const PROJECTILE = {
+  MAX_PLAYER: 8,      // pooled player bolts (COOLDOWN 0.25 x TTL 1.4 ~ 6 live + margin)
+  MAX_ENEMY: 8,       // pooled enemy bolts
+  LENGTH: 1.6,        // streak length along the tube axis (world units)
+  LINE_WIDTH: 3.0,    // fat-line width in px (fatter than hulls so bolts pop)
+  PLAYER_RGB: [0.55, 2.0, 1.1] as [number, number, number], // hot white-green (yours; SHIP hue family)
+  ENEMY_RGB: [2.0, 0.15, 1.6] as [number, number, number],  // white-hot magenta (theirs)
+}
+
 // --- input key bindings (KeyboardEvent.code) --------------------------------
 export const INPUT = {
   left: ['ArrowLeft', 'KeyA'],
   right: ['ArrowRight', 'KeyD'],
   throttle: ['ArrowUp', 'KeyW'],
   brake: ['ArrowDown', 'KeyS'],
-  boost: ['ShiftLeft', 'ShiftRight', 'Space'],
+  boost: ['ShiftLeft', 'ShiftRight'], // Space used to boost; it now FIRES (below)
+  fire: ['Space'],                    // forward gun (Shift still boosts)
 }

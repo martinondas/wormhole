@@ -62,6 +62,14 @@ The craft's position is an angle `theta` around the circular cross-section of th
             SPIN/PULSE; field COUNT/SPAWN_* (incl. SPAWN_ANGLE), CAPTURE_*/POP_*
 - lives:    LIVES.{START, INVULN_TIME}
 - energy:   ENERGY.{MAX,START,DRAIN,PER_ORB,LOW,CRITICAL}; SCORE.DIST_RATE
+- gun:      COST (energy/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE/Z (player->enemy),
+            BULLET_HIT_ANGLE/Z (enemy bolt->ship dodge window)
+- enemy:    HP, SCORE (per kill), ENERGY_REFUND; COUNT/SPAWN_*/RECYCLE; ENGAGE band + speeds
+            (CLOSE/STATION/DEPART deltas relative to craft.speed); STRAFE_* (hard-capped <<
+            player STEER_OMEGA_MAX = hittability), FIRE_COOLDOWN/CHARGE_TIME/BULLET_SPEED,
+            RAM_ANGLE/Z; dart geometry + EDGE/FILL/CHARGE colors, SCALE/BANK/POP_*
+- projectile: MAX_PLAYER/MAX_ENEMY (fixed pools), LENGTH/LINE_WIDTH, PLAYER_RGB/ENEMY_RGB
+- input:    left/right/throttle/brake; boost = Shift; fire = Space (forward gun)
 
 ### Camera feel (decided default, easy to change)
 Chase cam sits behind and slightly above the craft AT the craft's angular position, so it
@@ -102,22 +110,28 @@ and on-aesthetic.
       main.ts              bootstrap, canvas, resize, start loop, WH debug handle
       config.ts            ALL tunable constants, grouped (see above)
       loop.ts              fixed-timestep accumulator; update vs render split
-      input.ts             keyboard -> steering + throttle/boost signals
+      input.ts             keyboard -> steer / throttle / boost (Shift) / fire (Space)
       craft.ts             player state: pendulum + speed + smoothed steer
-      util/math.ts         clamp / approach / lerp
+      gun.ts               forward-gun trigger: cooldown + energy spend; returns fire intent
+      util/math.ts         clamp / approach / lerp / angleDiff (shared signed angle delta)
       physics/pendulum.ts  theta integrator (damped driven pendulum)
       world/tube.ts        build + scroll the wireframe tube mesh
       world/ship.ts        procedural 3D spacecraft hull (edge-lit); place on wall from theta
-      world/pickup.ts      one blue health orb (wireframe icosphere + blue fill)
-      world/pickups.ts     orb pool: spawn around wall, scroll, ride-into collect
-      game.ts              run state: energy drain/refill, score, game-over, best
+      world/field.ts       generic wall-object pool (orbs/gems/mines): spawn/scroll/recycle + angle hit test
+      world/wallObject.ts  the {object,update,setResolution,setOpacity} contract for field objects
+      world/pickup.ts      blue health orb / treasure.ts gold gem / hazard.ts red mine (edge-lit WallObjects)
+      world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
+      world/enemies.ts     raider pool + 4-state FSM (approach/engage/depart/dead), own worldDistance; NOT a field
+      world/projectiles.ts one pooled bolt system (player + enemy bolts; camera-facing diamond glyph)
+      game.ts              run state: energy drain/refill + per-shot spend, score, lives, game-over, best
       hud.ts               DOM HUD overlay (score/dist/best/energy/speed + game-over)
       render/scene.ts      Three scene/camera/renderer + bloom composer, fog/fade
       render/camera.ts     chase follow + bank from theta (sin-based, smooth loops)
       render/background.ts deep-space gradient backdrop (scene.background)
       render/stars.ts      world-space starfield (follows camera pos, holds orientation)
     test/                  vitest (pendulum math) - added when useful
-    scripts/shoot.ts       Playwright screenshot (SET_THETA/HOLD/SETTLE; logs state)
+    scripts/shoot.ts       Playwright screenshot (SET_THETA/HOLD/POSE/COMBAT; logs state)
+    scripts/combat-sim.ts  headless behavior sim of the combat loop (npm run sim; bundled via esbuild)
 
 ## Dev commands
 - Install:    `npm install`
@@ -125,6 +139,7 @@ and on-aesthetic.
 - Build:      `npm run build` (output in `dist/`, static + offline)
 - Preview:    `npm run preview`
 - Screenshot: `npm run shoot` (Playwright headless capture for visual self-check)
+- Combat sim: `npm run sim` (headless behavior checks for the gun/enemies/projectiles loop)
 
 ## Coding conventions and performance budget
 - TypeScript strict mode. Small, typed, modular files. No premature abstraction - refactor
@@ -156,16 +171,25 @@ and on-aesthetic.
           kind via a config block; objects implement `world/wallObject.ts`). LIVES +
           invulnerability i-frames (ship flicker); game-over on energy OR lives.
           BUILT + verified (collection/score/life/invuln-guard/restart all checked).
+- [x] M3  Combat. Forward gun (Space; energy per shot) + pooled projectiles
+          (`world/projectiles.ts`, player + enemy bolts) + magenta raiders
+          (`world/enemy.ts` visual, `world/enemies.ts` pool/AI). Aiming = align theta
+          and fire; dodging = swing theta off the line - both fall out of the pendulum.
+          Raiders fly in, hold an engagement band, strafe (hard-capped so always
+          hittable), charge-telegraph then fire back; LETHAL (bolt or ram costs a life
+          via the existing hitHazard/i-frames). Kill = +500 score + energy refund.
+          BUILT + verified (npm run sim: 13 integrated checks; build + screenshots).
 
 ### Next up (start here)
-1. Forward gun + projectiles, then enemies (small ships) to shoot - the first
-   object that is NOT a "ride into / avoid" wall object. See the table below.
-2. Difficulty ramp with distance (faster, denser fields, tighter gaps); e.g. scale
-   each field's SPAWN_SPACING down as `craft.distance` grows.
-3. Watch: the three fields are independent streams, so a mine can spawn at nearly
-   the same (z, theta) as an orb and hide behind it. Mitigated for now by staggered
-   per-kind SPAWN_START + visual dominance (red, spiky); add light cross-field
-   de-collision ONLY if playtesting shows it is unfair - do not build it preemptively.
+1. Difficulty ramp with distance (faster, denser fields, tighter gaps): scale each
+   field's SPAWN_SPACING down and raise ENEMY.COUNT / shrink ENEMY.FIRE_COOLDOWN as
+   `craft.distance` grows. Gun COST/SCORE/REFUND stay constant.
+2. Combat polish deferred from M3: a shard-burst death (currently the expand+fade pop),
+   a muzzle flash on fire, and a richer head-on raider silhouette. Playtest the near-edge
+   enemy-bolt dodge window (ENGAGE_Z_NEAR) and only widen it if it reads as unfair.
+3. Watch: enemies + the three fields are independent streams, so objects can overlap at
+   nearly the same (z, theta). Mitigated by staggered spawns + color/shape dominance; add
+   cross-stream de-collision ONLY if playtesting shows it is unfair - do not build it preemptively.
 
 ### Object types on the tube (color-coded language)
 
@@ -174,19 +198,26 @@ and on-aesthetic.
 | Energy orb | wireframe sphere         | blue              | ride into - refills energy          | built  |
 | Treasure   | brilliant-cut gem        | gold              | ride into - score points            | built  |
 | Hazard     | spiky mine / coronavirus | red               | avoid - hitting costs a life        | built  |
-| Enemy      | small ship               | tbd (e.g. orange) | shoot with the forward gun          | todo   |
+| Enemy      | forward-swept dart       | magenta           | shoot (forward gun); shoots back, lethal | built  |
 
 Orbs / treasures / hazards are all "ride into / avoid" wall objects sharing the
 generic `world/field.ts` engine (one `createField(cfg)` per kind; only the `onHit`
 effect differs). They ride at the SHARED derived radius `TUBE.RADIUS -
-SHIP.RADIAL_OFFSET` - this is a constraint, not a tunable: the angle-only hit test
-(craft.theta vs slot.theta) is only valid when objects sit where the ship rides.
+SHIP.RADIAL_OFFSET` (RIDE_RADIUS) - this is a constraint, not a tunable: the angle-only
+hit test (craft.theta vs slot.theta) is only valid when objects sit where the ship rides.
+
+Enemies are NOT a field: a field scrolls objects past at exactly the player's speed
+(fixed worldDistance), but a raider must fly in, hold an engagement band ahead, then
+peel off, so each gets its OWN advancing worldDistance (`world/enemies.ts`). It still
+rides at RIDE_RADIUS, so the same angle-only tests serve aim (player bolt vs enemy),
+dodge (enemy bolt vs ship), and ram. Bolts (`world/projectiles.ts`) also ride there;
+their ship-relative z is advanced by the bolt's own speed.
 
 ### Systems / backlog
 - [x] HUD + score + energy meter (drains; orbs refill) + game-over + restart + best
       (localStorage).
 - [x] LIVES + invulnerability i-frames (ship flicker); game-over on energy OR lives.
-- [ ] Forward gun + projectiles
+- [x] Forward gun + projectiles + magenta raiders (shoot, get shot at; lethal) - see M3.
 - [ ] Difficulty ramp with distance
 - [ ] CRT scanline toggle (bloom already on)
 - [ ] Web Audio synthesis (bleeps, engine hum rising with speed)

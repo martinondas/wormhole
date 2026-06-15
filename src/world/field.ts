@@ -1,6 +1,7 @@
 import { Group } from 'three'
 import { RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
+import { angleDiff } from '../util/math'
 import { type WallObject } from './wallObject'
 
 // A generic "wall field": a pool of WallObjects fixed to the tube wall at
@@ -66,11 +67,6 @@ interface Slot {
   state: SlotState
   popT: number // 0..1 pop progress
   popZ: number // z (frozen at collection) the pop plays at, so it stays in view
-}
-
-// smallest signed difference between two angles
-function angleDiff(a: number, b: number): number {
-  return Math.atan2(Math.sin(a - b), Math.cos(a - b))
 }
 
 export function createField(cfg: FieldConfig): Field {

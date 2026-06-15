@@ -9,3 +9,7 @@ export function approach(cur: number, target: number, maxStep: number): number {
 }
 
 export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
+
+/** Smallest signed difference between two angles, wrapped to (-PI, PI]. */
+export const angleDiff = (a: number, b: number): number =>
+  Math.atan2(Math.sin(a - b), Math.cos(a - b))
