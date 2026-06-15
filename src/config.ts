@@ -182,9 +182,10 @@ export const HAZARD = {
   SPIKE_LEN: 0.62,     // spike length out from the core surface
   SPIKE_BASE_R: 0.13,  // spike base radius (slim, sharp pyramidal cones)
   KNOB_RADIUS: 0.11,   // detonator-horn / virus-cap tip sphere
+  SCALE: 1.6,          // overall size multiplier on the built mine (bigger = scarier)
   EDGE_THRESHOLD: 18,  // EdgesGeometry threshold (deg): keeps spikes + facets
   LINE_WIDTH: 2.2,     // edge line width in px
-  EDGE_RGB: [1.6, 0.1, 0.06] as [number, number, number], // hot red, blooms red-orange not white
+  EDGE_RGB: [1.0, 0.06, 0.04] as [number, number, number], // deep, dim red (blooms gently; big silhouette keeps it readable)
   FILL_RGB: [0.05, 0.005, 0.005] as [number, number, number], // near-black, faint red bias
   SPIN_SPEED: 0.55,    // rad/s, slow + menacing (slower than the orb's 0.8)
   PULSE_SPEED: 3.4,    // throb rad/s
@@ -196,8 +197,13 @@ export const HAZARD = {
   SPAWN_SPACING: 150,
   SPAWN_JITTER: 30,
   RECYCLE_BEHIND: 22,
-  CAPTURE_Z: 1.8,      // TIGHTER than collect: roughly body-sized, dodgeable
-  CAPTURE_ANGLE: 0.26,
+  // The hit test compares the ship CENTER to the mine center, but the ship's
+  // wings span ~0.5 rad and the mine's spikes ~0.4 rad - so the window must
+  // absorb the ship's wingspan + the spikes, or a banked wing can overlap a
+  // spike with no hit. These cover that overlap. Widen if grazes should count;
+  // tighten if too punishing.
+  CAPTURE_Z: 2.8,      // ship half-length (~1.5) + mine half-extent (~2.0) overlap
+  CAPTURE_ANGLE: 0.62, // ship wing half-width (~0.5) + mine spike reach, roughly
   POP_TIME: 0.10,      // fast + big -> reads as an explosion on a real hit
   POP_SCALE: 2.6,
   // angle-from-bottom bias (deg). Favor the lower half - a mine on the ceiling

@@ -125,9 +125,10 @@ export function createHazard(): WallObject {
       // slow, menacing tumble on two axes (no per-frame allocations)
       inner.rotation.y += HAZARD.SPIN_SPEED * dt
       inner.rotation.x += HAZARD.SPIN_SPEED * 0.45 * dt
-      // subtle throb (scale only: cheap, never leaves the ride radius)
+      // base size (SCALE) with a subtle throb (scale only: cheap, never leaves
+      // the ride radius). SCALE is the overall-size knob; PULSE_AMP breathes on top.
       const s = 1 + Math.sin(t * HAZARD.PULSE_SPEED) * HAZARD.PULSE_AMP
-      inner.scale.setScalar(s)
+      inner.scale.setScalar(HAZARD.SCALE * s)
     },
     setResolution(w: number, h: number): void {
       lineMat.resolution.set(w, h)
