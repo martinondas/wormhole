@@ -34,15 +34,19 @@ The craft's position is an angle `theta` around the circular cross-section of th
     omega += angAccel * dt
     theta += omega * dt                  // theta is UNBOUNDED: a hard pump can loop over the top
 
-- Steering is a continuous torque while a key is held (a tap = a brief torque). No velocity
-  clamp - a clamp would flatten the feel; damping is what tames runaway.
+- Steering is a continuous torque while a key is held (a tap = a brief torque). There is no
+  HARD velocity clamp (it would flatten the feel), but a SOFT cap fades the steering torque to
+  zero as `|omega|` nears `STEER_OMEGA_MAX` when it would speed the spin up further, so holding
+  a side key reaches a controlled max swing speed instead of accelerating without bound.
+  Gravity is untouched, so a dive from high up still carries omega past the cap (momentum lives).
 - Integrator: semi-implicit (symplectic) Euler at a fixed substep, decoupled from rendering.
 - Forward position advances at the current speed; tube geometry scrolls toward the camera.
 - Tube cross-section is a FULL circle; `theta` wraps past the top so over-the-top loops are
   possible when pumped hard. Tuning controls how reachable the top is.
 
 ### Tunable constants (live in `src/config.ts`, grouped; values are starting points, tune freely)
-- physics:  GRAVITY_K, DAMPING_C, STEER_TORQUE, STEER_ATTACK, STEER_RELEASE, PHYSICS_HZ
+- physics:  GRAVITY_K, DAMPING_C, STEER_TORQUE, STEER_OMEGA_MAX (soft spin cap), STEER_ATTACK,
+            STEER_RELEASE, PHYSICS_HZ
 - speed:    SPEED_CRUISE, SPEED_MIN (floor > 0, never halt), SPEED_MAX (boost cap),
             THROTTLE_ACCEL, BOOST_ACCEL, EASE_DECEL
 - tube:     TUBE_RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES
@@ -50,8 +54,13 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - render:   RING_RGB, LONG_RGB, SHIP_RGB, FOG_NEAR, FOG_FAR, RENDER_SCALE, MSAA_SAMPLES,
             BLOOM_ENABLED (on), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD
 - background:BACKGROUND.{CENTER,MID,EDGE,MID_STOP} gradient; STARS, STAR_ALPHA, STAR_SPREAD_DEG
-- pickup:   RADIUS, EDGE_RGB, GLOW_RGB, GLOW_OPACITY, SPIN/BOB; COUNT, SPAWN_*, CAPTURE_Z,
-            CAPTURE_ANGLE, POP_TIME
+- pickup:   RADIUS, EDGE_RGB, GLOW_RGB, GLOW_OPACITY, SPIN/BOB; COUNT, SPAWN_* (incl.
+            SPAWN_ANGLE = per-kind angle-from-bottom bias), CAPTURE_Z, CAPTURE_ANGLE, POP_TIME/SCALE
+- treasure: gem geometry (RADIUS, FACETS, TABLE/CROWN/PAVILION_RATIO, EDGE_THRESHOLD), EDGE/FILL
+            colors, SPIN/BOB; field COUNT/SPAWN_*/CAPTURE_*/POP_*; SCORE (points per gem)
+- hazard:   mine geometry (CORE_RADIUS, SPIKE_*, KNOB_RADIUS, EDGE_THRESHOLD), EDGE/FILL colors,
+            SPIN/PULSE; field COUNT/SPAWN_* (incl. SPAWN_ANGLE), CAPTURE_*/POP_*
+- lives:    LIVES.{START, INVULN_TIME}
 - energy:   ENERGY.{MAX,START,DRAIN,PER_ORB,LOW,CRITICAL}; SCORE.DIST_RATE
 
 ### Camera feel (decided default, easy to change)

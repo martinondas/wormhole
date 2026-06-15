@@ -1,7 +1,7 @@
 import { PHYSICS, SPEED } from './config'
 import { stepPendulum, type PendulumState } from './physics/pendulum'
 import { type InputState } from './input'
-import { approach } from './util/math'
+import { approach, clamp } from './util/math'
 
 // Full player-craft state: the angular pendulum plus forward speed and a
 // smoothed steering signal (so taps feel weighty rather than instant).
@@ -30,8 +30,17 @@ export function updateCraft(s: CraftState, input: InputState, dt: number): void 
   const rate = (goingUp ? 1 / PHYSICS.STEER_ATTACK : 1 / PHYSICS.STEER_RELEASE) * dt
   s.steerSignal = approach(s.steerSignal, input.steerTarget, rate)
 
-  // Drive the pendulum.
-  stepPendulum(s, PHYSICS.STEER_TORQUE * s.steerSignal, dt)
+  // Drive the pendulum. Steering torque has a soft cap: as |omega| approaches
+  // STEER_OMEGA_MAX, fade the torque to zero IF it would spin you faster in the
+  // direction you are already going (same sign as omega). Initiating or
+  // reversing a swing always gets full torque, so the craft stays responsive;
+  // only the "hold a side key and spin up forever" runaway is tamed. Gravity is
+  // left untouched, so a dive from high up can still carry omega past the cap.
+  let steerTorque = PHYSICS.STEER_TORQUE * s.steerSignal
+  if (steerTorque * s.omega > 0) {
+    steerTorque *= clamp(1 - Math.abs(s.omega) / PHYSICS.STEER_OMEGA_MAX, 0, 1)
+  }
+  stepPendulum(s, steerTorque, dt)
 
   // Forward speed: boost > throttle > brake > ease back to cruise. Never halts.
   if (input.boost) {

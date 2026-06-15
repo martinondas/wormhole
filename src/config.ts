@@ -8,10 +8,15 @@
 // theta = angle around the tube cross-section, 0 = bottom. Unbounded (can loop).
 export const PHYSICS = {
   HZ: 240,            // fixed physics substeps per second
-  GRAVITY_K: 9.0,     // restoring strength: angAccel includes -K*sin(theta).
-                      // small-angle period ~ 2*PI/sqrt(K) ~ 2.1s
-  DAMPING_C: 0.5,     // light damping on omega: overshoots, eventually settles
+  GRAVITY_K: 11.0,    // restoring strength: angAccel includes -K*sin(theta).
+                      // higher = snappier swing + harder to loop over the top.
+                      // (loop needs omega_bottom > ~2*sqrt(K) = ~6.6 here)
+  DAMPING_C: 1.0,     // damping on omega: overshoots then settles. Higher = the
+                      // craft stabilizes at the bottom sooner (fewer left-rights)
   STEER_TORQUE: 15.0, // angular accel added by full steering input (rad/s^2)
+  STEER_OMEGA_MAX: 7.0,// soft cap: steering torque fades to zero as |omega| nears
+                      // this, so holding a steer does not spin you up forever.
+                      // Gravity can still exceed it on a dive (momentum survives).
   STEER_ATTACK: 0.07, // seconds for steer signal to ramp up (weighty taps)
   STEER_RELEASE: 0.13,// seconds for steer signal to ramp back to zero
 }
@@ -122,13 +127,16 @@ export const PICKUP = {
   // visible range filled so they fade in from the far fog rather than popping.
   COUNT: 5,           // orbs alive in the pool at once
   SPAWN_START: 50,    // distance ahead of the first orb
-  SPAWN_SPACING: 75,  // nominal distance between orbs along the tube
+  SPAWN_SPACING: 94,  // nominal distance between orbs (was 75; ~20% fewer)
   SPAWN_JITTER: 14,   // random extra distance per orb
   RECYCLE_BEHIND: 22, // recycle once an orb is this far behind the ship
   CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
   CAPTURE_ANGLE: 0.42,// angular window (rad) for a catch (~24 deg)
   POP_TIME: 0.18,     // collect pop duration (s)
   POP_SCALE: 1.8,     // collect pop peak scale (expand-and-fade)
+  // angle-from-bottom bias (deg; 0=bottom, 180=top). Favor mid-wall so the
+  // player has to swing up for energy rather than scoop it off the floor.
+  SPAWN_ANGLE: { band: [40, 90] as [number, number], bias: 0.8, rest: [0, 180] as [number, number] },
 }
 
 // --- treasure (gold brilliant-cut gem; ride-into = score) -------------------
@@ -192,6 +200,9 @@ export const HAZARD = {
   CAPTURE_ANGLE: 0.26,
   POP_TIME: 0.10,      // fast + big -> reads as an explosion on a real hit
   POP_SCALE: 2.6,
+  // angle-from-bottom bias (deg). Favor the lower half - a mine on the ceiling
+  // is no challenge; mines near the bottom force you to swing away to dodge.
+  SPAWN_ANGLE: { band: [0, 90] as [number, number], bias: 0.8, rest: [90, 180] as [number, number] },
 }
 
 // --- energy / scoring (HUD-driven survival loop) ----------------------------

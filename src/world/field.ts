@@ -25,7 +25,28 @@ export interface FieldConfig {
   captureAngle: number
   popTime: number
   popScale?: number // peak scale of the expand-and-fade pop (default 1.8)
+  sampleTheta?: () => number // spawn-angle distribution (default: uniform 0..2pi)
   onHit: () => boolean
+}
+
+// Spawn-angle bias keyed by "angle from the bottom" (0 deg = bottom where the
+// craft rests, 180 deg = top). Most spawns land in the favored `band`, the rest
+// in `rest`; the left/right side is always uniform. Lets orbs sit mid-wall (you
+// must swing up for energy) and mines hug the bottom (you must swing away).
+export interface AngleBias {
+  band: [number, number] // favored range, degrees from bottom
+  bias: number // probability of landing in the band (0..1)
+  rest: [number, number] // fallback range, degrees from bottom
+}
+
+const DEG = Math.PI / 180
+
+export function biasedAngle(b: AngleBias): () => number {
+  return () => {
+    const [lo, hi] = Math.random() < b.bias ? b.band : b.rest
+    const phi = (lo + Math.random() * (hi - lo)) * DEG
+    return (Math.random() < 0.5 ? 1 : -1) * phi
+  }
 }
 
 export interface Field {
@@ -61,14 +82,14 @@ export function createField(cfg: FieldConfig): Field {
   let consumed = 0
   let farthest = cfg.spawnStart
 
-  const randTheta = (): number => Math.random() * Math.PI * 2
+  const sampleTheta = cfg.sampleTheta ?? ((): number => Math.random() * Math.PI * 2)
 
   // Place a slot at a distance and re-arm it: clears triggered + state + the
   // pop transform. Both initial spawn and recycle/reset funnel through here, so
   // `triggered` can never be left stuck on across a recycle or a restart.
   function arm(slot: Slot, worldDistance: number): void {
     slot.worldDistance = worldDistance
-    slot.theta = randTheta()
+    slot.theta = sampleTheta()
     slot.triggered = false
     slot.state = 'idle'
     slot.popT = 0

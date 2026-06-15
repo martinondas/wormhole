@@ -3,7 +3,7 @@ import { createCameraRig } from './render/camera'
 import { createStarfield } from './render/stars'
 import { createTube } from './world/tube'
 import { createShip } from './world/ship'
-import { createField, type Field } from './world/field'
+import { createField, biasedAngle, type Field } from './world/field'
 import { type WallObject } from './world/wallObject'
 import { createPickup } from './world/pickup'
 import { createTreasure } from './world/treasure'
@@ -51,10 +51,16 @@ interface FieldConsts {
   POP_TIME: number
   POP_SCALE: number
 }
-function makeField(create: () => WallObject, c: FieldConsts, onHit: () => boolean): Field {
+function makeField(
+  create: () => WallObject,
+  c: FieldConsts,
+  onHit: () => boolean,
+  sampleTheta?: () => number,
+): Field {
   return createField({
     create,
     onHit,
+    sampleTheta,
     count: c.COUNT,
     spawnStart: c.SPAWN_START,
     spawnSpacing: c.SPAWN_SPACING,
@@ -68,15 +74,21 @@ function makeField(create: () => WallObject, c: FieldConsts, onHit: () => boolea
 }
 
 const fields: Field[] = [
-  makeField(createPickup, PICKUP, () => {
-    game.addEnergy(ENERGY.PER_ORB)
-    return true
-  }),
+  // orbs favor mid-wall (swing up for energy); gems anywhere; mines hug the bottom.
+  makeField(
+    createPickup,
+    PICKUP,
+    () => {
+      game.addEnergy(ENERGY.PER_ORB)
+      return true
+    },
+    biasedAngle(PICKUP.SPAWN_ANGLE),
+  ),
   makeField(createTreasure, TREASURE, () => {
     game.addScore(TREASURE.SCORE)
     return true
   }),
-  makeField(createHazard, HAZARD, () => game.hitHazard()),
+  makeField(createHazard, HAZARD, () => game.hitHazard(), biasedAngle(HAZARD.SPAWN_ANGLE)),
 ]
 for (const f of fields) {
   stage.scene.add(f.object)
