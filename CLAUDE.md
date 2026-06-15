@@ -144,12 +144,18 @@ and on-aesthetic.
           ride-into collection DONE (orbs are energy, NOT points; ~1/3 density).
 
 ### Object types on the tube (color-coded language)
-- [x] Health/energy orbs - BLUE wireframe sphere. Refill energy. Not points. BUILT.
-- [ ] Treasures / jewels - faceted GEM (gold or cyan), spins; SCORE points on collect.
-- [ ] Hazards - RED spiky mine / coronavirus look; hitting costs energy/a life; avoid.
-- [ ] Enemy ships - approach you; destroy with the forward gun.
-  (Orbs/treasures/hazards are all "ride into / avoid" wall objects -> expect to
-   refactor world/pickups.ts into a shared wall-field system once the 3rd lands.)
+
+| Type       | Look                     | Color             | Interaction                         | Status |
+|------------|--------------------------|-------------------|-------------------------------------|--------|
+| Energy orb | wireframe sphere         | blue              | ride into - refills energy          | built  |
+| Treasure   | faceted gem              | gold or cyan      | ride into - score points            | todo   |
+| Hazard     | spiky mine / coronavirus | red               | avoid - hitting costs energy/a life | todo   |
+| Enemy      | small ship               | tbd (e.g. orange) | shoot with the forward gun          | todo   |
+
+Orbs / treasures / hazards are all "ride into / avoid" wall objects. When the 2nd
+lands (treasures), generalize `world/pickups.ts` into a shared "wall field" so all
+three share one spawn / scroll / hit system - that is the right point to refactor,
+not before.
 
 ### Systems / backlog
 - [x] HUD + score + energy meter (drains; orbs refill) + game-over + restart + best
