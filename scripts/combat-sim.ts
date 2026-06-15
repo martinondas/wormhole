@@ -173,5 +173,34 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   check('E1 two hits in one i-frame window cost one life', r.game.lives === lives0 - 1, `lives ${lives0} -> ${r.game.lives}`)
 })()
 
+// ---- F) fly-by collision: an UNKILLED raider departing back through the ship
+// plane, on the ship's line, costs a life. This is the only phase where it is
+// near z=0 (approach/engage hold station far ahead), so it is the real collision.
+;(() => {
+  const ampWas = ENEMY.STRAFE_AMP
+  const fireWas = ENEMY.FIRE_COOLDOWN
+  const engWas = ENEMY.ENGAGE_TIME
+  const jitWas = ENEMY.ENGAGE_TIME_JITTER
+  ENEMY.STRAFE_AMP = 0 // hold the raider on the ship's line (theta 0)
+  ENEMY.FIRE_COOLDOWN = 999 // isolate collision from lethal bolts
+  ENEMY.ENGAGE_TIME = 0.3 // depart quickly so the fly-by happens within the window
+  ENEMY.ENGAGE_TIME_JITTER = 0
+  const r = makeRig()
+  r.enemies.debugStage(0, -22) // engage on the ship's line, then it peels off
+  const lives0 = r.game.lives
+  let collided = false
+  let minAbsZ = Infinity
+  for (let i = 0; i < PHYSICS.HZ * 5 && !collided; i++) {
+    step(r, false, { integrate: false }) // ship holds theta 0 and advances forward
+    if (r.game.lives < lives0) collided = true
+  }
+  void minAbsZ
+  check('F1 departing raider fly-by on the ship line costs a life', collided, `lives ${lives0} -> ${r.game.lives}`)
+  ENEMY.STRAFE_AMP = ampWas
+  ENEMY.FIRE_COOLDOWN = fireWas
+  ENEMY.ENGAGE_TIME = engWas
+  ENEMY.ENGAGE_TIME_JITTER = jitWas
+})()
+
 console.log(failures === 0 ? '\nALL COMBAT SIM CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

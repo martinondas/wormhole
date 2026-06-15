@@ -222,11 +222,14 @@ export function createEnemies(deps: EnemyDeps): Enemies {
 
     const z = craftDistance - slot.worldDistance
 
-    // ram: lethal contact with the hull. The invuln-first guard in game.hitHazard
-    // makes repeated overlapping steps cost only one life; the enemy survives.
-    if ((slot.phase === 'approach' || slot.phase === 'engage') &&
-        Math.abs(z) < ENEMY.RAM_Z &&
-        Math.abs(angleDiff(craft.theta, slot.theta)) < ENEMY.RAM_ANGLE) {
+    // ram / fly-by collision: lethal contact with the hull whenever the raider is
+    // near the ship plane and on the ship's line. The 'dead' phase already
+    // returned above, so this runs for approach/engage/depart; in practice it
+    // only fires on the DEPART fly-by, when an unkilled raider sweeps back through
+    // z=0 past you (approach + engage hold station far ahead, z <= -25, never in
+    // range). The invuln-first guard makes one fly-by cost at most one life; the
+    // raider survives the contact (ramming is pure downside, steering you to shoot).
+    if (Math.abs(z) < ENEMY.RAM_Z && Math.abs(angleDiff(craft.theta, slot.theta)) < ENEMY.RAM_ANGLE) {
       deps.onRam()
     }
 
