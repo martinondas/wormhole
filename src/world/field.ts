@@ -65,6 +65,7 @@ interface Slot {
   triggered: boolean // armed once per encounter; cleared only on recycle/reset
   state: SlotState
   popT: number // 0..1 pop progress
+  popZ: number // z (frozen at collection) the pop plays at, so it stays in view
 }
 
 // smallest signed difference between two angles
@@ -93,6 +94,7 @@ export function createField(cfg: FieldConfig): Field {
     slot.triggered = false
     slot.state = 'idle'
     slot.popT = 0
+    slot.popZ = 0
     slot.obj.object.scale.setScalar(1)
     slot.obj.setOpacity(1)
   }
@@ -100,7 +102,7 @@ export function createField(cfg: FieldConfig): Field {
   for (let i = 0; i < cfg.count; i++) {
     const obj = cfg.create()
     group.add(obj.object)
-    const slot: Slot = { obj, theta: 0, worldDistance: 0, triggered: false, state: 'idle', popT: 0 }
+    const slot: Slot = { obj, theta: 0, worldDistance: 0, triggered: false, state: 'idle', popT: 0, popZ: 0 }
     const wd = cfg.spawnStart + i * cfg.spawnSpacing + Math.random() * cfg.spawnJitter
     farthest = Math.max(farthest, wd)
     arm(slot, wd)
@@ -126,7 +128,10 @@ export function createField(cfg: FieldConfig): Field {
           const t = Math.min(slot.popT, 1)
           slot.obj.object.scale.setScalar(1 + t * (popScale - 1))
           slot.obj.setOpacity(1 - t)
-          place(slot, craft.distance - slot.worldDistance)
+          // Play the pop at the frozen capture z, NOT the scrolling world z:
+          // otherwise at high speed the object races past the camera before the
+          // pop finishes and the flash is never seen.
+          place(slot, slot.popZ)
           slot.obj.update(dt)
           if (t >= 1) recycle(slot)
           continue
@@ -155,6 +160,7 @@ export function createField(cfg: FieldConfig): Field {
             consumed += 1
             slot.state = 'popping'
             slot.popT = 0
+            slot.popZ = z // freeze the pop at the ship plane where it was caught
           }
           // else: not consumed (e.g. invulnerable) - leave it; `triggered`
           // prevents re-fire, it scrolls past and recycles behind.
