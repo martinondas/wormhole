@@ -143,6 +143,15 @@ and on-aesthetic.
           gradient backdrop + world-space stars, muted tube green. Spawner +
           ride-into collection DONE (orbs are energy, NOT points; ~1/3 density).
 
+### Next up (start here)
+1. Treasure gems: gold/cyan faceted gem (octahedron/diamond), spins; ride-into =
+   `game.addScore(n)`. Build the look first (screenshot-tune), then wire it.
+2. WITH treasures (the 2nd wall object), refactor `world/pickups.ts` into a generic
+   "wall field": shared spawn/scroll/recycle + proximity check, parameterized per
+   kind (orb -> energy refill, treasure -> score). Keep the feel constants per kind.
+3. Then red hazards (cost energy/a life; adds LIVES + collision), then enemies + the
+   forward gun. See the table below.
+
 ### Object types on the tube (color-coded language)
 
 | Type       | Look                     | Color             | Interaction                         | Status |
