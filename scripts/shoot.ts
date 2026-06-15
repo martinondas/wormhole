@@ -59,6 +59,39 @@ if (process.env.SHOOT_GAMEOVER) {
   }, Number(setTheta))
   await page.waitForTimeout(250)
   await page.screenshot({ path: out })
+} else if (process.env.SHOOT_POSE) {
+  // Freeze physics and stage one orb, gem, and mine in a row along the lower
+  // wall just ahead of the ship, for a direct side-by-side look comparison.
+  await page.evaluate(() => {
+    const wh = (globalThis as Record<string, unknown>).WH as
+      | {
+          debug?: { paused: boolean }
+          fields?: {
+            object: {
+              children: {
+                position: { set(x: number, y: number, z: number): void }
+                rotation: { set(x: number, y: number, z: number): void }
+              }[]
+            }
+          }[]
+        }
+      | undefined
+    if (!wh?.fields || !wh.debug) return
+    wh.debug.paused = true // physics frozen -> manual poses hold (field.update is gated)
+    // Float the three above the ship, close to the camera, for an unobstructed
+    // side-by-side look comparison (not their in-game ride radius).
+    const place = (fi: number, x: number, tilt: number): void => {
+      const obj = wh.fields?.[fi]?.object.children[0]
+      if (!obj) return
+      obj.position.set(x, -1.2, -4)
+      obj.rotation.set(tilt, tilt, 0)
+    }
+    place(0, -3.2, 0.0) // orb
+    place(1, 0.0, 0.5) // gem (tilt to show facets)
+    place(2, 3.2, 0.4) // mine
+  })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: out })
 } else if (hold.length) {
   const holdMs = Number(process.env.SHOOT_HOLD_MS ?? 1200)
   const settleMs = Number(process.env.SHOOT_SETTLE_MS ?? 0) // if >0, release then settle before the shot
@@ -76,15 +109,24 @@ if (process.env.SHOOT_GAMEOVER) {
 
 const state = await page.evaluate(() => {
   const wh = (globalThis as Record<string, unknown>).WH as
-    | { craft?: { theta: number; distance: number }; pickups?: { count: number } }
+    | {
+        craft?: { theta: number; distance: number }
+        game?: { energy: number; lives: number; over: boolean }
+        fields?: { consumed: number }[]
+      }
     | undefined
   return {
     theta: wh?.craft?.theta ?? null,
     distance: wh?.craft?.distance ?? null,
-    pickups: wh?.pickups?.count ?? null,
+    energy: wh?.game?.energy ?? null,
+    lives: wh?.game?.lives ?? null,
+    over: wh?.game?.over ?? null,
+    consumed: wh?.fields?.map((f) => f.consumed) ?? null,
   }
 })
-console.log(`craft.theta=${state.theta}  distance=${state.distance}  pickups=${state.pickups}`)
+console.log(
+  `theta=${state.theta} dist=${state.distance} energy=${state.energy} lives=${state.lives} over=${state.over} consumed=${JSON.stringify(state.consumed)}`,
+)
 
 await browser.close()
 

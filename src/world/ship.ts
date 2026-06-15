@@ -16,7 +16,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
-import { SHIP, TUBE, RENDER } from '../config'
+import { SHIP, RENDER, RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
 
 export interface Ship {
@@ -106,7 +106,7 @@ export function createShip(): Ship {
   group.add(edges)
   group.scale.setScalar(SHIP.SCALE)
 
-  const shipRadius = TUBE.RADIUS - SHIP.RADIAL_OFFSET
+  const shipRadius = RIDE_RADIUS
 
   return {
     object: group,

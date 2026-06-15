@@ -139,36 +139,43 @@ and on-aesthetic.
           with the swing) + pendulum physics + banking chase cam + throttle/boost (no halt),
           controllable, constants exposed. BUILT + playtested + tuned (stable
           wormhole cam, gravity-down, smooth loops, framing).
-- [~] M2  Pickups + atmosphere. Blue wireframe health orbs (edge-lit), deep-space
-          gradient backdrop + world-space stars, muted tube green. Spawner +
-          ride-into collection DONE (orbs are energy, NOT points; ~1/3 density).
+- [x] M2  Wall objects + atmosphere. Edge-lit health orbs (blue, energy), treasure
+          gems (gold brilliant-cut, score) and hazard mines (red spiky, cost a life);
+          deep-space gradient + world-space stars. Generic "wall field" engine
+          (`world/field.ts`: shared spawn/scroll/recycle/proximity, parameterized per
+          kind via a config block; objects implement `world/wallObject.ts`). LIVES +
+          invulnerability i-frames (ship flicker); game-over on energy OR lives.
+          BUILT + verified (collection/score/life/invuln-guard/restart all checked).
 
 ### Next up (start here)
-1. Treasure gems: gold/cyan faceted gem (octahedron/diamond), spins; ride-into =
-   `game.addScore(n)`. Build the look first (screenshot-tune), then wire it.
-2. WITH treasures (the 2nd wall object), refactor `world/pickups.ts` into a generic
-   "wall field": shared spawn/scroll/recycle + proximity check, parameterized per
-   kind (orb -> energy refill, treasure -> score). Keep the feel constants per kind.
-3. Then red hazards (cost energy/a life; adds LIVES + collision), then enemies + the
-   forward gun. See the table below.
+1. Forward gun + projectiles, then enemies (small ships) to shoot - the first
+   object that is NOT a "ride into / avoid" wall object. See the table below.
+2. Difficulty ramp with distance (faster, denser fields, tighter gaps); e.g. scale
+   each field's SPAWN_SPACING down as `craft.distance` grows.
+3. Watch: the three fields are independent streams, so a mine can spawn at nearly
+   the same (z, theta) as an orb and hide behind it. Mitigated for now by staggered
+   per-kind SPAWN_START + visual dominance (red, spiky); add light cross-field
+   de-collision ONLY if playtesting shows it is unfair - do not build it preemptively.
 
 ### Object types on the tube (color-coded language)
 
 | Type       | Look                     | Color             | Interaction                         | Status |
 |------------|--------------------------|-------------------|-------------------------------------|--------|
 | Energy orb | wireframe sphere         | blue              | ride into - refills energy          | built  |
-| Treasure   | faceted gem              | gold or cyan      | ride into - score points            | todo   |
-| Hazard     | spiky mine / coronavirus | red               | avoid - hitting costs energy/a life | todo   |
+| Treasure   | brilliant-cut gem        | gold              | ride into - score points            | built  |
+| Hazard     | spiky mine / coronavirus | red               | avoid - hitting costs a life        | built  |
 | Enemy      | small ship               | tbd (e.g. orange) | shoot with the forward gun          | todo   |
 
-Orbs / treasures / hazards are all "ride into / avoid" wall objects. When the 2nd
-lands (treasures), generalize `world/pickups.ts` into a shared "wall field" so all
-three share one spawn / scroll / hit system - that is the right point to refactor,
-not before.
+Orbs / treasures / hazards are all "ride into / avoid" wall objects sharing the
+generic `world/field.ts` engine (one `createField(cfg)` per kind; only the `onHit`
+effect differs). They ride at the SHARED derived radius `TUBE.RADIUS -
+SHIP.RADIAL_OFFSET` - this is a constraint, not a tunable: the angle-only hit test
+(craft.theta vs slot.theta) is only valid when objects sit where the ship rides.
 
 ### Systems / backlog
 - [x] HUD + score + energy meter (drains; orbs refill) + game-over + restart + best
-      (localStorage). LIVES deferred until hazards exist (something to cost a life).
+      (localStorage).
+- [x] LIVES + invulnerability i-frames (ship flicker); game-over on energy OR lives.
 - [ ] Forward gun + projectiles
 - [ ] Difficulty ramp with distance
 - [ ] CRT scanline toggle (bloom already on)

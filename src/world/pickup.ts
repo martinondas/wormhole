@@ -11,20 +11,15 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { PICKUP } from '../config'
+import { type WallObject } from './wallObject'
 
 // A blue health orb: a faceted wireframe icosphere over a soft additive inner
 // glow (a glowing balloon in the spirit of Descent II powerups). The outer group
 // is positioned by the owner; an inner group spins and bobs for life.
-export interface Pickup {
-  object: Group
-  update(dt: number): void
-  setResolution(w: number, h: number): void
-  setOpacity(o: number): void // 1 = normal; used for the collect fade
-}
 
 // Shared geometry/material would couple lifetimes awkwardly while we are still
 // tuning; one orb is cheap, so build self-contained instances for now.
-export function createPickup(): Pickup {
+export function createPickup(): WallObject {
   const inner = new Group()
 
   // inner fill: a darker, less-transparent blue ball (normal blend so it reads

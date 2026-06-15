@@ -45,6 +45,12 @@ export const SHIP = {
   LINE_WIDTH: 2.4,    // edge line width in pixels (Line2)
 }
 
+// Shared ride radius: where the ship belly floats AND where every wall object
+// (orb / gem / mine) sits. The angle-only hit test (craft.theta vs object theta)
+// is only valid if these match, so ship.ts and field.ts both derive from this
+// one value - a constraint, not a per-kind tunable.
+export const RIDE_RADIUS = TUBE.RADIUS - SHIP.RADIAL_OFFSET
+
 // --- camera (chase cam, orbits with theta, rolls through loops) -------------
 export const CAMERA = {
   FOV: 62,            // vertical FOV used on square/tall windows
@@ -122,6 +128,70 @@ export const PICKUP = {
   CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
   CAPTURE_ANGLE: 0.42,// angular window (rad) for a catch (~24 deg)
   POP_TIME: 0.18,     // collect pop duration (s)
+  POP_SCALE: 1.8,     // collect pop peak scale (expand-and-fade)
+}
+
+// --- treasure (gold brilliant-cut gem; ride-into = score) -------------------
+// Visual: a custom diamond (flat table on top, a crown widening to the waist,
+// then a long pavilion to a point), edge-lit gold over a near-black warm fill.
+// NORMAL blend (depthTest), like the orb and unlike the ship: additive HDR gold
+// would bloom toward white and lose the hue separation from the blue orb. Spins
+// ~3x the orb so facets flash.
+export const TREASURE = {
+  RADIUS: 0.75,        // waist (widest) radius
+  FACETS: 8,           // radial segments -> 8 vertical facet ridges (classic cut)
+  TABLE_RATIO: 0.45,   // flat top radius as a fraction of RADIUS
+  CROWN_RATIO: 0.55,   // crown (table->waist) height as a fraction of RADIUS
+  PAVILION_RATIO: 1.5, // long pointed bottom height as a fraction of RADIUS
+  EDGE_THRESHOLD: 1,   // EdgesGeometry thresholdAngle (deg); low keeps all facets
+  LINE_WIDTH: 2.2,     // edge line width in px (Line2)
+  EDGE_RGB: [1.60, 1.10, 0.18] as [number, number, number], // warm gold, >1 cores bloom white
+  FILL_RGB: [0.16, 0.09, 0.01] as [number, number, number], // deep warm-amber, dark enough to occlude
+  FILL_OPACITY: 0.85,
+  SPIN_SPEED: 2.4,     // rad/s about vertical: ~3x the orb (eye-catching flash)
+  BOB_AMP: 0.10,
+  BOB_SPEED: 2.0,
+
+  // --- field / spawn (rarer than orbs; offset start so kinds don't cluster) ---
+  COUNT: 4,
+  SPAWN_START: 85,
+  SPAWN_SPACING: 120,
+  SPAWN_JITTER: 22,
+  RECYCLE_BEHIND: 22,
+  CAPTURE_Z: 2.4,      // generous ride-into (like the orb)
+  CAPTURE_ANGLE: 0.40,
+  POP_TIME: 0.18,
+  POP_SCALE: 1.8,
+  SCORE: 250,          // points per gem -> game.addScore
+}
+
+// --- hazard (red spiky sea-mine / coronavirus; AVOID, a hit costs a life) ---
+// The ONLY red object on the tube. Edge-lit solid like the ship, but NORMAL
+// blend like the orb (additive HDR red would bloom toward white/pink).
+export const HAZARD = {
+  CORE_RADIUS: 0.5,    // faceted core sphere radius (world units)
+  SPIKE_COUNT: 12,     // documented; geometry uses the 12 icosa vertex dirs
+  SPIKE_LEN: 0.62,     // spike length out from the core surface
+  SPIKE_BASE_R: 0.13,  // spike base radius (slim, sharp pyramidal cones)
+  KNOB_RADIUS: 0.11,   // detonator-horn / virus-cap tip sphere
+  EDGE_THRESHOLD: 18,  // EdgesGeometry threshold (deg): keeps spikes + facets
+  LINE_WIDTH: 2.2,     // edge line width in px
+  EDGE_RGB: [1.6, 0.1, 0.06] as [number, number, number], // hot red, blooms red-orange not white
+  FILL_RGB: [0.05, 0.005, 0.005] as [number, number, number], // near-black, faint red bias
+  SPIN_SPEED: 0.55,    // rad/s, slow + menacing (slower than the orb's 0.8)
+  PULSE_SPEED: 3.4,    // throb rad/s
+  PULSE_AMP: 0.05,     // +/- 5% scale breathing
+
+  // --- field / spawn (sparse to start; latest start so it doesn't cluster) ---
+  COUNT: 4,
+  SPAWN_START: 120,
+  SPAWN_SPACING: 150,
+  SPAWN_JITTER: 30,
+  RECYCLE_BEHIND: 22,
+  CAPTURE_Z: 1.8,      // TIGHTER than collect: roughly body-sized, dodgeable
+  CAPTURE_ANGLE: 0.26,
+  POP_TIME: 0.10,      // fast + big -> reads as an explosion on a real hit
+  POP_SCALE: 2.6,
 }
 
 // --- energy / scoring (HUD-driven survival loop) ----------------------------
@@ -132,6 +202,12 @@ export const ENERGY = {
   PER_ORB: 25,   // energy refilled per collected orb
   LOW: 0.28,     // fraction below which the bar warns (amber)
   CRITICAL: 0.13,// fraction below which the bar is red
+}
+
+// --- lives (hazards cost a life; brief i-frames after a hit) ----------------
+export const LIVES = {
+  START: 3,
+  INVULN_TIME: 1.6, // seconds of invulnerability after a hit (drives ship flicker)
 }
 
 export const SCORE = {

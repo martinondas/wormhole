@@ -1,4 +1,4 @@
-import { ENERGY } from './config'
+import { ENERGY, LIVES } from './config'
 
 // Minimal in-theme HUD as a DOM overlay (crisp text, no bloom interference):
 // score + distance top-left, best top-right, an energy bar + speed bottom,
@@ -8,6 +8,7 @@ export interface HudState {
   distance: number
   speed: number
   energy01: number // 0..1
+  lives: number
   over: boolean
   best: number
 }
@@ -24,6 +25,8 @@ const CSS = `
 #hud .tl { top:18px; left:20px; }
 #hud .tr { top:18px; right:20px; text-align:right; }
 #hud .dim { opacity:0.6; }
+#hud .lives { position:absolute; left:20px; bottom:58px; font-size:14px; letter-spacing:4px; }
+#hud .lives .lost { opacity:0.22; }
 #hud .meter { position:absolute; left:20px; bottom:20px; width:260px; }
 #hud .meter .lbl { font-size:12px; opacity:0.8; margin-bottom:4px; }
 #hud .track { height:9px; border:1px solid rgba(125,255,166,0.5); border-radius:1px;
@@ -55,10 +58,11 @@ export function createHud(): Hud {
   root.innerHTML = `
     <div class="corner tl"><div id="wh-score">SCORE 0000000</div><div id="wh-dist" class="dim">DIST 0000</div></div>
     <div class="corner tr"><div id="wh-best" class="dim">BEST 0000000</div></div>
+    <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl">ENERGY</div><div class="track"><div class="fill" id="wh-energy"></div></div></div>
     <div class="spd" id="wh-spd">SPD 00</div>
     <div class="over" id="wh-over">
-      <h1>ENERGY DEPLETED</h1>
+      <h1 id="wh-over-title">ENERGY DEPLETED</h1>
       <div class="big" id="wh-over-score">SCORE 0000000</div>
       <div id="wh-over-best" class="dim">BEST 0000000</div>
       <div class="blink">PRESS SPACE TO RESTART</div>
@@ -69,11 +73,25 @@ export function createHud(): Hud {
   const elScore = $('wh-score')
   const elDist = $('wh-dist')
   const elBest = $('wh-best')
+  const elLives = $('wh-lives')
   const elEnergy = $('wh-energy')
   const elSpd = $('wh-spd')
   const elOver = $('wh-over')
+  const elOverTitle = $('wh-over-title')
   const elOverScore = $('wh-over-score')
   const elOverBest = $('wh-over-best')
+
+  // ship glyphs: bright for remaining, dim for spent (shows the max at a glance)
+  let lastLives = -1
+  function renderLives(lives: number): void {
+    if (lives === lastLives) return
+    lastLives = lives
+    let glyphs = ''
+    for (let i = 0; i < LIVES.START; i++) {
+      glyphs += `<span class="${i < lives ? '' : 'lost'}">&#9650;</span>`
+    }
+    elLives.innerHTML = 'SHIPS ' + glyphs
+  }
 
   return {
     update(s: HudState): void {
@@ -81,6 +99,7 @@ export function createHud(): Hud {
       elDist.textContent = 'DIST ' + pad(s.distance, 4)
       elBest.textContent = 'BEST ' + pad(s.best, 7)
       elSpd.textContent = 'SPD ' + pad(s.speed, 2)
+      renderLives(s.lives)
 
       const e = Math.max(0, Math.min(1, s.energy01))
       elEnergy.style.width = (e * 100).toFixed(1) + '%'
@@ -90,6 +109,7 @@ export function createHud(): Hud {
 
       elOver.classList.toggle('show', s.over)
       if (s.over) {
+        elOverTitle.textContent = s.lives <= 0 ? 'SHIP DESTROYED' : 'ENERGY DEPLETED'
         elOverScore.textContent = 'SCORE ' + pad(s.score, 7)
         elOverBest.textContent = 'BEST ' + pad(s.best, 7)
       }
