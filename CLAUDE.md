@@ -51,6 +51,7 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - background:BACKGROUND.{CENTER,MID,EDGE,MID_STOP} gradient; STARS, STAR_ALPHA, STAR_SPREAD_DEG
 - pickup:   RADIUS, EDGE_RGB, GLOW_RGB, GLOW_OPACITY, SPIN/BOB; COUNT, SPAWN_*, CAPTURE_Z,
             CAPTURE_ANGLE, POP_TIME
+- energy:   ENERGY.{MAX,START,DRAIN,PER_ORB,LOW,CRITICAL}; SCORE.DIST_RATE
 
 ### Camera feel (decided default, easy to change)
 Chase cam sits behind and slightly above the craft AT the craft's angular position, so it
@@ -99,6 +100,8 @@ and on-aesthetic.
       world/ship.ts        procedural 3D spacecraft hull (edge-lit); place on wall from theta
       world/pickup.ts      one blue health orb (wireframe icosphere + blue fill)
       world/pickups.ts     orb pool: spawn around wall, scroll, ride-into collect
+      game.ts              run state: energy drain/refill, score, game-over, best
+      hud.ts               DOM HUD overlay (score/dist/best/energy/speed + game-over)
       render/scene.ts      Three scene/camera/renderer + bloom composer, fog/fade
       render/camera.ts     chase follow + bank from theta (sin-based, smooth loops)
       render/background.ts deep-space gradient backdrop (scene.background)
@@ -148,8 +151,9 @@ and on-aesthetic.
   (Orbs/treasures/hazards are all "ride into / avoid" wall objects -> expect to
    refactor world/pickups.ts into a shared wall-field system once the 3rd lands.)
 
-### Systems / backlog (recorded, not built yet)
-- [ ] HUD + score + energy/time meter (drains over time; orbs refill) + game-over loop
+### Systems / backlog
+- [x] HUD + score + energy meter (drains; orbs refill) + game-over + restart + best
+      (localStorage). LIVES deferred until hazards exist (something to cost a life).
 - [ ] Forward gun + projectiles
 - [ ] Difficulty ramp with distance
 - [ ] CRT scanline toggle (bloom already on)

@@ -36,7 +36,18 @@ await page.waitForTimeout(waitMs)
 // SHOOT_HOLD_MS before the capture, to verify steering/throttle in a still.
 const setTheta = process.env.SHOOT_SET_THETA
 const hold = (process.env.SHOOT_HOLD ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-if (setTheta !== undefined) {
+if (process.env.SHOOT_GAMEOVER) {
+  // force the run to end for a deterministic game-over screen grab
+  await page.evaluate(() => {
+    const wh = (globalThis as Record<string, unknown>).WH as { game?: { energy: number; over: boolean } } | undefined
+    if (wh?.game) {
+      wh.game.energy = 0
+      wh.game.over = true
+    }
+  })
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: out })
+} else if (setTheta !== undefined) {
   // Force a specific craft angle (radians) for a deterministic still, e.g. to
   // check that theta = 2*PI (bottom after a loop) renders fully upright.
   await page.evaluate((t) => {

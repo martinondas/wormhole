@@ -124,6 +124,20 @@ export const PICKUP = {
   POP_TIME: 0.18,     // collect pop duration (s)
 }
 
+// --- energy / scoring (HUD-driven survival loop) ----------------------------
+export const ENERGY = {
+  MAX: 100,
+  START: 100,
+  DRAIN: 3.5,    // energy lost per second
+  PER_ORB: 25,   // energy refilled per collected orb
+  LOW: 0.28,     // fraction below which the bar warns (amber)
+  CRITICAL: 0.13,// fraction below which the bar is red
+}
+
+export const SCORE = {
+  DIST_RATE: 1.0, // points per world unit travelled (treasures add bonus later)
+}
+
 // --- input key bindings (KeyboardEvent.code) --------------------------------
 export const INPUT = {
   left: ['ArrowLeft', 'KeyA'],

@@ -15,6 +15,14 @@ export function createCraft(): CraftState {
   return { theta: 0, omega: 0, steerSignal: 0, speed: SPEED.CRUISE, distance: 0 }
 }
 
+export function resetCraft(s: CraftState): void {
+  s.theta = 0
+  s.omega = 0
+  s.steerSignal = 0
+  s.speed = SPEED.CRUISE
+  s.distance = 0
+}
+
 export function updateCraft(s: CraftState, input: InputState, dt: number): void {
   // Ramp the steering signal toward the target. Faster to engage (attack) than
   // to release, so a quick tap delivers a crisp, weighty push.

@@ -11,6 +11,7 @@ export interface Pickups {
   object: Group
   update(craft: CraftState, dt: number): void
   setResolution(w: number, h: number): void
+  reset(craftDistance: number): void
   readonly count: number
 }
 
@@ -27,7 +28,7 @@ function angleDiff(a: number, b: number): number {
   return Math.atan2(Math.sin(a - b), Math.cos(a - b))
 }
 
-export function createPickups(): Pickups {
+export function createPickups(onCollect?: () => void): Pickups {
   const group = new Group()
   const radius = TUBE.RADIUS - SHIP.RADIAL_OFFSET // orbs ride where the ship rides
   const slots: Slot[] = []
@@ -79,11 +80,26 @@ export function createPickups(): Pickups {
           slot.collected = true
           slot.popT = 0
           collected += 1
+          onCollect?.()
         }
       }
     },
     setResolution(w: number, h: number): void {
       for (const slot of slots) slot.pickup.setResolution(w, h)
+    },
+    reset(craftDistance: number): void {
+      collected = 0
+      farthest = craftDistance + PICKUP.SPAWN_START
+      slots.forEach((slot, i) => {
+        slot.worldDistance =
+          craftDistance + PICKUP.SPAWN_START + i * PICKUP.SPAWN_SPACING + Math.random() * PICKUP.SPAWN_JITTER
+        farthest = Math.max(farthest, slot.worldDistance)
+        slot.theta = randTheta()
+        slot.collected = false
+        slot.popT = 0
+        slot.pickup.object.scale.setScalar(1)
+        slot.pickup.setOpacity(1)
+      })
     },
     get count(): number {
       return collected
