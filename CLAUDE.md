@@ -1,15 +1,16 @@
 # CLAUDE.md - Wormhole (working name "Vector Tube")
 
 ## Overview
-Wormhole is a small, polished retro-inspired "tube flyer": a first-person / chase-cam craft on
-a constant forward run down the inside of a long circular tube, rendered as glowing neon
-wireframe on near-black in a Tron aesthetic (spirit of Psyborg, S.T.U.N. Runner, Tunnels of
-Armageddon, but with modern execution). It is retro-INSPIRED, not retro-cheap: the look should
-read as a modern machine doing a vector look, not a 1990s mockup. The soul of the game is the
-movement: the craft is not free-flying - it hangs near the bottom of the tube under a
-gravity-like pull and steers only left / right, climbing the curved wall like a pendulum.
-Pumping left-right-left builds amplitude to ride high up the wall, or all the way over the top.
-Getting that swing to feel weighty and momentum-driven is the single most important thing here.
+See [README.md](README.md) for the player-facing description (what the game is, controls, how to
+run). This file is the internal design spec, physics model, architecture, and roadmap.
+
+Design priorities that drive the code:
+- The soul of the game is the MOVEMENT. The craft is not free-flying - it hangs near the bottom
+  of the tube under a gravity-like pull and steers only left / right, climbing the curved wall
+  like a pendulum (pump left-right-left to ride high, or loop over the top). Getting that swing
+  to feel weighty and momentum-driven is the single most important thing here.
+- Retro-INSPIRED, not retro-cheap: a modern machine doing a vector look, not a 1990s mockup
+  (spirit of Psyborg, S.T.U.N. Runner, Tunnels of Armageddon, with modern execution).
 
 ## Game design spec (condensed)
 - Constant forward motion; the craft never halts. Speed is changeable: a cruise baseline,
