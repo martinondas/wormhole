@@ -82,17 +82,96 @@ export function createAudio(): Audio {
   musicBus.gain.value = AUDIO.MUSIC_VOLUME
   musicBus.connect(master)
 
-  // --- SFX: load + decode each mp3 once, with one persistent gain per sound --
-  // Each sound owns a single GainNode (its config volume) wired to the bus once.
-  // play() then allocates only a throwaway BufferSourceNode, which the graph
-  // releases when it finishes - so nothing accumulates on the bus over a run.
+  // --- procedural SFX (file-less cues) ---------------------------------------
+  // Tiny Web Audio bleeps in the vector spirit, so the build stays self-contained
+  // (no asset files). Each generator schedules throwaway nodes into the per-sfx
+  // gain `out` at time `now` and disconnects them on end, so nothing accumulates
+  // (same fire-and-forget contract as a decoded BufferSource in play()).
+  type Synth = (out: AudioNode, now: number) => void
+
+  const noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 3.0), ctx.sampleRate)
+  const noise = noiseBuf.getChannelData(0)
+  for (let i = 0; i < noise.length; i++) noise[i] = Math.random() * 2 - 1
+
+  // one enveloped oscillator: pitch f0 -> f1 over dur, click-free attack + decay
+  function blip(out: AudioNode, now: number, type: OscillatorType, f0: number, f1: number, dur: number, peak: number): void {
+    const osc = ctx.createOscillator()
+    osc.type = type
+    osc.frequency.setValueAtTime(f0, now)
+    if (f1 !== f0) osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), now + dur)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, now)
+    g.gain.exponentialRampToValueAtTime(peak, now + 0.006)
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur)
+    osc.connect(g)
+    g.connect(out)
+    osc.start(now)
+    osc.stop(now + dur + 0.02)
+    osc.onended = (): void => { osc.disconnect(); g.disconnect() }
+  }
+
+  const SYNTHS: Record<string, Synth> = {
+    gem(out, now) { blip(out, now, 'triangle', 880, 880, 0.09, 0.7); blip(out, now + 0.07, 'triangle', 1320, 1320, 0.14, 0.7) },
+    enemyFire(out, now) { blip(out, now, 'sawtooth', 620, 180, 0.13, 0.6) },
+    kill(out, now) { blip(out, now, 'square', 720, 110, 0.22, 0.7) },
+    gameover(out, now) { blip(out, now, 'triangle', 440, 90, 0.9, 0.7) },
+    hit(out, now) {
+      // bomb blast, three layers: a sharp CRACK, a booming filtered-noise BODY that
+      // sweeps down into a long low RUMBLE, and a SUB boom underneath. Big + long
+      // (~2.6s) so losing a life detonates rather than pops.
+      const dur = 2.6
+
+      // body + rumble: noise through a lowpass sweeping from a bright onset down to
+      // a deep rumble over the whole blast; slow exponential decay = lingering tail.
+      const body = ctx.createBufferSource()
+      body.buffer = noiseBuf
+      const lp = ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.setValueAtTime(3500, now)
+      lp.frequency.exponentialRampToValueAtTime(35, now + dur)
+      const bg = ctx.createGain()
+      bg.gain.setValueAtTime(1.1, now)
+      bg.gain.exponentialRampToValueAtTime(0.0001, now + dur)
+      body.connect(lp); lp.connect(bg); bg.connect(out)
+      body.start(now)
+      body.stop(now + dur + 0.02)
+      body.onended = (): void => { body.disconnect(); lp.disconnect(); bg.disconnect() }
+
+      // crack: a very short bright noise transient for the sharp initial punch
+      const crack = ctx.createBufferSource()
+      crack.buffer = noiseBuf
+      const hp = ctx.createBiquadFilter()
+      hp.type = 'highpass'
+      hp.frequency.value = 1200
+      const cg = ctx.createGain()
+      cg.gain.setValueAtTime(0.95, now)
+      cg.gain.exponentialRampToValueAtTime(0.0001, now + 0.05)
+      crack.connect(hp); hp.connect(cg); cg.connect(out)
+      crack.start(now)
+      crack.stop(now + 0.08)
+      crack.onended = (): void => { crack.disconnect(); hp.disconnect(); cg.disconnect() }
+
+      // sub boom: the chest-thump low end, sweeping deep with a slow ~1.6s decay
+      blip(out, now, 'sine', 90, 22, 1.6, 1.2)
+    },
+  }
+
+  // --- SFX: one persistent gain per sound; file cues decode once, synth cues
+  // generate on demand. play() allocates only a throwaway source per trigger,
+  // which the graph releases when it finishes - nothing accumulates over a run.
   const buffers = new Map<SfxName, AudioBuffer>()
   const sfxGains = new Map<SfxName, GainNode>()
-  for (const [name, def] of Object.entries(AUDIO.SFX) as [SfxName, { src: string; volume: number }][]) {
+  const synthByName = new Map<SfxName, Synth>()
+  for (const [name, def] of Object.entries(AUDIO.SFX) as [SfxName, { src?: string; synth?: string; volume: number }][]) {
     const gain = ctx.createGain()
     gain.gain.value = def.volume
     gain.connect(sfxBus)
     sfxGains.set(name, gain)
+    if (def.synth && SYNTHS[def.synth]) {
+      synthByName.set(name, SYNTHS[def.synth]!)
+      continue // generated procedurally - nothing to fetch
+    }
+    if (!def.src) continue
     fetch(def.src)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -123,7 +202,11 @@ export function createAudio(): Audio {
   for (const [name, src] of Object.entries(AUDIO.MUSIC) as [MusicName, string][]) {
     const el = new window.Audio(src)
     el.loop = true
-    el.preload = 'auto'
+    // 'metadata' (not 'auto'): defer the full multi-MB fetch until el.play() runs
+    // on the first unlock gesture, instead of pulling it during page load. Music
+    // cannot sound before unlock anyway (autoplay policy), so this only moves the
+    // download off the startup critical path.
+    el.preload = 'metadata'
     ctx.createMediaElementSource(el).connect(musicBus)
     musicEls.set(name, el)
   }
@@ -158,12 +241,19 @@ export function createAudio(): Audio {
 
     play(name: SfxName): void {
       if (muted) return
+      const gain = sfxGains.get(name)
+      if (!gain) return
       const buf = buffers.get(name)
-      if (!buf) return // not yet loaded, missing, or failed to decode
-      const src = ctx.createBufferSource()
-      src.buffer = buf
-      src.connect(sfxGains.get(name)!) // gain created alongside the buffer above
-      src.start()
+      if (buf) {
+        const src = ctx.createBufferSource()
+        src.buffer = buf
+        src.connect(gain)
+        src.start()
+        return
+      }
+      // no decoded buffer: a synth cue (or a file still loading / failed)
+      const synth = synthByName.get(name)
+      if (synth) synth(gain, ctx.currentTime)
     },
 
     playMusic(name: MusicName): void {

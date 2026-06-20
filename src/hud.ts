@@ -110,28 +110,57 @@ export function createHud(): Hud {
     elLives.innerHTML = 'SHIPS ' + glyphs
   }
 
+  // hud.update() runs every render frame. The DOM only changes a few times a
+  // second (a score tick, an energy step, a state flip), so each field caches its
+  // last-written value and writes (and re-formats) only on a real change. This
+  // skips the per-frame textContent/style/classList churn (forced style recalc)
+  // and the string allocations that went with it.
+  let lastScore = -1
+  let lastDist = -1
+  let lastBest = -1
+  let lastSpd = -1
+  let lastMode = ''
+  let lastEnergyTenths = -1
+  let lastColor = ''
+  let lastMuted = false
+  let lastTitle = false
+  let lastOver = false
+  let lastOverTitle = ''
+  let lastOverScore = -1
+  let lastOverBest = -1
+
   return {
     update(s: HudState): void {
-      elScore.textContent = 'SCORE ' + pad(s.score, 7)
-      elDist.textContent = 'DIST ' + pad(s.distance, 4)
-      elBest.textContent = 'BEST ' + pad(s.best, 7)
-      elSpd.textContent = 'SPD ' + pad(s.speed, 2)
-      elGrav.textContent = 'MODE ' + s.flightMode.toUpperCase()
+      const score = Math.max(0, Math.floor(s.score))
+      if (score !== lastScore) { elScore.textContent = 'SCORE ' + pad(score, 7); lastScore = score }
+      const dist = Math.max(0, Math.floor(s.distance))
+      if (dist !== lastDist) { elDist.textContent = 'DIST ' + pad(dist, 4); lastDist = dist }
+      const best = Math.max(0, Math.floor(s.best))
+      if (best !== lastBest) { elBest.textContent = 'BEST ' + pad(best, 7); lastBest = best }
+      const spd = Math.max(0, Math.floor(s.speed))
+      if (spd !== lastSpd) { elSpd.textContent = 'SPD ' + pad(spd, 2); lastSpd = spd }
+      if (s.flightMode !== lastMode) { elGrav.textContent = 'MODE ' + s.flightMode.toUpperCase(); lastMode = s.flightMode }
       renderLives(s.lives)
 
       const e = Math.max(0, Math.min(1, s.energy01))
-      elEnergy.style.width = (e * 100).toFixed(1) + '%'
+      const tenths = Math.round(e * 1000) // 0..1000 -> width to 0.1%
+      if (tenths !== lastEnergyTenths) { elEnergy.style.width = (tenths / 10).toFixed(1) + '%'; lastEnergyTenths = tenths }
       const color = e <= ENERGY.CRITICAL ? '#ff5a5a' : e <= ENERGY.LOW ? '#ffd24d' : '#5dff9b'
-      elEnergy.style.background = color
-      elEnergy.style.color = color // drives the box-shadow glow
+      if (color !== lastColor) {
+        elEnergy.style.background = color
+        elEnergy.style.color = color // drives the box-shadow glow
+        lastColor = color
+      }
 
-      elMute.classList.toggle('show', s.muted)
-      elTitle.classList.toggle('show', !s.started && !s.over)
-      elOver.classList.toggle('show', s.over)
+      if (s.muted !== lastMuted) { elMute.classList.toggle('show', s.muted); lastMuted = s.muted }
+      const titleShow = !s.started && !s.over
+      if (titleShow !== lastTitle) { elTitle.classList.toggle('show', titleShow); lastTitle = titleShow }
+      if (s.over !== lastOver) { elOver.classList.toggle('show', s.over); lastOver = s.over }
       if (s.over) {
-        elOverTitle.textContent = s.lives <= 0 ? 'SHIP DESTROYED' : 'ENERGY DEPLETED'
-        elOverScore.textContent = 'SCORE ' + pad(s.score, 7)
-        elOverBest.textContent = 'BEST ' + pad(s.best, 7)
+        const title = s.lives <= 0 ? 'SHIP DESTROYED' : 'ENERGY DEPLETED'
+        if (title !== lastOverTitle) { elOverTitle.textContent = title; lastOverTitle = title }
+        if (score !== lastOverScore) { elOverScore.textContent = 'SCORE ' + pad(score, 7); lastOverScore = score }
+        if (best !== lastOverBest) { elOverBest.textContent = 'BEST ' + pad(best, 7); lastOverBest = best }
       }
     },
   }

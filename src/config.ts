@@ -7,7 +7,11 @@
 // --- physics: the damped, driven pendulum (the heart of the game) -----------
 // theta = angle around the tube cross-section, 0 = bottom. Unbounded (can loop).
 export const PHYSICS = {
-  HZ: 240,            // fixed physics substeps per second
+  HZ: 120,            // fixed physics substeps per second. 120 keeps the swing
+                      // smooth and bolt hits tunnel-free (see GUN.HIT_Z), while
+                      // halving per-frame substeps + the slow-frame spiral on
+                      // weaker GPUs vs the old 240 (one missed frame -> 2 extra
+                      // substeps here, not 4).
   GRAVITY_K: 11.0,    // restoring strength: angAccel includes -K*sin(theta).
                       // higher = snappier swing + harder to loop over the top.
                       // (loop needs omega_bottom > ~2*sqrt(K) = ~6.6 here)
@@ -33,7 +37,7 @@ export const PHYSICS = {
 // blends smoothly through the tiers as the craft eases between sections.
 export type FlightMode = 'slow' | 'normal' | 'fast' | 'sections'
 export const FLIGHT = {
-  MODE: 'normal' as FlightMode, // startup mode
+  MODE: 'sections' as FlightMode, // startup mode (cycle tiers along the tube)
   SECTION_SECONDS: 10,          // 'sections' mode: seconds per section (equal in TIME; distance scales with the tier's speed)
   SLOW_RING_RGB: [0.72, 0.54, 0.08] as [number, number, number], // yellow tube (slow / full gravity)
   SLOW_LONG_RGB: [0.42, 0.31, 0.05] as [number, number, number],
@@ -270,7 +274,8 @@ export const GUN = {
   // full ENEMY.HP). Rewards precision without making wing-clips free.
   HIT_ANGLE_KILL: 0.14, // inner cone (~8 deg): one shot here kills outright
   HIT_ANGLE: 0.24,    // outer cone (~14 deg): a hit here deals 1 damage
-  HIT_Z: 3.0,         // along-tube window (units) for a player bolt hit (no tunnelling at 240Hz)
+  HIT_Z: 3.0,         // along-tube window (units) for a player bolt hit. Tunnel-free
+                      // at 120Hz: a bolt moves BOLT_SPEED/HZ ~= 1.54u per substep < 3.0.
   BULLET_HIT_ANGLE: 0.30, // player dodge window vs an enemy bolt (wider: the hit is lethal)
   BULLET_HIT_Z: 2.5,  // along-tube window where an enemy bolt registers at the ship plane
 }
@@ -358,6 +363,7 @@ export const INPUT = {
   fire: ['Space'],                    // forward gun (Shift still boosts)
   mute: ['KeyM'],                     // toggle all audio (handled in main.ts)
   modeCycle: ['KeyG'],                // cycle flight mode for testing (handled in main.ts)
+  perf: ['KeyP'],                     // toggle the FPS / frame-time overlay (handled in main.ts)
 }
 
 // --- audio: mp3 music + sfx (Web Audio) -------------------------------------
@@ -367,6 +373,10 @@ export const INPUT = {
 // decoded once into AudioBuffers (low latency, freely overlapping); music is a
 // looping <audio> element streamed through the context. A missing/undecodable
 // file is logged and skipped - it never breaks the run. Volumes are 0..1.
+//
+// An SFX entry is either FILE-backed (`src`: fetched + decoded once) or SYNTH
+// (`synth`: generated procedurally in audio.ts, no asset). Synth cues keep the
+// offline build self-contained and fit the vector look - see audio.ts SYNTHS.
 export const AUDIO = {
   MASTER_VOLUME: 0.9,
   MUSIC_VOLUME: 0.5,
@@ -382,14 +392,15 @@ export const AUDIO = {
   // tier steps up (target speed increases). Plays SECONDS then fades out, and
   // ducks the music to DUCK of its volume meanwhile so the sting cuts through.
   ACCEL: { SRC: 'audio/accelerate.mp3', VOLUME: 1.6, SECONDS: 3, FADE: 0.4, DUCK: 0.4 },
-  // key = event name used in main.ts: audio.play('shoot') etc.
+  // key = event name used in main.ts: audio.play('shoot') etc. `src` = file,
+  // `synth` = procedural generator id (audio.ts SYNTHS). Same name space either way.
   SFX: {
-    shoot:     { src: 'audio/shoot.mp3',      volume: 0.55 },
-    orb:       { src: 'audio/orb.mp3',        volume: 0.8 },
-    gem:       { src: 'audio/gem.mp3',        volume: 0.8 },
-    enemyFire: { src: 'audio/enemy-fire.mp3', volume: 0.45 },
-    kill:      { src: 'audio/kill.mp3',       volume: 0.85 },
-    hit:       { src: 'audio/hit.mp3',        volume: 0.95 },
-    gameover:  { src: 'audio/gameover.mp3',   volume: 0.9 },
+    shoot:     { src: 'audio/shoot.mp3', volume: 0.55 },
+    orb:       { src: 'audio/orb.mp3',   volume: 0.8 },
+    gem:       { synth: 'gem',       volume: 0.8 },  // bright two-note chime
+    enemyFire: { synth: 'enemyFire', volume: 0.4 },  // short saw "pew"
+    kill:      { synth: 'kill',      volume: 0.8 },  // descending square zap
+    hit:       { synth: 'hit',       volume: 1.8 },  // explosion (big + loud - a life lost should land like a bomb)
+    gameover:  { synth: 'gameover',  volume: 0.85 }, // slow descending tone
   },
 }

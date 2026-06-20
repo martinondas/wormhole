@@ -112,6 +112,7 @@ export function createEnemy(): Enemy {
   object.add(inner)
 
   let t = 0
+  let lastCharge = -1 // skip the lerp + setRGB when the charge level is unchanged
   return {
     object,
     update(dt: number): void {
@@ -127,6 +128,11 @@ export function createEnemy(): Enemy {
       lineMat.opacity = o
     },
     setCharge(t01: number): void {
+      // Called every substep for every active enemy, but the level only changes
+      // while charging or hit-flashing - an idle raider asks for the same value
+      // each step. Skip the lerp + setRGB unless it actually changed.
+      if (t01 === lastCharge) return
+      lastCharge = t01
       // lerp the edge color from idle magenta toward white-hot as the shot charges
       lineMat.color.setRGB(
         lerp(ENEMY.EDGE_RGB[0], ENEMY.CHARGE_RGB[0], t01),

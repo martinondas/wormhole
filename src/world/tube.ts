@@ -101,6 +101,10 @@ export function createTube(): Tube {
   const ringRGB = [FLIGHT.SLOW_RING_RGB, RENDER.RING_RGB, FLIGHT.FAST_RING_RGB]
   const longRGB = [FLIGHT.SLOW_LONG_RGB, RENDER.LONG_RGB, FLIGHT.FAST_LONG_RGB]
   const ringVertsPerRing = seg * 2 // two vertices per ring segment
+  // tier index per visible ring slot, indexed by (i + behind). Filled once per
+  // band rebuild so the ring + long color loops read an array instead of each
+  // calling tierIndexAt() (~1000 calls/rebuild -> behind+ahead+1). Reused, no alloc.
+  const tierByOffset = new Int8Array(behind + ahead + 1)
   let lastN = NaN // ring band of the last color rebuild (cache key with lastMode)
   let lastMode = ''
 
@@ -119,10 +123,13 @@ export function createTube(): Tube {
       lastN = n
       lastMode = mode
 
+      // tier index for each visible ring slot, once (shared by both loops below)
+      for (let i = -behind; i <= ahead; i++) tierByOffset[i + behind] = tierIndexAt((i + n) * spacing)
+
       // color each ring by its tier at that world distance
       let r = 0
       for (let i = -behind; i <= ahead; i++) {
-        const c = ringRGB[tierIndexAt((i + n) * spacing)] ?? ringRGB[1]!
+        const c = ringRGB[tierByOffset[i + behind]!] ?? ringRGB[1]!
         for (let v = 0; v < ringVertsPerRing; v++) {
           ringColors[r++] = c[0]
           ringColors[r++] = c[1]
@@ -135,7 +142,7 @@ export function createTube(): Tube {
       let g = 0
       for (let l = 0; l < L; l++) {
         for (let i = -behind; i < ahead; i++) {
-          const c = longRGB[tierIndexAt((i + n) * spacing)] ?? longRGB[1]!
+          const c = longRGB[tierByOffset[i + behind]!] ?? longRGB[1]!
           longColors[g++] = c[0]
           longColors[g++] = c[1]
           longColors[g++] = c[2]
