@@ -1,7 +1,6 @@
 import {
   IcosahedronGeometry,
-  ConeGeometry,
-  SphereGeometry,
+  CylinderGeometry,
   EdgesGeometry,
   BufferGeometry,
   Mesh,
@@ -50,25 +49,22 @@ function buildMine(): BufferGeometry {
 
   const up = new Vector3(0, 1, 0)
   const q = new Quaternion()
+  const base = cr * 0.85 // horn base sits slightly inside the surface for a solid join
   for (const dir of spikeDirs()) {
-    // pyramidal (4-sided) cone spike, apex pointing outward
-    const cone = new ConeGeometry(HAZARD.SPIKE_BASE_R, HAZARD.SPIKE_LEN, 4)
-    cone.translate(0, HAZARD.SPIKE_LEN / 2, 0) // base at origin, tip up (+Y)
+    // straight cylindrical Hertz horn (hex prism so the edges read as a rod), wider
+    // at the base and slightly tapered to a flat tip - a real maritime mine horn,
+    // not a pointed cone or a bulbed spike.
+    const horn = new CylinderGeometry(HAZARD.SPIKE_TIP_R, HAZARD.SPIKE_BASE_R, HAZARD.SPIKE_LEN, 6)
+    horn.translate(0, HAZARD.SPIKE_LEN / 2, 0) // base (wide end) at origin, tip up (+Y)
     q.setFromUnitVectors(up, dir)
-    cone.applyQuaternion(q)
-    cone.translate(dir.x * cr * 0.85, dir.y * cr * 0.85, dir.z * cr * 0.85)
-    parts.push(cone)
-
-    // bulb tip on each Hertz horn (the detonator cap)
-    const knob = new SphereGeometry(HAZARD.KNOB_RADIUS, 6, 4)
-    const tip = cr * 0.85 + HAZARD.SPIKE_LEN
-    knob.translate(dir.x * tip, dir.y * tip, dir.z * tip)
-    parts.push(knob)
+    horn.applyQuaternion(q)
+    horn.translate(dir.x * base, dir.y * base, dir.z * base)
+    parts.push(horn)
   }
 
-  // Normalize before merging: IcosahedronGeometry is non-indexed but Cone/
-  // Sphere are indexed, and mergeGeometries requires an index on ALL parts or
-  // NONE. Drop every index so they are uniformly non-indexed.
+  // Normalize before merging: IcosahedronGeometry is non-indexed but Cylinder is
+  // indexed, and mergeGeometries requires an index on ALL parts or NONE. Drop
+  // every index so they are uniformly non-indexed.
   const flat = parts.map((p) => {
     const n = p.index ? p.toNonIndexed() : p
     if (n !== p) p.dispose()

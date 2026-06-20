@@ -17,7 +17,9 @@ export const PHYSICS = {
                       // (loop needs omega_bottom > ~2*sqrt(K) = ~6.6 here)
   DAMPING_C: 1.0,     // damping on omega: overshoots then settles. Higher = the
                       // craft stabilizes at the bottom sooner (fewer left-rights)
-  STEER_TORQUE: 15.0, // angular accel added by full steering input (rad/s^2)
+  STEER_TORQUE: 19.5, // angular accel added by full steering input (rad/s^2). Higher =
+                      // quicker direction change / less sluggish, especially at high
+                      // speed where gravity is near zero and torque is the only agility.
   STEER_OMEGA_MAX: 7.0,// soft cap: steering torque fades to zero as |omega| nears
                       // this, so holding a steer does not spin you up forever.
                       // Gravity can still exceed it on a dive (momentum survives).
@@ -238,19 +240,20 @@ export const TREASURE = {
   SCORE: 250,          // points per gem -> game.addScore (multiplied by the level multiplier at award time)
 }
 
-// --- hazard (red naval contact mine: a big ball with short Hertz horns; AVOID,
-// a hit costs a life). The ONLY red object on the tube. Edge-lit solid like the
-// ship, but NORMAL blend like the orb (additive HDR red would bloom toward
-// white/pink). The dominant central ball + stubby horns read as a sea mine, not
-// a spiky virus: CORE_RADIUS is large vs a short SPIKE_LEN.
+// --- hazard (red naval contact mine: a big ball with cylindrical Hertz horns;
+// AVOID, a hit costs a life). The ONLY red object on the tube. Edge-lit solid like
+// the ship, but NORMAL blend like the orb (additive HDR red would bloom toward
+// white/pink). The dominant central ball + straight rod horns read as a real sea
+// mine, not a spiky virus: the horns are uniform cylinders (slight taper), not
+// pointed cones, and have no bulb tips.
 export const HAZARD = {
   CORE_RADIUS: 0.72,   // faceted core ball radius (world units) - dominant body
   SPIKE_COUNT: 12,     // documented; geometry uses the 12 icosa vertex dirs
-  SPIKE_LEN: 0.34,     // horn length out from the core (short + stubby, not spiky)
-  SPIKE_BASE_R: 0.16,  // horn base radius (stubby cones, not slim needles)
-  KNOB_RADIUS: 0.14,   // bulb tip on each Hertz horn (the detonator cap)
+  SPIKE_LEN: 0.42,     // horn length out from the core (a distinct rod, not a stub)
+  SPIKE_BASE_R: 0.12,  // horn radius at the core (rod thickness)
+  SPIKE_TIP_R: 0.095,  // horn radius at the tip (slightly < base = subtle taper, flat end)
   SCALE: 1.6,          // overall size multiplier on the built mine (bigger = scarier)
-  EDGE_THRESHOLD: 18,  // EdgesGeometry threshold (deg): keeps spikes + facets
+  EDGE_THRESHOLD: 18,  // EdgesGeometry threshold (deg): keeps the rod ridges + facets
   LINE_WIDTH: 2.2,     // edge line width in px
   EDGE_RGB: [1.0, 0.06, 0.04] as [number, number, number], // deep, dim red (blooms gently; big silhouette keeps it readable)
   FILL_RGB: [0.05, 0.005, 0.005] as [number, number, number], // near-black, faint red bias
@@ -408,8 +411,12 @@ export const INPUT = {
   brake: ['ArrowDown', 'KeyS'],
   boost: ['ShiftLeft', 'ShiftRight'], // Space used to boost; it now FIRES (below)
   fire: ['Space'],                    // forward gun (Shift still boosts)
+  start: ['Space', 'Enter'],          // title screen only: begin the first run
+  restart: ['Enter'],                 // game-over restart + resume-from-pause. NOT Space:
+                                      // a player still tapping the fire key after losing
+                                      // the last life would otherwise restart by accident.
   mute: ['KeyM'],                     // toggle MUSIC on/off (SFX keep playing; handled in main.ts)
-  pause: ['Escape'],                  // pause a live run back to the intro/menu screen (handled in main.ts)
+  pause: ['Escape'],                  // pause a live run, or resume a paused one (handled in main.ts)
   modeCycle: ['KeyG'],                // cycle flight mode for testing (handled in main.ts)
   perf: ['KeyP'],                     // toggle the FPS / frame-time overlay (handled in main.ts)
 }

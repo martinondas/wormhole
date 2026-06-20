@@ -47,8 +47,13 @@ The craft's position is an angle `theta` around the circular cross-section of th
 ### Tunable constants (live in `src/config.ts`, grouped; values are starting points, tune freely)
 - physics:  GRAVITY_K, DAMPING_C, STEER_TORQUE, STEER_OMEGA_MAX (soft spin cap), STEER_ATTACK,
             STEER_RELEASE, PHYSICS_HZ
-- speed:    SPEED_CRUISE, SPEED_MIN (floor > 0, never halt), SPEED_MAX (boost cap),
-            THROTTLE_ACCEL, BOOST_ACCEL, EASE_DECEL
+- speed:    SLOW / NORMAL / FAST (the three tier speeds, level-1 base; raised per level
+            by LEVELS.SPEED_INCREMENT), EASE (accel toward the active tier). Speed is set
+            by the flight tier/section, not a player throttle; FLIGHT.{MODE, SECTION_SECONDS}
+            + tube tier colors live alongside.
+- levels:   LEVELS.{SPEED_INCREMENT, SCORE_MULT_STEP, GRAVITY_MODE ('tier' default |
+            'absolute'), MAX_ENEMIES_CAP, BEYOND_ENEMY_LEVELS, TABLE[] (per-level enemyMax
+            + orb/bombSpacingMult - speed-normalized per-second rate multipliers)}
 - tube:     TUBE_RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES
 - camera:   CAM_BACK, CAM_RISE, CAM_FOV, CAM_ROLL_FOLLOW, CAM_ROLL_LAG
 - render:   RING_RGB, LONG_RGB, SHIP_RGB, FOG_NEAR, FOG_FAR, RENDER_SCALE, MSAA_SAMPLES,
@@ -58,8 +63,9 @@ The craft's position is an angle `theta` around the circular cross-section of th
             SPAWN_ANGLE = per-kind angle-from-bottom bias), CAPTURE_Z, CAPTURE_ANGLE, POP_TIME/SCALE
 - treasure: gem geometry (RADIUS, FACETS, TABLE/CROWN/PAVILION_RATIO, EDGE_THRESHOLD), EDGE/FILL
             colors, SPIN/BOB; field COUNT/SPAWN_*/CAPTURE_*/POP_*; SCORE (points per gem)
-- hazard:   mine geometry (CORE_RADIUS, SPIKE_*, KNOB_RADIUS, EDGE_THRESHOLD), EDGE/FILL colors,
-            SPIN/PULSE; field COUNT/SPAWN_* (incl. SPAWN_ANGLE), CAPTURE_*/POP_*
+- hazard:   naval-mine geometry (CORE_RADIUS big ball, cylindrical horns via
+            SPIKE_LEN/BASE_R/TIP_R, EDGE_THRESHOLD), EDGE/FILL colors, SPIN/PULSE; field
+            COUNT/SPAWN_* (incl. SPAWN_ANGLE), CAPTURE_*/POP_*; SLOW_DENSITY (slow-section bombs)
 - lives:    LIVES.{START, INVULN_TIME}
 - energy:   ENERGY.{MAX,START,DRAIN,PER_ORB,LOW,CRITICAL}; SCORE.DIST_RATE
 - gun:      COST (energy/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE/Z (player->enemy),
@@ -111,13 +117,16 @@ and on-aesthetic.
       config.ts            ALL tunable constants, grouped (see above)
       loop.ts              fixed-timestep accumulator; update vs render split
       input.ts             keyboard -> steer / throttle / boost (Shift) / fire (Space)
-      craft.ts             player state: pendulum + speed + smoothed steer
+      craft.ts             player state: pendulum + speed + smoothed steer (level-aware speed clamp)
+      flight.ts            distance-based level + section model: per-level tier speeds, score
+                           multiplier, tier-relative gravity, speed cap, tier/level lookups
       gun.ts               forward-gun trigger: cooldown + energy spend; returns fire intent
       util/math.ts         clamp / approach / lerp / angleDiff (shared signed angle delta)
       physics/pendulum.ts  theta integrator (damped driven pendulum)
       world/tube.ts        build + scroll the wireframe tube mesh
       world/ship.ts        procedural 3D spacecraft hull (edge-lit); place on wall from theta
-      world/field.ts       generic wall-object pool (orbs/gems/mines): spawn/scroll/recycle + angle hit test
+      world/field.ts       generic wall-object pool (orbs/gems/mines): spawn/scroll/recycle + angle hit
+                           test; optional spacingScaleAt hook for per-section / per-level density
       world/wallObject.ts  the {object,update,setResolution,setOpacity} contract for field objects
       world/pickup.ts      blue health orb / treasure.ts gold gem / hazard.ts red mine (edge-lit WallObjects)
       world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
@@ -132,6 +141,8 @@ and on-aesthetic.
     test/                  vitest (pendulum math) - added when useful
     scripts/shoot.ts       Playwright screenshot (SET_THETA/HOLD/POSE/COMBAT; logs state)
     scripts/combat-sim.ts  headless behavior sim of the combat loop (npm run sim; bundled via esbuild)
+    scripts/levels-sim.ts  headless sim of the level math: boundaries, speeds, multiplier,
+                           gravity modes, density normalization (npm run sim:levels)
 
 ## Dev commands
 - Install:    `npm install`
@@ -177,17 +188,35 @@ and on-aesthetic.
           and fire; dodging = swing theta off the line - both fall out of the pendulum.
           Raiders fly in, hold an engagement band, strafe (hard-capped so always
           hittable), charge-telegraph then fire back; LETHAL (bolt or ram costs a life
-          via the existing hitHazard/i-frames). Kill = +500 score + energy refund.
-          BUILT + verified (npm run sim: 13 integrated checks; build + screenshots).
+          via the existing hitHazard/i-frames). Kill = score + energy refund (values
+          calibrated in M4). BUILT + verified (npm run sim; build + screenshots).
+- [x] M4  Difficulty levels. One level = one slow->normal->fast cycle (~30s, derived
+          from the tier count x FLIGHT.SECTION_SECONDS, not hard-coded). Per level the
+          tier speeds rise by LEVELS.SPEED_INCREMENT, a score multiplier 1+(level-1)*0.5
+          scales gems + kills (NOT distance), and LEVELS.TABLE sets max enemies +
+          orb/bomb frequency (speed-normalized via `flight.speedRatioAt` so the
+          multipliers mean a per-second rate; a procedural ramp continues past the
+          table). Level tracking is distance-based (`flight.ts` locate() over cumulative
+          cycle lengths). Gravity is tier-relative (LEVELS.GRAVITY_MODE 'tier' default:
+          full at the level's own slow speed, zero at its own fast speed; 'absolute'
+          switch reverts to the global span). Craft speed clamp follows the level's
+          fast-tier speed. Scoring: SCORE.DIST_RATE 0.7, gem 250, kill 750 (level-1
+          target: all gems ~= 3x distance, one kill = 3x a gem). HUD shows level +
+          multiplier. BUILT + verified (npm run sim:levels: 40 checks; combat sim 14;
+          build; 4-lens adversarial review).
 
 ### Next up (start here)
-1. Difficulty ramp with distance (faster, denser fields, tighter gaps): scale each
-   field's SPAWN_SPACING down and raise ENEMY.COUNT / shrink ENEMY.FIRE_COOLDOWN as
-   `craft.distance` grows. Gun COST/SCORE/REFUND stay constant.
-2. Combat polish deferred from M3: a shard-burst death (currently the expand+fade pop),
+1. Enemy persistence (change a little at a time): raiders currently ENGAGE then
+   DEPART/recycle (they "give up"). Goal: on engage-timeout, hold and slowly close the
+   band instead of departing, with fire rate rising as they get nearer. Raw count per
+   level is already a LEVELS.TABLE lever; persistence is its own increment.
+2. High-level combat scaling: ENEMY.BULLET_SPEED / GUN.BOLT_SPEED are not scaled per
+   level, so at deep levels craft speed approaches enemy bolt speed. Scale bolt speeds
+   (or lead) with level once high levels are actually reached in playtest.
+3. Combat polish deferred from M3: a shard-burst death (currently the expand+fade pop),
    a muzzle flash on fire, and a richer head-on raider silhouette. Playtest the near-edge
    enemy-bolt dodge window (ENGAGE_Z_NEAR) and only widen it if it reads as unfair.
-3. Watch: enemies + the three fields are independent streams, so objects can overlap at
+4. Watch: enemies + the three fields are independent streams, so objects can overlap at
    nearly the same (z, theta). Mitigated by staggered spawns + color/shape dominance; add
    cross-stream de-collision ONLY if playtesting shows it is unfair - do not build it preemptively.
 
@@ -197,7 +226,7 @@ and on-aesthetic.
 |------------|--------------------------|-------------------|-------------------------------------|--------|
 | Energy orb | wireframe sphere         | blue              | ride into - refills energy          | built  |
 | Treasure   | brilliant-cut gem        | gold              | ride into - score points            | built  |
-| Hazard     | spiky mine / coronavirus | red               | avoid - hitting costs a life        | built  |
+| Hazard     | naval contact mine       | red               | avoid - hitting costs a life        | built  |
 | Enemy      | forward-swept dart       | magenta           | shoot (forward gun); shoots back, lethal | built  |
 
 Orbs / treasures / hazards are all "ride into / avoid" wall objects sharing the
@@ -218,7 +247,8 @@ their ship-relative z is advanced by the bolt's own speed.
       (localStorage).
 - [x] LIVES + invulnerability i-frames (ship flicker); game-over on energy OR lives.
 - [x] Forward gun + projectiles + magenta raiders (shoot, get shot at; lethal) - see M3.
-- [ ] Difficulty ramp with distance
+- [x] Difficulty ramp with distance (levels: per-level speed, score multiplier, enemy
+      cap, orb/bomb frequency) - see M4.
 - [ ] CRT scanline toggle (bloom already on)
 - [ ] Web Audio synthesis (bleeps, engine hum rising with speed)
 - [ ] High-score persistence (localStorage)

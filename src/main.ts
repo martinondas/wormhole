@@ -247,22 +247,32 @@ window.addEventListener('keydown', (e) => {
     }
     return
   }
-  const confirm = e.code === 'Space' || e.code === 'Enter'
   if (!game.started) {
-    // title screen: Space starts the run; any other key just wakes menu audio.
-    if (confirm) {
+    // title screen: Space or Enter starts the run; any other key just wakes menu audio.
+    if (INPUT.start.includes(e.code)) {
       e.preventDefault()
       beginRun()
     } else {
       audio.unlock()
     }
-  } else if (game.over && confirm) {
-    e.preventDefault()
-    restart()
-  } else if (paused && confirm) {
-    e.preventDefault()
-    paused = false
-    input.releaseFireKeys() // the resuming Space must not fire a bolt
+    return
+  }
+  if (game.over) {
+    // game-over: restart on Enter only (NOT Space) so a held/tapped fire key cannot
+    // restart the run by accident the instant the last life is lost.
+    if (INPUT.restart.includes(e.code)) {
+      e.preventDefault()
+      restart()
+    }
+    return
+  }
+  if (paused) {
+    // resume on Enter (Esc above also toggles a paused run back to running); not Space.
+    if (INPUT.restart.includes(e.code)) {
+      e.preventDefault()
+      paused = false
+      input.releaseFireKeys()
+    }
   }
 })
 

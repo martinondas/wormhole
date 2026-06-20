@@ -63,6 +63,18 @@ const CSS = `
 #hud .over .keys .k { text-align:right; color:#9affc0; letter-spacing:2px; }
 #hud .over .keys .a { text-align:left; opacity:0.65; letter-spacing:2px; }
 @keyframes wh-blink { 50% { opacity:0.15; } }
+#hud .levelup { position:absolute; top:30%; left:0; right:0; text-align:center;
+  font-size:64px; letter-spacing:10px; font-weight:bold; color:#9affc0;
+  text-shadow:0 0 18px rgba(80,255,150,0.85), 0 0 44px rgba(80,255,150,0.5);
+  opacity:0; will-change:opacity,transform; }
+#hud .levelup.show { animation:wh-levelup 2.2s ease-out forwards; }
+@keyframes wh-levelup {
+  0%   { opacity:0; transform:scale(0.7); }
+  14%  { opacity:1; transform:scale(1.06); }
+  26%  { transform:scale(1.0); }
+  74%  { opacity:1; }
+  100% { opacity:0; transform:scale(1.0); }
+}
 `
 
 function pad(n: number, width: number): string {
@@ -83,11 +95,12 @@ export function createHud(): Hud {
     <div class="meter"><div class="lbl">ENERGY</div><div class="track"><div class="fill" id="wh-energy"></div></div></div>
     <div class="spd" id="wh-spd">SPD 00</div>
     <div class="mute" id="wh-mute">&#9836; MUSIC OFF</div>
+    <div class="levelup" id="wh-levelup">LEVEL 2</div>
     <div class="over" id="wh-over">
       <h1 id="wh-over-title">ENERGY DEPLETED</h1>
       <div class="big" id="wh-over-score">SCORE 0000000</div>
       <div id="wh-over-best" class="dim">BEST 0000000</div>
-      <div class="blink">PRESS SPACE TO RESTART</div>
+      <div class="blink">PRESS ENTER TO RESTART</div>
     </div>
     <div class="over" id="wh-title">
       <h1>WORMHOLE</h1>
@@ -121,6 +134,7 @@ export function createHud(): Hud {
   const elOverTitle = $('wh-over-title')
   const elOverScore = $('wh-over-score')
   const elOverBest = $('wh-over-best')
+  const elLevelUp = $('wh-levelup')
 
   // ship glyphs: bright for remaining, dim for spent (shows the max at a glance)
   let lastLives = -1
@@ -141,6 +155,7 @@ export function createHud(): Hud {
   // and the string allocations that went with it.
   let lastScore = -1
   let lastLevelKey = ''
+  let lastBannerLevel = 1 // last level a "LEVEL N" banner fired for (1 = no banner for the start level)
   let lastDist = -1
   let lastBest = -1
   let lastSpd = -1
@@ -164,6 +179,17 @@ export function createHud(): Hud {
         elLevel.textContent = 'LEVEL ' + Math.max(1, Math.floor(s.level)) + ' ×' + s.scoreMultiplier.toFixed(1)
         lastLevelKey = levelKey
       }
+      // Big "LEVEL N" banner for ~2s when a new level is reached during a live run
+      // (not level 1, the start). Fires once per level-up; the reflow restarts the
+      // CSS animation, and lastBannerLevel tracks the level so a restart re-arms it.
+      if (s.level > lastBannerLevel && s.level >= 2 && s.started && !s.over) {
+        elLevelUp.textContent = 'LEVEL ' + Math.floor(s.level)
+        elLevelUp.classList.remove('show')
+        void elLevelUp.offsetWidth // force reflow so the animation replays each level-up
+        elLevelUp.classList.add('show')
+      }
+      lastBannerLevel = s.level
+      if (s.over) elLevelUp.classList.remove('show') // don't linger over the game-over panel
       const dist = Math.max(0, Math.floor(s.distance))
       if (dist !== lastDist) { elDist.textContent = 'DIST ' + pad(dist, 4); lastDist = dist }
       const best = Math.max(0, Math.floor(s.best))
@@ -186,7 +212,7 @@ export function createHud(): Hud {
       if (s.musicMuted !== lastMusicMuted) { elMute.classList.toggle('show', s.musicMuted); lastMusicMuted = s.musicMuted }
       const titleShow = (!s.started && !s.over) || s.paused
       if (titleShow !== lastTitle) { elTitle.classList.toggle('show', titleShow); lastTitle = titleShow }
-      const prompt = s.paused ? 'PRESS SPACE TO RESUME' : 'PRESS SPACE TO START'
+      const prompt = s.paused ? 'PRESS ESC TO RESUME' : 'PRESS SPACE TO START'
       if (prompt !== lastPrompt) { elTitlePrompt.textContent = prompt; lastPrompt = prompt }
       if (s.over !== lastOver) { elOver.classList.toggle('show', s.over); lastOver = s.over }
       if (s.over) {
