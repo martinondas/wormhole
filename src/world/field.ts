@@ -27,6 +27,11 @@ export interface FieldConfig {
   popTime: number
   popScale?: number // peak scale of the expand-and-fade pop (default 1.8)
   sampleTheta?: () => number // spawn-angle distribution (default: uniform 0..2pi)
+  // Optional per-section spacing multiplier keyed by world distance: the gap
+  // BEFORE an object becomes spawnSpacing * spacingScaleAt(distance). A value < 1
+  // packs objects denser over that stretch (e.g. more mines in slow sections).
+  // Default: 1 everywhere (uniform spacing).
+  spacingScaleAt?: (worldDistance: number) => number
   onHit: () => boolean
 }
 
@@ -77,9 +82,13 @@ export function createField(cfg: FieldConfig): Field {
   const popScale = cfg.popScale ?? 1.8
   const slots: Slot[] = []
   let consumed = 0
-  let farthest = cfg.spawnStart
+  let farthest = cfg.spawnStart // last placed slot's base distance (pre-jitter)
 
   const sampleTheta = cfg.sampleTheta ?? ((): number => Math.random() * Math.PI * 2)
+  // Per-section spacing scale (default 1): the gap before each object is
+  // spawnSpacing * scaleAt(farthest). Applied identically in the initial layout,
+  // recycle, and reset so density is consistent across the run.
+  const scaleAt = cfg.spacingScaleAt ?? ((): number => 1)
 
   // Place a slot at a distance and re-arm it: clears triggered + state + the
   // pop transform. Both initial spawn and recycle/reset funnel through here, so
@@ -95,18 +104,24 @@ export function createField(cfg: FieldConfig): Field {
     slot.obj.setOpacity(1)
   }
 
+  // Lay every slot out ahead of `base`: the first sits at base+spawnStart, each
+  // next one a scaled gap farther on. `farthest` tracks the running base.
+  function layout(base: number): void {
+    slots.forEach((slot, i) => {
+      farthest = i === 0 ? base + cfg.spawnStart : farthest + cfg.spawnSpacing * scaleAt(farthest)
+      arm(slot, farthest + Math.random() * cfg.spawnJitter)
+    })
+  }
+
   for (let i = 0; i < cfg.count; i++) {
     const obj = cfg.create()
     group.add(obj.object)
-    const slot: Slot = { obj, theta: 0, worldDistance: 0, triggered: false, state: 'idle', popT: 0, popZ: 0 }
-    const wd = cfg.spawnStart + i * cfg.spawnSpacing + Math.random() * cfg.spawnJitter
-    farthest = Math.max(farthest, wd)
-    arm(slot, wd)
-    slots.push(slot)
+    slots.push({ obj, theta: 0, worldDistance: 0, triggered: false, state: 'idle', popT: 0, popZ: 0 })
   }
+  layout(0)
 
   function recycle(slot: Slot): void {
-    farthest += cfg.spawnSpacing
+    farthest += cfg.spawnSpacing * scaleAt(farthest)
     arm(slot, farthest + Math.random() * cfg.spawnJitter)
   }
 
@@ -168,12 +183,7 @@ export function createField(cfg: FieldConfig): Field {
     },
     reset(craftDistance: number): void {
       consumed = 0
-      farthest = craftDistance + cfg.spawnStart
-      slots.forEach((slot, i) => {
-        const wd = craftDistance + cfg.spawnStart + i * cfg.spawnSpacing + Math.random() * cfg.spawnJitter
-        farthest = Math.max(farthest, wd)
-        arm(slot, wd)
-      })
+      layout(craftDistance)
     },
     get consumed(): number {
       return consumed

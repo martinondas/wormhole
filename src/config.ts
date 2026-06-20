@@ -51,10 +51,47 @@ export const FLIGHT = {
 // chosen by the mode/section sets the whole feel. Never halts (SLOW > 0). The
 // craft eases toward the active tier's speed at EASE.
 export const SPEED = {
-  SLOW: 30,   // yellow sections: full gravity, heaviest swing
+  SLOW: 30,   // yellow sections: full gravity, heaviest swing (level 1 base)
   NORMAL: 52, // green sections: low gravity (startup speed; midpoint of slow..fast)
-  FAST: 75,   // blue sections: no gravity, most agile
+  FAST: 75,   // blue sections: no gravity, most agile (level 1 base)
   EASE: 28,   // accel/decel toward the active tier's speed (units/s^2)
+}
+
+// --- levels (difficulty ramp by distance; one level = one slow->normal->fast
+// cycle). A level lasts TIERS x FLIGHT.SECTION_SECONDS in time (3 x 10 = 30s by
+// default - not hard-coded: change SECTION_SECONDS or the tier set and it
+// follows). Each level above 1 shifts every tier speed up by SPEED_INCREMENT and
+// raises the score multiplier. Per-level enemy cap + orb/bomb frequency come from
+// TABLE (level 1 = index 0); beyond the table the last row holds and the enemy
+// cap keeps ramping. Levels only progress in FLIGHT.MODE 'sections' (the game);
+// pinned slow/normal/fast modes (G key) stay at level 1.
+export const LEVELS = {
+  SPEED_INCREMENT: 5,   // u/s added to EVERY tier per level above 1 (L1 fast 75 -> L5 fast 95)
+  SCORE_MULT_STEP: 0.5, // score multiplier = 1 + (level-1) * this (L1 x1.0, L2 x1.5, L3 x2.0 ...)
+                        // applies to gems + kills only; distance stays a flat baseline (see SCORE.DIST_RATE)
+  // Gravity across levels:
+  //   'tier'     - full gravity at the level's OWN slow speed, zero at its own
+  //                fast speed: each section keeps its feel as speeds climb (the
+  //                slow section stays heavy at level 10). The agreed default.
+  //   'absolute' - the original model: full at SPEED.SLOW, zero at SPEED.FAST.
+  //                As levels speed up, every section gets lighter, and once a
+  //                level's OWN slow speed reaches SPEED.FAST (level 9 with
+  //                SLOW=30, INCREMENT=5) gravity is pinned to ZERO for all tiers -
+  //                a free rotor, no pendulum. Flip here if high-level slow sections
+  //                feel too sluggish; accept that deep levels lose the pendulum.
+  GRAVITY_MODE: 'tier' as 'tier' | 'absolute',
+  MAX_ENEMIES_CAP: 6,       // hard ceiling on the enemy pool size (sizes the pool once)
+  BEYOND_ENEMY_LEVELS: 2,   // past the table, enemy cap rises by 1 every this many levels
+  // Per-level tuning. orb/bombSpacingMult are ENCOUNTER-RATE multipliers vs level 1
+  // (speed-normalized in main.ts, so they hold their meaning as the tube speeds up):
+  // >1 = rarer per second, <1 = denser per second. enemyMax = max raiders alive at once.
+  TABLE: [
+    { enemyMax: 2, orbSpacingMult: 1.0, bombSpacingMult: 1.0 },  // L1 (matches current tuning)
+    { enemyMax: 2, orbSpacingMult: 1.05, bombSpacingMult: 0.92 }, // L2
+    { enemyMax: 3, orbSpacingMult: 1.1, bombSpacingMult: 0.85 },  // L3
+    { enemyMax: 3, orbSpacingMult: 1.15, bombSpacingMult: 0.8 },  // L4
+    { enemyMax: 4, orbSpacingMult: 1.2, bombSpacingMult: 0.75 },  // L5
+  ],
 }
 
 // --- tube geometry ----------------------------------------------------------
@@ -155,7 +192,7 @@ export const PICKUP = {
   // visible range filled so they fade in from the far fog rather than popping.
   COUNT: 5,           // orbs alive in the pool at once
   SPAWN_START: 50,    // distance ahead of the first orb
-  SPAWN_SPACING: 94,  // nominal distance between orbs (was 75; ~20% fewer)
+  SPAWN_SPACING: 125, // nominal distance between orbs (was 94; ~25% fewer)
   SPAWN_JITTER: 14,   // random extra distance per orb
   RECYCLE_BEHIND: 22, // recycle once an orb is this far behind the ship
   CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
@@ -198,18 +235,20 @@ export const TREASURE = {
   CAPTURE_ANGLE: 0.40,
   POP_TIME: 0.18,
   POP_SCALE: 1.8,
-  SCORE: 250,          // points per gem -> game.addScore
+  SCORE: 250,          // points per gem -> game.addScore (multiplied by the level multiplier at award time)
 }
 
-// --- hazard (red spiky sea-mine / coronavirus; AVOID, a hit costs a life) ---
-// The ONLY red object on the tube. Edge-lit solid like the ship, but NORMAL
-// blend like the orb (additive HDR red would bloom toward white/pink).
+// --- hazard (red naval contact mine: a big ball with short Hertz horns; AVOID,
+// a hit costs a life). The ONLY red object on the tube. Edge-lit solid like the
+// ship, but NORMAL blend like the orb (additive HDR red would bloom toward
+// white/pink). The dominant central ball + stubby horns read as a sea mine, not
+// a spiky virus: CORE_RADIUS is large vs a short SPIKE_LEN.
 export const HAZARD = {
-  CORE_RADIUS: 0.5,    // faceted core sphere radius (world units)
+  CORE_RADIUS: 0.72,   // faceted core ball radius (world units) - dominant body
   SPIKE_COUNT: 12,     // documented; geometry uses the 12 icosa vertex dirs
-  SPIKE_LEN: 0.62,     // spike length out from the core surface
-  SPIKE_BASE_R: 0.13,  // spike base radius (slim, sharp pyramidal cones)
-  KNOB_RADIUS: 0.11,   // detonator-horn / virus-cap tip sphere
+  SPIKE_LEN: 0.34,     // horn length out from the core (short + stubby, not spiky)
+  SPIKE_BASE_R: 0.16,  // horn base radius (stubby cones, not slim needles)
+  KNOB_RADIUS: 0.14,   // bulb tip on each Hertz horn (the detonator cap)
   SCALE: 1.6,          // overall size multiplier on the built mine (bigger = scarier)
   EDGE_THRESHOLD: 18,  // EdgesGeometry threshold (deg): keeps spikes + facets
   LINE_WIDTH: 2.2,     // edge line width in px
@@ -220,11 +259,15 @@ export const HAZARD = {
   PULSE_AMP: 0.05,     // +/- 5% scale breathing
 
   // --- field / spawn (sparse to start; latest start so it doesn't cluster) ---
-  COUNT: 4,
+  COUNT: 5,            // was 4; +1 keeps the denser field (and slow boost) filling cleanly from the fog
   SPAWN_START: 120,
-  SPAWN_SPACING: 150,
+  SPAWN_SPACING: 125,  // nominal distance between mines (was 150; ~20% more)
   SPAWN_JITTER: 30,
   RECYCLE_BEHIND: 22,
+  // Slow (yellow, full-gravity) sections spawn 30% more mines: their spacing is
+  // scaled by 1/SLOW_DENSITY. Wired in main.ts via the flight tier (so it tracks
+  // 'sections' cycling and a pinned 'slow' mode alike). 1 = uniform everywhere.
+  SLOW_DENSITY: 1.3,
   // The hit test compares the ship CENTER to the mine center, but the ship's
   // wings span ~0.5 rad and the mine's spikes ~0.4 rad - so the window must
   // absorb the ship's wingspan + the spikes, or a banked wing can overlap a
@@ -256,7 +299,11 @@ export const LIVES = {
 }
 
 export const SCORE = {
-  DIST_RATE: 1.0, // points per world unit travelled (treasures add bonus later)
+  // Points per world unit travelled - a flat survival baseline, NOT multiplied by
+  // the level (so cruising never out-earns active play). Distance per level still
+  // grows on its own as tiers speed up. Calibration target (level 1): all gems in
+  // a level ~= 3x distance points, one kill = 3x a gem (see TREASURE.SCORE / ENEMY.SCORE).
+  DIST_RATE: 0.7,
 }
 
 // --- gun (forward energy weapon: Space fires; each shot spends energy) -------
@@ -287,7 +334,7 @@ export const GUN = {
 // can fly in -> hold an engagement band ahead of you -> peel off.
 export const ENEMY = {
   HP: 2,              // hits to kill (burst-to-kill: one quick double-tap once aligned)
-  SCORE: 500,         // points per kill (2x a gem; the highest-value event)
+  SCORE: 750,         // points per kill (3x a gem; the highest-value event). Multiplied by the level multiplier at award time.
   ENERGY_REFUND: 12,  // energy returned on a kill (clamped at MAX; below PER_ORB so it is not a farm)
   COUNT: 2,           // enemies alive in the pool at once (one engaging, one approaching/departing)
 

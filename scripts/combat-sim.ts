@@ -51,7 +51,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   if (opts.integrate === false) {
     r.craft.distance += r.craft.speed * dt // advance forward but freeze theta
   } else {
-    updateCraft(r.craft, { ...NEUTRAL, fire: fireHeld }, SPEED.NORMAL, PHYSICS.GRAVITY_K, dt)
+    updateCraft(r.craft, { ...NEUTRAL, fire: fireHeld }, SPEED.NORMAL, PHYSICS.GRAVITY_K, SPEED.FAST, dt)
   }
   const shot = r.gun.tryFire(r.craft, r.game, dt, fireHeld)
   if (shot.fire) r.projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)

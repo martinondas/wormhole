@@ -28,6 +28,7 @@ export function updateCraft(
   input: InputState,
   targetSpeed: number,
   gravityK: number,
+  speedMax: number,
   dt: number,
 ): void {
   // Ramp the steering signal toward the target. Faster to engage (attack) than
@@ -52,8 +53,11 @@ export function updateCraft(
   // longer throttles); ease toward it so section changes ramp instead of snap.
   // Never halts (tiers are all > 0).
   s.speed = approach(s.speed, targetSpeed, SPEED.EASE * dt)
+  // Floor: never halt (SPEED.SLOW is the lowest tier of level 1). Ceiling: the
+  // current level's fast-tier speed (grows with the level, so high levels are not
+  // capped at the level-1 top speed).
   if (s.speed < SPEED.SLOW) s.speed = SPEED.SLOW
-  if (s.speed > SPEED.FAST) s.speed = SPEED.FAST
+  if (s.speed > speedMax) s.speed = speedMax
 
   s.distance += s.speed * dt
 }

@@ -14,6 +14,8 @@ export interface HudState {
   paused: boolean // a live run paused back to the intro/menu screen (Esc)
   musicMuted: boolean // music toggled off via M (SFX still play)
   flightMode: string // experimental flight mode readout (testing)
+  level: number // current level (1-based for display)
+  scoreMultiplier: number // points multiplier in force this level (1.0, 1.5, ...)
   best: number
 }
 
@@ -75,7 +77,7 @@ export function createHud(): Hud {
   const root = document.createElement('div')
   root.id = 'hud'
   root.innerHTML = `
-    <div class="corner tl"><div id="wh-score">SCORE 0000000</div><div id="wh-dist" class="dim">DIST 0000</div><div id="wh-grav" class="dim">MODE NORMAL</div></div>
+    <div class="corner tl"><div id="wh-score">SCORE 0000000</div><div id="wh-level">LEVEL 1 &times;1.0</div><div id="wh-dist" class="dim">DIST 0000</div><div id="wh-grav" class="dim">MODE NORMAL</div></div>
     <div class="corner tr"><div id="wh-best" class="dim">BEST 0000000</div></div>
     <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl">ENERGY</div><div class="track"><div class="fill" id="wh-energy"></div></div></div>
@@ -105,6 +107,7 @@ export function createHud(): Hud {
 
   const $ = (id: string): HTMLElement => root.querySelector('#' + id) as HTMLElement
   const elScore = $('wh-score')
+  const elLevel = $('wh-level')
   const elDist = $('wh-dist')
   const elGrav = $('wh-grav')
   const elBest = $('wh-best')
@@ -137,6 +140,7 @@ export function createHud(): Hud {
   // skips the per-frame textContent/style/classList churn (forced style recalc)
   // and the string allocations that went with it.
   let lastScore = -1
+  let lastLevelKey = ''
   let lastDist = -1
   let lastBest = -1
   let lastSpd = -1
@@ -155,6 +159,11 @@ export function createHud(): Hud {
     update(s: HudState): void {
       const score = Math.max(0, Math.floor(s.score))
       if (score !== lastScore) { elScore.textContent = 'SCORE ' + pad(score, 7); lastScore = score }
+      const levelKey = s.level + '|' + s.scoreMultiplier
+      if (levelKey !== lastLevelKey) {
+        elLevel.textContent = 'LEVEL ' + Math.max(1, Math.floor(s.level)) + ' ×' + s.scoreMultiplier.toFixed(1)
+        lastLevelKey = levelKey
+      }
       const dist = Math.max(0, Math.floor(s.distance))
       if (dist !== lastDist) { elDist.textContent = 'DIST ' + pad(dist, 4); lastDist = dist }
       const best = Math.max(0, Math.floor(s.best))

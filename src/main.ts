@@ -19,7 +19,7 @@ import { createHud } from './hud'
 import { createAudio } from './audio'
 import { createPerfOverlay } from './render/perf'
 import { startLoop } from './loop'
-import { PHYSICS, SPEED, FLIGHT, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, INPUT, AUDIO } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, INPUT, AUDIO } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -75,11 +75,13 @@ function makeField(
   c: FieldConsts,
   onHit: () => boolean,
   sampleTheta?: () => number,
+  spacingScaleAt?: (worldDistance: number) => number,
 ): Field {
   return createField({
     create,
     onHit,
     sampleTheta,
+    spacingScaleAt,
     count: c.COUNT,
     spawnStart: c.SPAWN_START,
     spawnSpacing: c.SPAWN_SPACING,
@@ -90,6 +92,33 @@ function makeField(
     popTime: c.POP_TIME,
     popScale: c.POP_SCALE,
   })
+}
+
+// --- per-level tuning lookups (one level = one slow->normal->fast cycle) ------
+// The LEVELS.TABLE row for a level (clamped to the last row beyond the table).
+const levelRow = (level: number): (typeof LEVELS.TABLE)[number] =>
+  LEVELS.TABLE[Math.min(level, LEVELS.TABLE.length - 1)] ?? LEVELS.TABLE[LEVELS.TABLE.length - 1]!
+// Max raiders alive at once for a level: table value, then a procedural ramp
+// (+1 every BEYOND_ENEMY_LEVELS) once past the table, capped at MAX_ENEMIES_CAP.
+function levelEnemyMax(level: number): number {
+  const t = LEVELS.TABLE
+  if (level < t.length) return t[level]!.enemyMax
+  const last = t[t.length - 1]!
+  const extra = Math.floor((level - (t.length - 1)) / LEVELS.BEYOND_ENEMY_LEVELS)
+  return Math.min(LEVELS.MAX_ENEMIES_CAP, last.enemyMax + extra)
+}
+
+// Field density scales per level (and, for mines, denser still in slow sections).
+// Spacing is in DISTANCE but the field scrolls at craft speed, so encounter rate =
+// speed / spacing. We multiply by flight.speedRatioAt so the table multipliers mean
+// a TIME rate vs level 1 (orbSpacingMult 1.2 = 20% rarer per second, not drowned
+// out by the rising per-level speed). All read the live level/tier at the spawn
+// distance, so slots placed a level ahead of the craft still pack correctly.
+const orbSpacingScale = (wd: number): number =>
+  levelRow(flight.levelAt(wd)).orbSpacingMult * flight.speedRatioAt(wd)
+const mineSpacingScale = (wd: number): number => {
+  const slow = flight.tierIndexAt(wd) === 0 ? 1 / HAZARD.SLOW_DENSITY : 1
+  return slow * levelRow(flight.levelAt(wd)).bombSpacingMult * flight.speedRatioAt(wd)
 }
 
 const fields: Field[] = [
@@ -104,15 +133,17 @@ const fields: Field[] = [
       return true
     },
     biasedAngle(PICKUP.SPAWN_ANGLE),
+    orbSpacingScale,
   ),
+  // gems: the level multiplier scales the points at award time (frequency is constant).
   makeField(createTreasure, TREASURE, () => {
-    game.addScore(TREASURE.SCORE)
+    game.addScore(Math.round(TREASURE.SCORE * flight.scoreMultiplier))
     audio.play('gem')
     return true
   }),
   // play the hit sfx only when a life is actually lost (hitHazard returns false
   // during i-frames), so an invuln graze stays silent.
-  makeField(createHazard, HAZARD, () => playedHit(game.hitHazard()), biasedAngle(HAZARD.SPAWN_ANGLE)),
+  makeField(createHazard, HAZARD, () => playedHit(game.hitHazard()), biasedAngle(HAZARD.SPAWN_ANGLE), mineSpacingScale),
 ]
 for (const f of fields) {
   stage.scene.add(f.object)
@@ -134,8 +165,8 @@ const enemies = createEnemies({
   },
   onRam: () => playedHit(game.hitHazard()), // lethal hull contact (enemy survives)
   onKill: () => {
-    game.addScore(ENEMY.SCORE)
-    game.addEnergy(ENEMY.ENERGY_REFUND)
+    game.addScore(Math.round(ENEMY.SCORE * flight.scoreMultiplier))
+    game.addEnergy(ENEMY.ENERGY_REFUND) // energy refund is NOT score-multiplied
     audio.play('kill')
   },
 })
@@ -162,6 +193,7 @@ let lastTargetSpeed = SPEED.NORMAL // detects flight-tier step-ups -> accelerate
 // frame and the fixed substeps reuse these (was recomputed every substep).
 let frameTargetSpeed = SPEED.NORMAL
 let frameGravity = flight.gravityForSpeed(SPEED.NORMAL)
+let frameSpeedMax = SPEED.FAST // upper speed clamp for the current level (grows with the level)
 let lastMusic: 'menu' | 'play' = musicTrack() // cache: switch tracks only on change
 
 // Which music track the current state wants: menu on the title / game-over, the
@@ -174,7 +206,8 @@ function musicTrack(): 'menu' | 'play' {
 function beginRun(): void {
   game.start()
   paused = false
-  lastTargetSpeed = flight.targetSpeedAt(craft.distance) // no accel sting on the first step
+  flight.update(craft.distance)
+  lastTargetSpeed = flight.targetSpeed() // no accel sting on the first step
   // queue the run track before unlocking so audio releases straight to it - the
   // menu track never sounds when Space is the very first (unlocking) keypress.
   audio.playMusic(musicTrack())
@@ -245,9 +278,9 @@ startLoop(
   fixedDt,
   (dt) => {
     if (!game.started || debug.paused || game.over || paused) return
-    // targetSpeed + speed-tied gravity are computed once per frame (preUpdate)
-    // and reused across this frame's substeps - they are stable within a frame.
-    updateCraft(craft, input.state, frameTargetSpeed, frameGravity, dt)
+    // targetSpeed + speed-tied gravity + the level's speed cap are computed once
+    // per frame (preUpdate) and reused across this frame's substeps.
+    updateCraft(craft, input.state, frameTargetSpeed, frameGravity, frameSpeedMax, dt)
     // collection / hits live in the fixed step so a fast pass never skips the
     // window; game.update runs LAST so a hazard / enemy hit this step ends the
     // run this step (lives <= 0 -> over), with no one-frame lag.
@@ -293,19 +326,25 @@ startLoop(
       paused,
       musicMuted: audio.musicMuted,
       flightMode: flight.mode,
+      level: flight.level + 1, // 0-based internally, shown 1-based
+      scoreMultiplier: flight.scoreMultiplier,
       best: game.best,
     })
   },
   {
-    // once per frame, before the fixed substeps: the flight tier's target speed
-    // and the speed-tied gravity are stable across a frame, so compute them here
-    // rather than every substep (they fed updateCraft ~120-240x/s before).
+    // once per frame, before the fixed substeps: refresh the flight/level state,
+    // then cache the target speed, speed-tied gravity, and level speed cap (all
+    // stable across a frame, so we avoid recomputing them every substep). The
+    // enemy cap follows the level here too (level changes slowly, once per frame is fine).
     preUpdate: () => {
       if (!game.started || debug.paused || game.over || paused) return
-      frameTargetSpeed = flight.targetSpeedAt(craft.distance)
+      flight.update(craft.distance)
+      frameTargetSpeed = flight.targetSpeed()
       if (frameTargetSpeed > lastTargetSpeed) audio.playAccel() // tier stepped up
       lastTargetSpeed = frameTargetSpeed
       frameGravity = flight.gravityForSpeed(craft.speed)
+      frameSpeedMax = flight.speedMax()
+      enemies.setMaxActive(levelEnemyMax(flight.level))
     },
     onStats: (s) => perf.sample(s), // feed the FPS / frame-time overlay (toggle: P)
   },
@@ -327,5 +366,5 @@ startLoop(
   flight, // WH.flight.mode = 'slow' | 'normal' | 'fast' | 'sections' (or press G)
   audio,
   begin: beginRun, // start the run from the console / screenshot tool (skips the title gate)
-  config: { PHYSICS, SPEED, FLIGHT, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, AUDIO },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, AUDIO },
 }

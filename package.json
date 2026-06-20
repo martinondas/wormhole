@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "shoot": "node scripts/shoot.ts",
-    "sim": "esbuild scripts/combat-sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combat-sim.mjs && node node_modules/.cache/combat-sim.mjs"
+    "sim": "esbuild scripts/combat-sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combat-sim.mjs && node node_modules/.cache/combat-sim.mjs",
+    "sim:levels": "esbuild scripts/levels-sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/levels-sim.mjs && node node_modules/.cache/levels-sim.mjs"
   },
   "dependencies": {
     "three": "^0.184.0"

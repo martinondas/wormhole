@@ -19,12 +19,12 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { HAZARD } from '../config'
 import { type WallObject } from './wallObject'
 
-// A red spiky sea-mine / coronavirus: a faceted core sphere with 12 radiating
-// cone spikes tipped by small knob spheres (the classic naval-mine / virus
-// silhouette). Edge-lit solid: a near-black depth-writing fill under glowing
-// red fat-line edges. It is the ONLY red object on the tube, so it reads as
-// danger on sight. Players AVOID it; a hit costs a life. It rides at the same
-// radius as the orb, so the existing proximity check works directly.
+// A red naval contact mine: a big faceted core ball with 12 short, stubby cone
+// horns tipped by small bulbs (the classic sea-mine silhouette - a dominant
+// sphere, not a spiky virus). Edge-lit solid: a near-black depth-writing fill
+// under glowing red fat-line edges. It is the ONLY red object on the tube, so it
+// reads as danger on sight. Players AVOID it; a hit costs a life. It rides at the
+// same radius as the orb, so the existing proximity check works directly.
 
 // Unique radial spike directions = the 12 vertices of a unit icosahedron.
 // The position buffer repeats vertices per face, so dedupe by distance.
@@ -59,7 +59,7 @@ function buildMine(): BufferGeometry {
     cone.translate(dir.x * cr * 0.85, dir.y * cr * 0.85, dir.z * cr * 0.85)
     parts.push(cone)
 
-    // knob tip (mine detonator-horn / virus protein cap)
+    // bulb tip on each Hertz horn (the detonator cap)
     const knob = new SphereGeometry(HAZARD.KNOB_RADIUS, 6, 4)
     const tip = cr * 0.85 + HAZARD.SPIKE_LEN
     knob.translate(dir.x * tip, dir.y * tip, dir.z * tip)

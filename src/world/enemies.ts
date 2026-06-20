@@ -1,5 +1,5 @@
 import { Group } from 'three'
-import { ENEMY, GUN, RIDE_RADIUS } from '../config'
+import { ENEMY, GUN, LEVELS, RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
 import { angleDiff, clamp } from '../util/math'
 import { createEnemy, type Enemy } from './enemy'
@@ -24,6 +24,7 @@ export interface EnemyDeps {
 export interface Enemies {
   object: Group
   update(craft: CraftState, dt: number): void
+  setMaxActive(n: number): void // max raiders alive at once (raised by the level)
   tryKill(theta: number, z: number): boolean // a player bolt at (theta,z) - true if it struck an enemy
   setResolution(w: number, h: number): void
   reset(craftDistance: number): void
@@ -63,13 +64,16 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   const radius = RIDE_RADIUS
   const slots: Slot[] = []
   let killed = 0
+  // Max raiders allowed on screen at once. The pool is sized to MAX_ENEMIES_CAP;
+  // the level raises maxActive up to that cap. Starts at ENEMY.COUNT (level 1).
+  let maxActive = ENEMY.COUNT
 
   // craft snapshot, refreshed each update() so tryKill() (called afterward, from
   // projectiles.update) and debugStage() can compute ship-relative z.
   let craftDistance = 0
   let craftTheta = 0
 
-  for (let i = 0; i < ENEMY.COUNT; i++) {
+  for (let i = 0; i < LEVELS.MAX_ENEMIES_CAP; i++) {
     const enemy = createEnemy()
     group.add(enemy.object)
     enemy.object.visible = false
@@ -147,10 +151,12 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     return clamp(step / dt / ENEMY.STRAFE_OMEGA_MAX, -1, 1)
   }
 
-  function updateSlot(slot: Slot, craft: CraftState, dt: number): void {
+  function updateSlot(slot: Slot, craft: CraftState, dt: number, canArm: boolean): void {
     if (!slot.active) {
       slot.cooldownT -= dt
-      if (slot.cooldownT <= 0) arm(slot)
+      // re-arm only when the cooldown has elapsed AND we are below the level's cap
+      // (an over-cap slot holds at cooldownT <= 0 and arms the moment a slot frees).
+      if (slot.cooldownT <= 0 && canArm) arm(slot)
       return
     }
 
@@ -256,7 +262,20 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     update(craft: CraftState, dt: number): void {
       craftDistance = craft.distance
       craftTheta = craft.theta
-      for (const slot of slots) updateSlot(slot, craft, dt)
+      // Count live raiders so arming respects the level cap; a slot that arms this
+      // step counts immediately, so a single step can never exceed maxActive.
+      let active = 0
+      for (const slot of slots) if (slot.active) active++
+      for (const slot of slots) {
+        const canArm = active < maxActive
+        const wasActive = slot.active
+        updateSlot(slot, craft, dt, canArm)
+        if (!wasActive && slot.active) active++
+      }
+    },
+
+    setMaxActive(n: number): void {
+      maxActive = Math.max(0, Math.min(slots.length, Math.floor(n)))
     },
 
     tryKill(theta: number, z: number): boolean {
