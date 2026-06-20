@@ -48,6 +48,8 @@ export const SHIP = {
   SCALE: 0.9,         // overall hull scale
   BANK: 0.5,          // extra roll (rad) leaned into a full steer input
   LINE_WIDTH: 2.4,    // edge line width in pixels (Line2)
+  FLASH_HOLD: 0.5,    // seconds the blue orb-pickup flash stays at full before fading
+  FLASH_TIME: 0.7,    // seconds the flash then fades from full back to normal
 }
 
 // Shared ride radius: where the ship belly floats AND where every wall object
@@ -84,6 +86,7 @@ export const RENDER = {
   LONG_RGB: [0.11, 0.36, 0.24] as [number, number, number],
   SHIP_RGB: [0.50, 1.50, 0.85] as [number, number, number],
   SHIP_FILL_RGB: [0.01, 0.04, 0.03] as [number, number, number],
+  SHIP_FLASH_RGB: [0.10, 0.50, 4.50] as [number, number, number], // HDR blue, keyed to the orb; ship edges flash this on pickup then decay to SHIP_RGB. Low green = deep blue (not pale cyan); high blue = strong bloom pop
 
   DPR_CAP: 1.5,       // cap devicePixelRatio before scaling
   RENDER_SCALE: 0.85, // render below native res, upscale (main 60fps lever)

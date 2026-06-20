@@ -95,6 +95,7 @@ const fields: Field[] = [
     () => {
       game.addEnergy(ENERGY.PER_ORB)
       audio.play('orb')
+      ship.flash()
       return true
     },
     biasedAngle(PICKUP.SPAWN_ANGLE),
@@ -217,7 +218,7 @@ startLoop(
     game.update(dt, craft.distance)
   },
   (frameDt) => {
-    ship.update(craft)
+    ship.update(craft, frameDt)
     // i-frame flicker: blink the ship while invulnerable so a hit reads clearly
     // (and so losing a life never feels random). Always visible once the run is
     // over or invulnerability has lapsed.

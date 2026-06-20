@@ -21,7 +21,8 @@ import { type CraftState } from '../craft'
 
 export interface Ship {
   object: Group
-  update(craft: CraftState): void
+  update(craft: CraftState, dt: number): void
+  flash(): void // momentary blue edge flash (orb pickup), decays over SHIP.FLASH_TIME
   setResolution(w: number, h: number): void
 }
 
@@ -108,9 +109,14 @@ export function createShip(): Ship {
 
   const shipRadius = RIDE_RADIUS
 
+  // edge-color flash (orb pickup): tint toward blue, then decay back to base.
+  const baseColor = new Color().setRGB(...RENDER.SHIP_RGB)
+  const flashColor = new Color().setRGB(...RENDER.SHIP_FLASH_RGB)
+  let flashT = 0 // seconds of flash remaining
+
   return {
     object: group,
-    update(craft: CraftState): void {
+    update(craft: CraftState, dt: number): void {
       group.position.set(
         Math.sin(craft.theta) * shipRadius,
         -Math.cos(craft.theta) * shipRadius,
@@ -118,6 +124,16 @@ export function createShip(): Ship {
       )
       // sit tangent on the wall (roll with theta), lean into the steer input
       group.rotation.z = craft.theta - SHIP.BANK * craft.steerSignal
+
+      // hold at full for FLASH_HOLD, then fade over FLASH_TIME back to base
+      if (flashT > 0) {
+        flashT = Math.max(0, flashT - dt)
+        const intensity = flashT >= SHIP.FLASH_TIME ? 1 : flashT / SHIP.FLASH_TIME
+        lineMat.color.lerpColors(baseColor, flashColor, intensity)
+      }
+    },
+    flash(): void {
+      flashT = SHIP.FLASH_HOLD + SHIP.FLASH_TIME
     },
     setResolution(w: number, h: number): void {
       lineMat.resolution.set(w, h)
