@@ -6,7 +6,7 @@
 //
 // Run:  npm run sim   (bundles with esbuild + runs under node; the local source
 // uses extensionless imports that bare `node` cannot resolve - see package.json).
-import { PHYSICS, SHIP, GUN, ENEMY, ENERGY } from '../src/config'
+import { PHYSICS, SPEED, SHIP, GUN, ENEMY, ENERGY } from '../src/config'
 import { createCraft, updateCraft, type CraftState } from '../src/craft'
 import { createGame, type Game } from '../src/game'
 import { createGun, type Gun } from '../src/gun'
@@ -51,7 +51,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   if (opts.integrate === false) {
     r.craft.distance += r.craft.speed * dt // advance forward but freeze theta
   } else {
-    updateCraft(r.craft, { ...NEUTRAL, fire: fireHeld }, dt)
+    updateCraft(r.craft, { ...NEUTRAL, fire: fireHeld }, SPEED.NORMAL, PHYSICS.GRAVITY_K, dt)
   }
   const shot = r.gun.tryFire(r.craft, r.game, dt, fireHeld)
   if (shot.fire) r.projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)

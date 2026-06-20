@@ -12,6 +12,7 @@ export interface HudState {
   over: boolean
   started: boolean // false on the title screen (before the first run begins)
   muted: boolean
+  flightMode: string // experimental flight mode readout (testing)
   best: number
 }
 
@@ -62,7 +63,7 @@ export function createHud(): Hud {
   const root = document.createElement('div')
   root.id = 'hud'
   root.innerHTML = `
-    <div class="corner tl"><div id="wh-score">SCORE 0000000</div><div id="wh-dist" class="dim">DIST 0000</div></div>
+    <div class="corner tl"><div id="wh-score">SCORE 0000000</div><div id="wh-dist" class="dim">DIST 0000</div><div id="wh-grav" class="dim">MODE NORMAL</div></div>
     <div class="corner tr"><div id="wh-best" class="dim">BEST 0000000</div></div>
     <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl">ENERGY</div><div class="track"><div class="fill" id="wh-energy"></div></div></div>
@@ -85,6 +86,7 @@ export function createHud(): Hud {
   const $ = (id: string): HTMLElement => root.querySelector('#' + id) as HTMLElement
   const elScore = $('wh-score')
   const elDist = $('wh-dist')
+  const elGrav = $('wh-grav')
   const elBest = $('wh-best')
   const elLives = $('wh-lives')
   const elEnergy = $('wh-energy')
@@ -114,6 +116,7 @@ export function createHud(): Hud {
       elDist.textContent = 'DIST ' + pad(s.distance, 4)
       elBest.textContent = 'BEST ' + pad(s.best, 7)
       elSpd.textContent = 'SPD ' + pad(s.speed, 2)
+      elGrav.textContent = 'MODE ' + s.flightMode.toUpperCase()
       renderLives(s.lives)
 
       const e = Math.max(0, Math.min(1, s.energy01))

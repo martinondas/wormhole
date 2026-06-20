@@ -24,6 +24,7 @@ export interface Audio {
   unlock(): void // resume the context now (call from a user-gesture handler)
   play(name: SfxName): void
   playMusic(name: MusicName): void // switch the looping music track
+  playAccel(): void // one-shot accelerate layer over the music (speed step-up)
   toggleMute(): void
   readonly muted: boolean
 }
@@ -53,6 +54,7 @@ function silentAudio(): Audio {
     unlock() {},
     play() {},
     playMusic() {},
+    playAccel() {},
     toggleMute() {},
     muted: true,
   }
@@ -100,6 +102,18 @@ export function createAudio(): Audio {
       .then((decoded) => buffers.set(name, decoded))
       .catch((err) => console.warn(`[audio] could not load ${def.src}:`, err.message ?? err))
   }
+
+  // --- accelerate: one-shot layer over the music (its own gain -> master) ----
+  let accelBuffer: AudioBuffer | null = null
+  let accelSrc: AudioBufferSourceNode | null = null
+  fetch(AUDIO.ACCEL.SRC)
+    .then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.arrayBuffer()
+    })
+    .then((buf) => ctx.decodeAudioData(buf))
+    .then((decoded) => (accelBuffer = decoded))
+    .catch((err) => console.warn(`[audio] could not load ${AUDIO.ACCEL.SRC}:`, err.message ?? err))
 
   // --- music: one looping streamed <audio> element per track ----------------
   // Only the `desired` track sounds; the rest are paused. desired is set by
@@ -156,6 +170,45 @@ export function createAudio(): Audio {
       if (desired === name) return
       desired = name
       applyMusic()
+    },
+
+    // Play the first ACCEL.SECONDS of the accelerate clip over the music, fading
+    // out at the end. Retriggers cleanly (stop any in-flight one first), so rapid
+    // step-ups never stack. Each play uses a throwaway source + gain (disconnected
+    // on end), like play() - nothing accumulates.
+    playAccel(): void {
+      if (muted || !accelBuffer) return
+      if (accelSrc) {
+        try {
+          accelSrc.stop()
+        } catch {
+          /* already ended - ignore */
+        }
+      }
+      const now = ctx.currentTime
+      const dur = AUDIO.ACCEL.SECONDS
+      const fade = Math.min(AUDIO.ACCEL.FADE, dur)
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(AUDIO.ACCEL.VOLUME, now)
+      g.gain.setValueAtTime(AUDIO.ACCEL.VOLUME, now + dur - fade)
+      g.gain.linearRampToValueAtTime(0, now + dur)
+      const src = ctx.createBufferSource()
+      src.buffer = accelBuffer
+      src.connect(g)
+      g.connect(master)
+      src.onended = () => g.disconnect()
+      src.start(now)
+      src.stop(now + dur)
+      accelSrc = src
+
+      // duck the music for the duration so the accelerate sting cuts through,
+      // then ramp it back. (musicBus gain is otherwise constant, so this owns it.)
+      const m = AUDIO.MUSIC_VOLUME
+      musicBus.gain.cancelScheduledValues(now)
+      musicBus.gain.setValueAtTime(musicBus.gain.value, now)
+      musicBus.gain.linearRampToValueAtTime(m * AUDIO.ACCEL.DUCK, now + 0.12)
+      musicBus.gain.setValueAtTime(m * AUDIO.ACCEL.DUCK, now + dur - fade)
+      musicBus.gain.linearRampToValueAtTime(m, now + dur)
     },
 
     toggleMute(): void {

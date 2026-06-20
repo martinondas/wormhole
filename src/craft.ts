@@ -12,18 +12,24 @@ export interface CraftState extends PendulumState {
 }
 
 export function createCraft(): CraftState {
-  return { theta: 0, omega: 0, steerSignal: 0, speed: SPEED.CRUISE, distance: 0 }
+  return { theta: 0, omega: 0, steerSignal: 0, speed: SPEED.NORMAL, distance: 0 }
 }
 
 export function resetCraft(s: CraftState): void {
   s.theta = 0
   s.omega = 0
   s.steerSignal = 0
-  s.speed = SPEED.CRUISE
+  s.speed = SPEED.NORMAL
   s.distance = 0
 }
 
-export function updateCraft(s: CraftState, input: InputState, dt: number): void {
+export function updateCraft(
+  s: CraftState,
+  input: InputState,
+  targetSpeed: number,
+  gravityK: number,
+  dt: number,
+): void {
   // Ramp the steering signal toward the target. Faster to engage (attack) than
   // to release, so a quick tap delivers a crisp, weighty push.
   const goingUp = Math.abs(input.steerTarget) >= Math.abs(s.steerSignal)
@@ -40,20 +46,14 @@ export function updateCraft(s: CraftState, input: InputState, dt: number): void 
   if (steerTorque * s.omega > 0) {
     steerTorque *= clamp(1 - Math.abs(s.omega) / PHYSICS.STEER_OMEGA_MAX, 0, 1)
   }
-  stepPendulum(s, steerTorque, dt)
+  stepPendulum(s, steerTorque, gravityK, dt)
 
-  // Forward speed: boost > throttle > brake > ease back to cruise. Never halts.
-  if (input.boost) {
-    s.speed += SPEED.BOOST_ACCEL * dt
-  } else if (input.throttle) {
-    s.speed += SPEED.THROTTLE_ACCEL * dt
-  } else if (input.brake) {
-    s.speed -= SPEED.EASE_DECEL * dt
-  } else {
-    s.speed = approach(s.speed, SPEED.CRUISE, SPEED.EASE_DECEL * dt)
-  }
-  if (s.speed < SPEED.MIN) s.speed = SPEED.MIN
-  if (s.speed > SPEED.MAX) s.speed = SPEED.MAX
+  // Forward speed is set by the active flight tier / section (the player no
+  // longer throttles); ease toward it so section changes ramp instead of snap.
+  // Never halts (tiers are all > 0).
+  s.speed = approach(s.speed, targetSpeed, SPEED.EASE * dt)
+  if (s.speed < SPEED.SLOW) s.speed = SPEED.SLOW
+  if (s.speed > SPEED.FAST) s.speed = SPEED.FAST
 
   s.distance += s.speed * dt
 }

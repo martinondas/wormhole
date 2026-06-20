@@ -104,17 +104,19 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     slot.chargeT = 0
     slot.flashT = 0
     slot.popT = 0
-    slot.strafePhase = 0
+    slot.thetaCenter = slot.theta // weave around the spawn angle from the moment it appears
+    slot.strafePhase = Math.random() * Math.PI * 2 // desync raiders so they do not weave in lockstep
     slot.enemy.object.visible = true
     slot.enemy.object.scale.setScalar(1)
     slot.enemy.setOpacity(1)
     slot.enemy.setCharge(0)
   }
 
-  // retire a slot to the inactive gap, then it re-arms after SPAWN_COOLDOWN.
+  // retire a slot to the inactive gap, then it re-arms after SPAWN_COOLDOWN
+  // (+/- jitter, so two slots recycled together drift apart instead of re-pairing).
   function recycle(slot: Slot): void {
     slot.active = false
-    slot.cooldownT = ENEMY.SPAWN_COOLDOWN
+    slot.cooldownT = ENEMY.SPAWN_COOLDOWN + rand(-ENEMY.SPAWN_COOLDOWN_JITTER, ENEMY.SPAWN_COOLDOWN_JITTER)
     slot.enemy.object.visible = false
     slot.charging = false
     slot.enemy.setCharge(0)
@@ -127,13 +129,22 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   }
 
   function enterEngage(slot: Slot): void {
+    // keep thetaCenter / strafePhase from APPROACH so the weave flows on without a snap
     slot.phase = 'engage'
-    slot.thetaCenter = slot.theta // already homed near the player during approach
-    slot.strafePhase = 0
     slot.engageT = ENEMY.ENGAGE_TIME + rand(-ENEMY.ENGAGE_TIME_JITTER, ENEMY.ENGAGE_TIME_JITTER)
     slot.fireCd = ENEMY.FIRE_COOLDOWN + rand(-ENEMY.FIRE_JITTER, ENEMY.FIRE_JITTER)
     slot.charging = false
     slot.chargeT = 0
+  }
+
+  // Weave theta around thetaCenter, hard-capped so the player can always track.
+  // Returns a bank factor (-1..1) for the roll lean. Used in APPROACH and ENGAGE.
+  function strafe(slot: Slot, dt: number): number {
+    slot.strafePhase += ENEMY.STRAFE_W * dt
+    const desired = slot.thetaCenter + ENEMY.STRAFE_AMP * Math.sin(slot.strafePhase)
+    const step = clamp(angleDiff(desired, slot.theta), -ENEMY.STRAFE_OMEGA_MAX * dt, ENEMY.STRAFE_OMEGA_MAX * dt)
+    slot.theta += step
+    return clamp(step / dt / ENEMY.STRAFE_OMEGA_MAX, -1, 1)
   }
 
   function updateSlot(slot: Slot, craft: CraftState, dt: number): void {
@@ -158,9 +169,11 @@ export function createEnemies(deps: EnemyDeps): Enemies {
 
     if (slot.phase === 'approach') {
       slot.worldDistance += (craft.speed + ENEMY.CLOSE_SPEED_DELTA) * dt
-      // home the angle toward the player (capped) so it lines up as it dives in
-      const dTheta = clamp(angleDiff(craft.theta, slot.theta), -ENEMY.APPROACH_TRACK * dt, ENEMY.APPROACH_TRACK * dt)
-      slot.theta += dTheta
+      // drift the weave CENTER gently toward the player (so it trends into play
+      // without locking on), and weave around it - it is dodging from the moment
+      // it appears, not diving straight at your angle.
+      slot.thetaCenter += clamp(angleDiff(craft.theta, slot.thetaCenter), -ENEMY.APPROACH_TRACK * dt, ENEMY.APPROACH_TRACK * dt)
+      bankFactor = strafe(slot, dt)
       const z = craftDistance - slot.worldDistance
       if (z >= ENEMY.ENGAGE_Z_FAR) enterEngage(slot)
     } else if (slot.phase === 'engage') {
@@ -175,13 +188,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       // track. While charging, HOLD theta: the brightening nose then marks the
       // exact firing line (an honest aim tell) and the raider commits to its shot
       // - giving the player a clean window to swing off the line or shoot it.
-      if (!slot.charging) {
-        slot.strafePhase += ENEMY.STRAFE_W * dt
-        const desired = slot.thetaCenter + ENEMY.STRAFE_AMP * Math.sin(slot.strafePhase)
-        const step = clamp(angleDiff(desired, slot.theta), -ENEMY.STRAFE_OMEGA_MAX * dt, ENEMY.STRAFE_OMEGA_MAX * dt)
-        slot.theta += step
-        bankFactor = clamp((step / dt) / ENEMY.STRAFE_OMEGA_MAX, -1, 1)
-      }
+      if (!slot.charging) bankFactor = strafe(slot, dt)
 
       // firing: a visible charge tell, then a bolt down the enemy's current theta
       if (slot.charging) {
@@ -256,8 +263,10 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       for (const slot of slots) {
         if (!slot.active || (slot.phase !== 'approach' && slot.phase !== 'engage')) continue
         const enemyZ = craftDistance - slot.worldDistance
-        if (Math.abs(angleDiff(theta, slot.theta)) < GUN.HIT_ANGLE && Math.abs(z - enemyZ) < GUN.HIT_Z) {
-          slot.hp -= 1
+        const dAngle = Math.abs(angleDiff(theta, slot.theta))
+        if (dAngle < GUN.HIT_ANGLE && Math.abs(z - enemyZ) < GUN.HIT_Z) {
+          // dead-center shot kills outright; a looser hit only chips 1
+          slot.hp = dAngle < GUN.HIT_ANGLE_KILL ? 0 : slot.hp - 1
           if (slot.hp <= 0) {
             slot.phase = 'dead'
             slot.popT = 0

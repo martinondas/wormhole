@@ -21,15 +21,36 @@ export const PHYSICS = {
   STEER_RELEASE: 0.13,// seconds for steer signal to ramp back to zero
 }
 
-// --- speed: forward motion. Never halts. -----------------------------------
-// Units are world units per second (tube radius ~ 6, ring spacing ~ 7).
+// --- flight mode (experimental: speed tier -> gravity + tube color) ----------
+// Speed is the single driver: the mode (or the current section) picks a target
+// speed tier, the craft eases to it, and gravity is tied to speed (full at SLOW,
+// zero at FAST - see flight.ts). The three fixed tiers map to colors:
+//   slow   = yellow, full gravity (heaviest)
+//   normal = green,  low gravity  (startup)
+//   fast   = blue,   no gravity   (most agile)
+// 'sections' cycles the tiers along the tube. Cycle live with the mode key (see
+// INPUT.modeCycle) or set WH.flight.mode. The tube color follows speed, so it
+// blends smoothly through the tiers as the craft eases between sections.
+export type FlightMode = 'slow' | 'normal' | 'fast' | 'sections'
+export const FLIGHT = {
+  MODE: 'normal' as FlightMode, // startup mode
+  SECTION_SECONDS: 10,          // 'sections' mode: seconds per section (equal in TIME; distance scales with the tier's speed)
+  SLOW_RING_RGB: [0.72, 0.54, 0.08] as [number, number, number], // yellow tube (slow / full gravity)
+  SLOW_LONG_RGB: [0.42, 0.31, 0.05] as [number, number, number],
+  FAST_RING_RGB: [0.16, 0.34, 0.85] as [number, number, number], // blue tube (fast / no gravity)
+  FAST_LONG_RGB: [0.10, 0.20, 0.52] as [number, number, number], // normal/green reuses RENDER.RING_RGB / LONG_RGB
+}
+
+// --- speed: forward motion. Set by the flight mode / section, not the player. -
+// Units are world units per second (tube radius ~ 6, ring spacing ~ 7). Three
+// tiers; gravity is tied to speed (faster = lighter, see flight.ts), so the tier
+// chosen by the mode/section sets the whole feel. Never halts (SLOW > 0). The
+// craft eases toward the active tier's speed at EASE.
 export const SPEED = {
-  CRUISE: 30,         // resting speed with no throttle/brake input
-  MIN: 18,            // floor: easing/braking never drops below this (no halt)
-  MAX: 75,            // boost ceiling
-  THROTTLE_ACCEL: 28, // accel while throttle held (units/s^2)
-  BOOST_ACCEL: 64,    // accel while boost held
-  EASE_DECEL: 26,     // decel while braking, and ease-back toward CRUISE
+  SLOW: 30,   // yellow sections: full gravity, heaviest swing
+  NORMAL: 52, // green sections: low gravity (startup speed; midpoint of slow..fast)
+  FAST: 75,   // blue sections: no gravity, most agile
+  EASE: 28,   // accel/decel toward the active tier's speed (units/s^2)
 }
 
 // --- tube geometry ----------------------------------------------------------
@@ -242,9 +263,13 @@ export const SCORE = {
 export const GUN = {
   COST: 3,            // energy spent per shot (~0.86s of survival at DRAIN 3.5)
   COOLDOWN: 0.25,     // seconds between shots (tap or hold -> ~4/s)
-  BOLT_SPEED: 110,    // player bolt speed down -Z (units/s; > SPEED.MAX so it pulls ahead)
-  BOLT_TTL: 1.4,      // seconds before a player bolt recycles (~154u reach)
-  HIT_ANGLE: 0.22,    // angular window (rad) for a player bolt to hit an enemy (~13 deg)
+  BOLT_SPEED: 185,    // player bolt speed down -Z (units/s; >> SPEED.FAST so it leads quickly, less lead error vs strafing enemies)
+  BOLT_TTL: 1.4,      // seconds before a player bolt recycles (~259u reach)
+  // Two concentric hit windows (rad): a dead-center shot inside HIT_ANGLE_KILL is
+  // an instant kill; a looser hit inside HIT_ANGLE only chips 1 (so it takes the
+  // full ENEMY.HP). Rewards precision without making wing-clips free.
+  HIT_ANGLE_KILL: 0.14, // inner cone (~8 deg): one shot here kills outright
+  HIT_ANGLE: 0.24,    // outer cone (~14 deg): a hit here deals 1 damage
   HIT_Z: 3.0,         // along-tube window (units) for a player bolt hit (no tunnelling at 240Hz)
   BULLET_HIT_ANGLE: 0.30, // player dodge window vs an enemy bolt (wider: the hit is lethal)
   BULLET_HIT_Z: 2.5,  // along-tube window where an enemy bolt registers at the ship plane
@@ -266,6 +291,7 @@ export const ENEMY = {
   SPAWN_JITTER: 40,   // random extra spawn distance so they do not arrive in lockstep
   SPAWN_THETA_SPREAD: 0.5, // |rand| angle offset from the player's theta at spawn (rad)
   SPAWN_COOLDOWN: 3.0,// seconds a dead/recycled slot waits before re-entering APPROACH
+  SPAWN_COOLDOWN_JITTER: 1.5, // +/- on the respawn wait so the two raiders drift apart instead of re-pairing
   RECYCLE_BEHIND: 26, // recycle once the enemy z passes this far behind the ship
 
   // --- engagement band (z negative = ahead of the ship) ---
@@ -280,12 +306,12 @@ export const ENEMY = {
   STATION_SPRING_K: 0.6,  // ENGAGE: speed = craft.speed + k*(z - bandCenter) to hover in the band
   STATION_SPEED_CLAMP: 18,// ENGAGE: clamp |speed - craft.speed| so a full boost (75 vs 30) always escapes
   DEPART_SPEED_DELTA: -22,// DEPART: falls behind and recycles
-  APPROACH_TRACK: 1.2,    // rad/s the raider homes its theta toward yours while approaching (caps a snap)
+  APPROACH_TRACK: 0.7,    // rad/s the raider drifts its strafe CENTER toward yours while approaching (gentle: it trends into play but never locks on)
 
-  // --- strafe (must stay HITTABLE: peak strafe << player STEER_OMEGA_MAX 7) ---
-  STRAFE_AMP: 0.6,    // theta = thetaCenter + AMP*sin(phase) in ENGAGE
-  STRAFE_W: 2.6,      // strafe phase rad/s -> peak |omega| ~1.56 (~22% of the player cap)
-  STRAFE_OMEGA_MAX: 2.0, // hard per-step clamp on strafe angular speed (the hittability guarantee)
+  // --- strafe (active from APPROACH on; must stay HITTABLE: peak strafe << player STEER_OMEGA_MAX 7) ---
+  STRAFE_AMP: 0.95,   // theta = thetaCenter + AMP*sin(phase); wide weave so it is never a sitting duck
+  STRAFE_W: 3.4,      // strafe phase rad/s -> peak |omega| ~3.2 (~46% of the player cap)
+  STRAFE_OMEGA_MAX: 3.2, // hard per-step clamp on strafe angular speed (the hittability guarantee)
 
   // --- firing (telegraphed so a lethal shot is always fairly dodgeable) ---
   FIRE_COOLDOWN: 2.0, // seconds between shots, ENGAGE only
@@ -331,6 +357,7 @@ export const INPUT = {
   boost: ['ShiftLeft', 'ShiftRight'], // Space used to boost; it now FIRES (below)
   fire: ['Space'],                    // forward gun (Shift still boosts)
   mute: ['KeyM'],                     // toggle all audio (handled in main.ts)
+  modeCycle: ['KeyG'],                // cycle flight mode for testing (handled in main.ts)
 }
 
 // --- audio: mp3 music + sfx (Web Audio) -------------------------------------
@@ -351,6 +378,10 @@ export const AUDIO = {
     menu: 'audio/menu.mp3',
     play: 'audio/music.mp3',
   },
+  // accelerate: a short one-shot layered ON TOP of the music whenever the flight
+  // tier steps up (target speed increases). Plays SECONDS then fades out, and
+  // ducks the music to DUCK of its volume meanwhile so the sting cuts through.
+  ACCEL: { SRC: 'audio/accelerate.mp3', VOLUME: 1.6, SECONDS: 3, FADE: 0.4, DUCK: 0.4 },
   // key = event name used in main.ts: audio.play('shoot') etc.
   SFX: {
     shoot:     { src: 'audio/shoot.mp3',      volume: 0.55 },

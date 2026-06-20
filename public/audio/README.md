@@ -7,6 +7,7 @@ Drop your mp3 files here with these exact names (paths/volumes live in
 |------------------|------------------------------------------------|
 | `menu.mp3`       | title screen + game-over screen (loops)        |
 | `music.mp3`      | during a run (loops)                           |
+| `accelerate.mp3` | ~3s layer over the music when the speed tier steps up |
 | `shoot.mp3`      | player fires the forward gun                   |
 | `orb.mp3`        | energy orb collected                           |
 | `gem.mp3`        | treasure gem collected                         |
