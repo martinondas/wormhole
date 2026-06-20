@@ -11,7 +11,8 @@ export interface HudState {
   lives: number
   over: boolean
   started: boolean // false on the title screen (before the first run begins)
-  muted: boolean
+  paused: boolean // a live run paused back to the intro/menu screen (Esc)
+  musicMuted: boolean // music toggled off via M (SFX still play)
   flightMode: string // experimental flight mode readout (testing)
   best: number
 }
@@ -43,11 +44,22 @@ const CSS = `
 #hud .over .hint { font-size:12px; opacity:0.5; }
 #hud .over { position:absolute; inset:0; display:none; flex-direction:column;
   align-items:center; justify-content:center; gap:14px; text-align:center;
-  background:radial-gradient(ellipse at center, rgba(0,8,14,0.55), rgba(0,4,9,0.8)); }
+  background:radial-gradient(ellipse at center, rgba(0,6,12,0.6), rgba(0,3,8,0.78));
+  backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); }
 #hud .over.show { display:flex; }
 #hud .over h1 { font-size:34px; margin:0; color:#9affc0; letter-spacing:5px; }
 #hud .over .big { font-size:22px; }
 #hud .over .blink { font-size:15px; opacity:0.85; animation:wh-blink 1.1s steps(2,end) infinite; }
+#hud .over .intro { max-width:560px; margin:0; font-size:14px; line-height:1.6;
+  letter-spacing:1px; opacity:0.88; text-transform:none; }
+#hud .over .mission { max-width:560px; margin:0; font-size:13px; letter-spacing:2px;
+  color:#9affc0; opacity:0.95; }
+#hud .over .legend { max-width:560px; margin:0; font-size:12px; line-height:1.5;
+  letter-spacing:1px; opacity:0.72; text-transform:none; }
+#hud .over .keys { display:grid; grid-template-columns:auto auto; gap:5px 18px;
+  font-size:13px; align-items:baseline; }
+#hud .over .keys .k { text-align:right; color:#9affc0; letter-spacing:2px; }
+#hud .over .keys .a { text-align:left; opacity:0.65; letter-spacing:2px; }
 @keyframes wh-blink { 50% { opacity:0.15; } }
 `
 
@@ -68,7 +80,7 @@ export function createHud(): Hud {
     <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl">ENERGY</div><div class="track"><div class="fill" id="wh-energy"></div></div></div>
     <div class="spd" id="wh-spd">SPD 00</div>
-    <div class="mute" id="wh-mute">&#9836; MUTED</div>
+    <div class="mute" id="wh-mute">&#9836; MUSIC OFF</div>
     <div class="over" id="wh-over">
       <h1 id="wh-over-title">ENERGY DEPLETED</h1>
       <div class="big" id="wh-over-score">SCORE 0000000</div>
@@ -77,9 +89,17 @@ export function createHud(): Hud {
     </div>
     <div class="over" id="wh-title">
       <h1>WORMHOLE</h1>
-      <div class="big dim">VECTOR TUBE</div>
-      <div class="blink">PRESS SPACE TO START</div>
-      <div class="hint">ARROWS STEER &nbsp;-&nbsp; SPACE FIRES &nbsp;-&nbsp; M MUTES</div>
+      <p class="intro">A wormhole has torn open - a fold in spacetime no craft has crossed and returned from, where relativity bends time and minutes inside are years back home. You are the pilot sent in: ride its gravity deeper and faster into the unknown.</p>
+      <p class="mission">MISSION - chart the deepest passage through spacetime, and live to bring it back.</p>
+      <p class="legend">Blue orbs refill energy &middot; gold is score &middot; red mines and magenta raiders end the run - shoot the raiders before they shoot you.</p>
+      <div class="keys">
+        <span class="k">ARROWS / A D</span><span class="a">STEER UP THE WALLS</span>
+        <span class="k">SPACE</span><span class="a">FIRE</span>
+        <span class="k">M</span><span class="a">MUSIC ON / OFF</span>
+        <span class="k">ESC</span><span class="a">PAUSE / MENU</span>
+        <span class="k">P</span><span class="a">SHOW FPS / PERFORMANCE METRICS</span>
+      </div>
+      <div class="blink" id="wh-title-prompt">PRESS SPACE TO START</div>
     </div>`
   document.body.appendChild(root)
 
@@ -94,6 +114,7 @@ export function createHud(): Hud {
   const elMute = $('wh-mute')
   const elOver = $('wh-over')
   const elTitle = $('wh-title')
+  const elTitlePrompt = $('wh-title-prompt')
   const elOverTitle = $('wh-over-title')
   const elOverScore = $('wh-over-score')
   const elOverBest = $('wh-over-best')
@@ -122,8 +143,9 @@ export function createHud(): Hud {
   let lastMode = ''
   let lastEnergyTenths = -1
   let lastColor = ''
-  let lastMuted = false
+  let lastMusicMuted = false
   let lastTitle = false
+  let lastPrompt = ''
   let lastOver = false
   let lastOverTitle = ''
   let lastOverScore = -1
@@ -152,9 +174,11 @@ export function createHud(): Hud {
         lastColor = color
       }
 
-      if (s.muted !== lastMuted) { elMute.classList.toggle('show', s.muted); lastMuted = s.muted }
-      const titleShow = !s.started && !s.over
+      if (s.musicMuted !== lastMusicMuted) { elMute.classList.toggle('show', s.musicMuted); lastMusicMuted = s.musicMuted }
+      const titleShow = (!s.started && !s.over) || s.paused
       if (titleShow !== lastTitle) { elTitle.classList.toggle('show', titleShow); lastTitle = titleShow }
+      const prompt = s.paused ? 'PRESS SPACE TO RESUME' : 'PRESS SPACE TO START'
+      if (prompt !== lastPrompt) { elTitlePrompt.textContent = prompt; lastPrompt = prompt }
       if (s.over !== lastOver) { elOver.classList.toggle('show', s.over); lastOver = s.over }
       if (s.over) {
         const title = s.lives <= 0 ? 'SHIP DESTROYED' : 'ENERGY DEPLETED'

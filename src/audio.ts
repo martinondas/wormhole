@@ -25,23 +25,23 @@ export interface Audio {
   play(name: SfxName): void
   playMusic(name: MusicName): void // switch the looping music track
   playAccel(): void // one-shot accelerate layer over the music (speed step-up)
-  toggleMute(): void
-  readonly muted: boolean
+  toggleMusic(): void // mute / unmute MUSIC only (menu + play tracks); SFX unaffected
+  readonly musicMuted: boolean
 }
 
-const MUTE_KEY = 'wormhole.muted'
+const MUSIC_MUTE_KEY = 'wormhole.musicMuted'
 
-function loadMuted(): boolean {
+function loadMusicMuted(): boolean {
   try {
-    return localStorage.getItem(MUTE_KEY) === '1'
+    return localStorage.getItem(MUSIC_MUTE_KEY) === '1'
   } catch {
     return false
   }
 }
 
-function saveMuted(m: boolean): void {
+function saveMusicMuted(m: boolean): void {
   try {
-    localStorage.setItem(MUTE_KEY, m ? '1' : '0')
+    localStorage.setItem(MUSIC_MUTE_KEY, m ? '1' : '0')
   } catch {
     /* storage unavailable (private mode) - ignore */
   }
@@ -55,8 +55,8 @@ function silentAudio(): Audio {
     play() {},
     playMusic() {},
     playAccel() {},
-    toggleMute() {},
-    muted: true,
+    toggleMusic() {},
+    musicMuted: false,
   }
 }
 
@@ -68,18 +68,20 @@ export function createAudio(): Audio {
   }
   const ctx = new Ctor()
 
-  let muted = loadMuted()
+  let musicMuted = loadMusicMuted()
 
   const master = ctx.createGain()
-  master.gain.value = muted ? 0 : AUDIO.MASTER_VOLUME
+  master.gain.value = AUDIO.MASTER_VOLUME
   master.connect(ctx.destination)
 
   const sfxBus = ctx.createGain()
   sfxBus.gain.value = AUDIO.SFX_VOLUME
   sfxBus.connect(master)
 
+  // The M mute rides on the musicBus only, so SFX (sfxBus) keep playing when the
+  // music is off. Both music tracks (menu + play) route through here.
   const musicBus = ctx.createGain()
-  musicBus.gain.value = AUDIO.MUSIC_VOLUME
+  musicBus.gain.value = musicMuted ? 0 : AUDIO.MUSIC_VOLUME
   musicBus.connect(master)
 
   // --- procedural SFX (file-less cues) ---------------------------------------
@@ -212,8 +214,8 @@ export function createAudio(): Audio {
   }
   let desired: MusicName | null = null
 
-  // Only the desired track plays; mute is a master-gain concern, so the element
-  // keeps streaming (silently) when muted - unmuting is then instant.
+  // Only the desired track plays; the M mute lives on the musicBus, so a muted
+  // element keeps streaming (silently) and unmuting is instant.
   function applyMusic(): void {
     for (const [name, el] of musicEls) {
       if (name === desired) {
@@ -240,7 +242,7 @@ export function createAudio(): Audio {
     unlock,
 
     play(name: SfxName): void {
-      if (muted) return
+      // SFX are never silenced by M (that mutes music only) - always play.
       const gain = sfxGains.get(name)
       if (!gain) return
       const buf = buffers.get(name)
@@ -267,7 +269,9 @@ export function createAudio(): Audio {
     // step-ups never stack. Each play uses a throwaway source + gain (disconnected
     // on end), like play() - nothing accumulates.
     playAccel(): void {
-      if (muted || !accelBuffer) return
+      // the accelerate sting ducks + layers over the music, so it follows the
+      // music mute rather than playing on its own when the music is off.
+      if (musicMuted || !accelBuffer) return
       if (accelSrc) {
         try {
           accelSrc.stop()
@@ -301,14 +305,17 @@ export function createAudio(): Audio {
       musicBus.gain.linearRampToValueAtTime(m, now + dur)
     },
 
-    toggleMute(): void {
-      muted = !muted
-      master.gain.setTargetAtTime(muted ? 0 : AUDIO.MASTER_VOLUME, ctx.currentTime, AUDIO.MUTE_RAMP)
-      saveMuted(muted)
+    toggleMusic(): void {
+      musicMuted = !musicMuted
+      const t = ctx.currentTime
+      // cancel any in-flight accelerate-duck ramp so the mute is authoritative
+      musicBus.gain.cancelScheduledValues(t)
+      musicBus.gain.setTargetAtTime(musicMuted ? 0 : AUDIO.MUSIC_VOLUME, t, AUDIO.MUTE_RAMP)
+      saveMusicMuted(musicMuted)
     },
 
-    get muted(): boolean {
-      return muted
+    get musicMuted(): boolean {
+      return musicMuted
     },
   }
 }

@@ -361,7 +361,8 @@ export const INPUT = {
   brake: ['ArrowDown', 'KeyS'],
   boost: ['ShiftLeft', 'ShiftRight'], // Space used to boost; it now FIRES (below)
   fire: ['Space'],                    // forward gun (Shift still boosts)
-  mute: ['KeyM'],                     // toggle all audio (handled in main.ts)
+  mute: ['KeyM'],                     // toggle MUSIC on/off (SFX keep playing; handled in main.ts)
+  pause: ['Escape'],                  // pause a live run back to the intro/menu screen (handled in main.ts)
   modeCycle: ['KeyG'],                // cycle flight mode for testing (handled in main.ts)
   perf: ['KeyP'],                     // toggle the FPS / frame-time overlay (handled in main.ts)
 }
@@ -381,7 +382,7 @@ export const AUDIO = {
   MASTER_VOLUME: 0.9,
   MUSIC_VOLUME: 0.5,
   SFX_VOLUME: 0.85,
-  MUTE_RAMP: 0.05,     // seconds to ramp master gain on mute toggle
+  MUTE_RAMP: 0.05,     // seconds to ramp the music gain on the M mute toggle
   // Looping music tracks. 'menu' plays on the title + game-over screens, 'play'
   // during a run. playMusic(name) switches; only one track sounds at a time.
   MUSIC: {

@@ -44,6 +44,7 @@ const game = createGame()
 const hud = createHud()
 const perf = createPerfOverlay() // press P to toggle the FPS / frame-time overlay
 const audio = createAudio()
+let paused = false // Esc pauses a live run to the intro/menu screen; resume with Space or Esc
 audio.arm() // a click/tap to focus the canvas wakes the menu track (autoplay policy)
 audio.playMusic(musicTrack()) // 'menu' on the title; queued until the first gesture unlocks audio
 
@@ -167,11 +168,12 @@ let lastMusic: 'menu' | 'play' = musicTrack() // cache: switch tracks only on ch
 // run track otherwise. Driven every frame (playMusic no-ops when unchanged) and
 // in beginRun (before unlock) so the menu never blips on start.
 function musicTrack(): 'menu' | 'play' {
-  return !game.started || game.over ? 'menu' : 'play'
+  return !game.started || game.over || paused ? 'menu' : 'play'
 }
 
 function beginRun(): void {
   game.start()
+  paused = false
   lastTargetSpeed = flight.targetSpeedAt(craft.distance) // no accel sting on the first step
   // queue the run track before unlocking so audio releases straight to it - the
   // menu track never sounds when Space is the very first (unlocking) keypress.
@@ -192,7 +194,7 @@ function restart(): void {
 
 window.addEventListener('keydown', (e) => {
   if (INPUT.mute.includes(e.code)) {
-    audio.toggleMute()
+    audio.toggleMusic()
     return
   }
   if (INPUT.modeCycle.includes(e.code)) {
@@ -201,6 +203,15 @@ window.addEventListener('keydown', (e) => {
   }
   if (INPUT.perf.includes(e.code)) {
     perf.toggle()
+    return
+  }
+  if (INPUT.pause.includes(e.code)) {
+    // Esc: pause a live run to the intro/menu screen, or resume from it.
+    if (game.started && !game.over) {
+      e.preventDefault()
+      paused = !paused
+      if (!paused) input.releaseFireKeys()
+    }
     return
   }
   const confirm = e.code === 'Space' || e.code === 'Enter'
@@ -215,6 +226,10 @@ window.addEventListener('keydown', (e) => {
   } else if (game.over && confirm) {
     e.preventDefault()
     restart()
+  } else if (paused && confirm) {
+    e.preventDefault()
+    paused = false
+    input.releaseFireKeys() // the resuming Space must not fire a bolt
   }
 })
 
@@ -229,7 +244,7 @@ const tierIndexAt = (worldDist: number): number => flight.tierIndexAt(worldDist)
 startLoop(
   fixedDt,
   (dt) => {
-    if (!game.started || debug.paused || game.over) return
+    if (!game.started || debug.paused || game.over || paused) return
     // targetSpeed + speed-tied gravity are computed once per frame (preUpdate)
     // and reused across this frame's substeps - they are stable within a frame.
     updateCraft(craft, input.state, frameTargetSpeed, frameGravity, dt)
@@ -275,7 +290,8 @@ startLoop(
       lives: game.lives,
       over: game.over,
       started: game.started,
-      muted: audio.muted,
+      paused,
+      musicMuted: audio.musicMuted,
       flightMode: flight.mode,
       best: game.best,
     })
@@ -285,7 +301,7 @@ startLoop(
     // and the speed-tied gravity are stable across a frame, so compute them here
     // rather than every substep (they fed updateCraft ~120-240x/s before).
     preUpdate: () => {
-      if (!game.started || debug.paused || game.over) return
+      if (!game.started || debug.paused || game.over || paused) return
       frameTargetSpeed = flight.targetSpeedAt(craft.distance)
       if (frameTargetSpeed > lastTargetSpeed) audio.playAccel() // tier stepped up
       lastTargetSpeed = frameTargetSpeed
