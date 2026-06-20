@@ -11,6 +11,7 @@ export interface Game {
   lives: number
   invuln: number // seconds of invulnerability remaining (0 = vulnerable)
   scoreBonus: number // points from treasures etc. (distance is added on top)
+  started: boolean // false on the title screen; true once the first run begins (stays true)
   over: boolean
   best: number
   score(distance: number): number
@@ -19,6 +20,7 @@ export interface Game {
   canFire(): boolean // enough energy (and not over) to fire one shot
   spendEnergy(n: number): void // gun cost; clamps at 0 but NEVER ends the run (only update() does)
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
+  start(): void // leave the title screen and begin the first run
   update(dt: number, distance: number): void
   restart(): void
 }
@@ -55,6 +57,7 @@ export function createGame(): Game {
     lives: LIVES.START,
     invuln: 0,
     scoreBonus: 0,
+    started: false,
     over: false,
     best: loadBest(),
 
@@ -93,6 +96,10 @@ export function createGame(): Game {
       return true
     },
 
+    start(): void {
+      this.started = true
+    },
+
     update(dt: number, distance: number): void {
       if (this.over) return
       if (this.invuln > 0) this.invuln = Math.max(0, this.invuln - dt)
@@ -110,6 +117,7 @@ export function createGame(): Game {
       this.lives = LIVES.START
       this.invuln = 0
       this.scoreBonus = 0
+      this.started = true // a restart goes straight into a live run, never back to the title
       this.over = false
     },
   }

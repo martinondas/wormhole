@@ -26,11 +26,21 @@ const vh = Number(process.env.SHOOT_H ?? 900)
 const page = await browser.newPage({ viewport: { width: vw, height: vh }, deviceScaleFactor: 1 })
 
 const errors: string[] = []
-page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
-page.on('pageerror', (e) => errors.push(String(e)))
+// Ignore audio diagnostics: a headless capture has no user gesture and may lack
+// the optional mp3s, so the audio module's load/unlock noise is expected here
+// and must not fail the visual check (which gates on errors[] below).
+const isAudioNoise = (s: string): boolean => s.includes('[audio]')
+page.on('console', (m) => { if (m.type() === 'error' && !isAudioNoise(m.text())) errors.push(m.text()) })
+page.on('pageerror', (e) => { if (!isAudioNoise(String(e))) errors.push(String(e)) })
 
 await page.goto(url, { waitUntil: 'load', timeout: 30000 })
 await page.waitForTimeout(waitMs)
+
+// Leave the title screen so poses capture live gameplay, not the start gate.
+await page.evaluate(() => {
+  const wh = (globalThis as Record<string, unknown>).WH as { begin?: () => void } | undefined
+  wh?.begin?.()
+})
 
 // Optional: hold one or more keys (KeyboardEvent.code, comma-separated) for
 // SHOOT_HOLD_MS before the capture, to verify steering/throttle in a still.

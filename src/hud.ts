@@ -10,6 +10,8 @@ export interface HudState {
   energy01: number // 0..1
   lives: number
   over: boolean
+  started: boolean // false on the title screen (before the first run begins)
+  muted: boolean
   best: number
 }
 
@@ -34,6 +36,10 @@ const CSS = `
 #hud .fill { height:100%; width:100%; background:#5dff9b;
   box-shadow:0 0 8px currentColor; transition:width 0.08s linear; }
 #hud .spd { position:absolute; right:20px; bottom:20px; font-size:15px; text-align:right; }
+#hud .mute { position:absolute; right:20px; top:44px; font-size:12px; color:#ff8a6a;
+  text-shadow:0 0 6px rgba(255,120,90,0.55); opacity:0; transition:opacity 0.15s; }
+#hud .mute.show { opacity:0.9; }
+#hud .over .hint { font-size:12px; opacity:0.5; }
 #hud .over { position:absolute; inset:0; display:none; flex-direction:column;
   align-items:center; justify-content:center; gap:14px; text-align:center;
   background:radial-gradient(ellipse at center, rgba(0,8,14,0.55), rgba(0,4,9,0.8)); }
@@ -61,11 +67,18 @@ export function createHud(): Hud {
     <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl">ENERGY</div><div class="track"><div class="fill" id="wh-energy"></div></div></div>
     <div class="spd" id="wh-spd">SPD 00</div>
+    <div class="mute" id="wh-mute">&#9836; MUTED</div>
     <div class="over" id="wh-over">
       <h1 id="wh-over-title">ENERGY DEPLETED</h1>
       <div class="big" id="wh-over-score">SCORE 0000000</div>
       <div id="wh-over-best" class="dim">BEST 0000000</div>
       <div class="blink">PRESS SPACE TO RESTART</div>
+    </div>
+    <div class="over" id="wh-title">
+      <h1>WORMHOLE</h1>
+      <div class="big dim">VECTOR TUBE</div>
+      <div class="blink">PRESS SPACE TO START</div>
+      <div class="hint">ARROWS STEER &nbsp;-&nbsp; SPACE FIRES &nbsp;-&nbsp; M MUTES</div>
     </div>`
   document.body.appendChild(root)
 
@@ -76,7 +89,9 @@ export function createHud(): Hud {
   const elLives = $('wh-lives')
   const elEnergy = $('wh-energy')
   const elSpd = $('wh-spd')
+  const elMute = $('wh-mute')
   const elOver = $('wh-over')
+  const elTitle = $('wh-title')
   const elOverTitle = $('wh-over-title')
   const elOverScore = $('wh-over-score')
   const elOverBest = $('wh-over-best')
@@ -107,6 +122,8 @@ export function createHud(): Hud {
       elEnergy.style.background = color
       elEnergy.style.color = color // drives the box-shadow glow
 
+      elMute.classList.toggle('show', s.muted)
+      elTitle.classList.toggle('show', !s.started && !s.over)
       elOver.classList.toggle('show', s.over)
       if (s.over) {
         elOverTitle.textContent = s.lives <= 0 ? 'SHIP DESTROYED' : 'ENERGY DEPLETED'

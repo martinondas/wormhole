@@ -327,4 +327,35 @@ export const INPUT = {
   brake: ['ArrowDown', 'KeyS'],
   boost: ['ShiftLeft', 'ShiftRight'], // Space used to boost; it now FIRES (below)
   fire: ['Space'],                    // forward gun (Shift still boosts)
+  mute: ['KeyM'],                     // toggle all audio (handled in main.ts)
+}
+
+// --- audio: mp3 music + sfx (Web Audio) -------------------------------------
+// Files live in public/audio/ and are copied verbatim into dist/ (Vite). Paths
+// are RELATIVE (no leading slash) so they resolve under base './' on the dev
+// server, npm run preview, and a GitHub Pages subpath alike. SFX are fetched +
+// decoded once into AudioBuffers (low latency, freely overlapping); music is a
+// looping <audio> element streamed through the context. A missing/undecodable
+// file is logged and skipped - it never breaks the run. Volumes are 0..1.
+export const AUDIO = {
+  MASTER_VOLUME: 0.9,
+  MUSIC_VOLUME: 0.5,
+  SFX_VOLUME: 0.85,
+  MUTE_RAMP: 0.05,     // seconds to ramp master gain on mute toggle
+  // Looping music tracks. 'menu' plays on the title + game-over screens, 'play'
+  // during a run. playMusic(name) switches; only one track sounds at a time.
+  MUSIC: {
+    menu: 'audio/menu.mp3',
+    play: 'audio/music.mp3',
+  },
+  // key = event name used in main.ts: audio.play('shoot') etc.
+  SFX: {
+    shoot:     { src: 'audio/shoot.mp3',      volume: 0.55 },
+    orb:       { src: 'audio/orb.mp3',        volume: 0.8 },
+    gem:       { src: 'audio/gem.mp3',        volume: 0.8 },
+    enemyFire: { src: 'audio/enemy-fire.mp3', volume: 0.45 },
+    kill:      { src: 'audio/kill.mp3',       volume: 0.85 },
+    hit:       { src: 'audio/hit.mp3',        volume: 0.95 },
+    gameover:  { src: 'audio/gameover.mp3',   volume: 0.9 },
+  },
 }
