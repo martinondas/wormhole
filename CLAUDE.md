@@ -27,8 +27,16 @@ Design priorities that drive the code:
   at the cycle boundary and the same level repeats - same speeds, same three tier colors, no
   level-up - until you qualify. This pulls the player into active collecting instead of coasting;
   forward motion never stops (more flying always means more gems). A HUD pip row shows progress.
-- Difficulty ramps with level: faster, denser obstacles, tighter gaps - this is the run's
-  pressure, not a survival clock.
+- Difficulty ramps with level and never plateaus, but stays winnable - this is the run's
+  pressure, not a survival clock. Guiding principle for future tuning:
+  - Speed keeps rising forever but with a DECAYING increment, so reaction windows tighten
+    without collapsing (a flat per-level increase eventually makes the run unplayable).
+  - Deep-game pressure comes mainly from CONTENT, not raw speed: more enemies first, then
+    enemy aggression (fire rate, persistence). Mines are a secondary threat with a
+    playability floor; weapon charge is a resource to manage.
+  - Combat geometry is speed-invariant by design (bolts are ship-relative, steering is
+    angular), so dodging and aiming are as fair at high levels as at low ones. Deep levels
+    should be hard but fair - never a pure reflex wall that raw speed alone would create.
 - Death leads to a score screen (score, level reached, run time), then restart. Local best persists.
 - HUD is minimal and in-theme (thin green vector text/lines): level, gem-gate pips, score, best,
   run time, lives, weapon charge, speed.
@@ -57,13 +65,17 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - physics:  PHYSICS.{GRAVITY_K, DAMPING_C, STEER_TORQUE, STEER_OMEGA_MAX (soft spin cap),
             STEER_ATTACK, STEER_RELEASE, HZ}
 - speed:    SLOW / NORMAL / FAST (the three tier speeds, level-1 base; raised per level
-            by LEVELS.SPEED_INCREMENT), EASE (accel toward the active tier). Speed is set
+            by the LEVELS speed bonus), EASE (accel toward the active tier). Speed is set
             by the flight tier/section, not a player throttle; FLIGHT.{MODE, SECTION_SECONDS}
             + tube tier colors live alongside.
-- levels:   LEVELS.{SPEED_INCREMENT, SCORE_MULT_STEP, GEM_QUOTA_FRACTION (gem gate: fraction
-            of one cycle's gems needed to advance a level; derived quota in flight.ts), GRAVITY_MODE
-            ('tier' default | 'absolute'), MAX_ENEMIES_CAP, BEYOND_ENEMY_LEVELS, TABLE[] (per-level
-            enemyMax + orb/bombSpacingMult - speed-normalized per-second rate multipliers)}
+- levels:   LEVELS.{SPEED_STEP/SPEED_BAND (per-level speed bonus: a decaying-but-never-zero
+            increment in bands - EARLY/MID/LATE by display level - so deep levels keep speeding
+            up, slowly; derived in flight.ts speedBonus), SCORE_MULT_STEP, GEM_QUOTA_FRACTION
+            (gem gate: fraction of one cycle's gems needed to advance a level; derived quota in
+            flight.ts), GRAVITY_MODE ('tier' default | 'absolute'), MAX_ENEMIES_CAP,
+            BEYOND_ENEMY_LEVELS, BOMB_MULT_STEP/BOMB_MULT_FLOOR (mines keep tightening past the
+            table to a floor; bombMult in levels.ts), TABLE[] (per-level enemyMax +
+            orb/bombSpacingMult - speed-normalized per-second rate multipliers; orb flat, bomb tightens)}
 - tube:     TUBE.{RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES}
 - ship:     SHIP.{Z, RADIAL_OFFSET, SCALE, BANK, LINE_WIDTH, FLASH_HOLD, FLASH_TIME}; RIDE_RADIUS derived
 - camera:   CAMERA.{FOV, HFOV_MAX, BACK, RISE, LOOK_AHEAD, ORBIT_FOLLOW, ROLL_FOLLOW, AIM_FOLLOW, FOLLOW_LAG}
@@ -223,7 +235,8 @@ and on-aesthetic.
           calibrated in M4). BUILT + verified (npm run sim; build + screenshots).
 - [x] M4  Difficulty levels. One level = one slow->normal->fast cycle (~30s, derived
           from the tier count x FLIGHT.SECTION_SECONDS, not hard-coded). Per level the
-          tier speeds rise by LEVELS.SPEED_INCREMENT, a score multiplier 1+(level-1)*0.5
+          tier speeds rise per level (a decaying-but-never-zero speed bonus, see
+          LEVELS.SPEED_STEP/SPEED_BAND), a score multiplier 1+(level-1)*0.5
           scales gems + kills (NOT distance), and LEVELS.TABLE sets max enemies +
           orb/bomb frequency (speed-normalized via `flight.speedRatioAt` so the
           multipliers mean a per-second rate; a procedural ramp continues past the
@@ -248,15 +261,33 @@ and on-aesthetic.
           accruing distance let camping out-score progressing. BUILT + verified (sim:levels
           gate checks; combat sim incl. passive-scores-0; build; live Playwright: advance on
           quota met / hold when short / pips / movement intact).
+- [x] M6  Difficulty curve tuning (playtest: a kid reached ~L17, "too fast, too few
+          enemies"). Diagnosis: from ~L9 only speed scaled (linear +5/level, unbounded),
+          while enemy count capped at 6 and mine/orb density froze at the L5 table row.
+          Fixes: (a) speed bonus is now a decaying-but-never-zero banded increment
+          (SPEED_STEP/SPEED_BAND: +5/lvl L1-10, +3 L11-15, +1.5 L16+), so L17 fast is 138
+          not 155 and it never plateaus; (b) MAX_ENEMIES_CAP 6 -> 10 (reached ~L17 via the
+          existing ramp); (c) mines +10% baseline (SPAWN_SPACING 125 -> 114) plus a gentle
+          ramp past the table to a playable floor (BOMB_MULT_STEP/FLOOR, bombMult in
+          levels.ts); (d) orb frequency flat across levels (rising speed already makes orbs
+          harder to catch) and ENERGY.START 100 -> 60 so early levels feel the meter; (e)
+          DAMPING_C 1.0 -> 1.3 (settles at the bottom a bit faster). BUILT + verified
+          (sim:levels 40+ checks incl. speed-decay + bomb-floor; combat sim; build). Deep
+          enemy aggression (fire-rate scaling, persistence) deliberately deferred - see Next up.
 
 ### Next up (start here)
-1. Enemy persistence (change a little at a time): raiders currently ENGAGE then
-   DEPART/recycle (they "give up"). Goal: on engage-timeout, hold and slowly close the
-   band instead of departing, with fire rate rising as they get nearer. Raw count per
-   level is already a LEVELS.TABLE lever; persistence is its own increment.
-2. High-level combat scaling: ENEMY.BULLET_SPEED / GUN.BOLT_SPEED are not scaled per
-   level, so at deep levels craft speed approaches enemy bolt speed. Scale bolt speeds
-   (or lead) with level once high levels are actually reached in playtest.
+1. Enemy persistence + fire-rate scaling (the deep-difficulty lever, deferred from M6):
+   raiders currently ENGAGE then DEPART/recycle (they "give up"), and FIRE_COOLDOWN never
+   scales. Goal: on engage-timeout, hold and slowly close the band instead of departing,
+   with fire rate rising as they get nearer / per level. M6 raised the raw count cap to 10;
+   this is where "never plateau" difficulty comes from once the count cap is reached. Add
+   only if playtest shows deep levels still feel thin - watch out that 10 telegraphed
+   shooters do not become bullet-hell (floor the cooldown so each shot stays dodgeable).
+2. High-level combat scaling: bolts are SHIP-RELATIVE (projectiles.ts), so the dodge/aim
+   geometry is already speed-invariant - an enemy bolt always gives ~0.45s tell + ~0.33s
+   travel regardless of craft speed, so deep levels are not unfair on this axis. Open only:
+   bolts may LOOK slow against fast-scrolling walls at deep levels; revisit BULLET_SPEED /
+   BOLT_SPEED lead for feel (not fairness) once high levels are reached in playtest.
 3. Combat polish deferred from M3: a muzzle flash on fire and a richer head-on raider
    silhouette. Playtest the near-edge enemy-bolt dodge window (ENGAGE_Z_NEAR) and only
    widen it if it reads as unfair.

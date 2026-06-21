@@ -49,11 +49,24 @@ export interface Flight {
 
 export function createFlight(): Flight {
   const secs = FLIGHT.SECTION_SECONDS
-  const inc = LEVELS.SPEED_INCREMENT
   const step = LEVELS.SCORE_MULT_STEP
 
+  // Per-level speed bonus added to every tier: a decaying-but-never-zero increment
+  // across three bands by (0-based) level, so early levels keep the original +5 step
+  // while deep levels still speed up, ever more slowly (never plateaus). earlyN is the
+  // count of full-EARLY increments (display L1->L10 = 9), midN the MID ones (L11->L15 = 5).
+  const earlyN = LEVELS.SPEED_BAND.EARLY_UNTIL - 1
+  const midN = LEVELS.SPEED_BAND.MID_UNTIL - LEVELS.SPEED_BAND.EARLY_UNTIL
+  const speedBonus = (level: number): number => {
+    const { EARLY, MID, LATE } = LEVELS.SPEED_STEP
+    const early = Math.min(level, earlyN)
+    const mid = clamp(level - earlyN, 0, midN)
+    const late = Math.max(level - earlyN - midN, 0)
+    return early * EARLY + mid * MID + late * LATE
+  }
+
   // tier speed at a level, and the distance length of one section / a full level.
-  const tierSpeed = (level: number, tier: number): number => (BASE[tier] ?? SPEED.NORMAL) + level * inc
+  const tierSpeed = (level: number, tier: number): number => (BASE[tier] ?? SPEED.NORMAL) + speedBonus(level)
   const sectionLen = (level: number, tier: number): number => tierSpeed(level, tier) * secs
   const cycleLen = (level: number): number => {
     let s = 0

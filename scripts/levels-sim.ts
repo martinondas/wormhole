@@ -22,10 +22,19 @@ const approx = (a: number, b: number, eps = 1e-6): boolean => Math.abs(a - b) <=
 
 // Derived expectations (mirror flight.ts math, computed independently here).
 const secs = FLIGHT.SECTION_SECONDS
-const inc = LEVELS.SPEED_INCREMENT
 const step = LEVELS.SCORE_MULT_STEP
 const base = [SPEED.SLOW, SPEED.NORMAL, SPEED.FAST]
-const tierSpeed = (lvl: number, t: number): number => base[t]! + lvl * inc
+// banded, decaying-but-never-zero per-level speed bonus (mirror of flight.ts speedBonus)
+const earlyN = LEVELS.SPEED_BAND.EARLY_UNTIL - 1
+const midN = LEVELS.SPEED_BAND.MID_UNTIL - LEVELS.SPEED_BAND.EARLY_UNTIL
+const speedBonus = (lvl: number): number => {
+  const { EARLY, MID, LATE } = LEVELS.SPEED_STEP
+  const early = Math.min(lvl, earlyN)
+  const mid = Math.max(0, Math.min(lvl - earlyN, midN))
+  const late = Math.max(0, lvl - earlyN - midN)
+  return early * EARLY + mid * MID + late * LATE
+}
+const tierSpeed = (lvl: number, t: number): number => base[t]! + speedBonus(lvl)
 const cycleLen = (lvl: number): number => (tierSpeed(lvl, 0) + tierSpeed(lvl, 1) + tierSpeed(lvl, 2)) * secs
 const gemQuota = (lvl: number): number => Math.round((cycleLen(lvl) / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
 
@@ -150,21 +159,22 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   check('G5 pinned fast: target = base fast, level 0', approx(f.targetSpeed(), SPEED.FAST) && f.level === 0)
 })()
 
-// ---- H) speed-normalized density levers (orb rarity must tighten, not loosen) ----
+// ---- H) speed-normalized density levers (orbs flat per second; bombs tighten) ----
 ;(() => {
   const f1 = createFlight() // gated level 0: ratios are 1
   check('H1 speedRatio = 1 at level 1', approx(f1.speedRatioAt(100), 1))
   check('H2 speedRatio = 1 at level 1 (any tier)', approx(f1.speedRatioAt(1000), 1))
   // L5 = 0-based level 4; its normal section sits after its slow section
   const c4 = cumStart(4)
-  const slowLenL5 = (base[0]! + 4 * inc) * secs
+  const slowLenL5 = (base[0]! + speedBonus(4)) * secs
   const dNormalL5 = c4 + slowLenL5 + 50
   const f5 = flyTo(dNormalL5, ACTIVE) // active player reaches level 4 by this distance
-  check('H3 speedRatio L5 normal tier = (52+20)/52', approx(f5.speedRatioAt(dNormalL5), (base[1]! + 4 * inc) / base[1]!), `${f5.speedRatioAt(dNormalL5)}`)
+  check('H3 speedRatio L5 normal tier = (52+20)/52', approx(f5.speedRatioAt(dNormalL5), (base[1]! + speedBonus(4)) / base[1]!), `${f5.speedRatioAt(dNormalL5)}`)
 
   // Encounter rate per second = tierSpeed / (baseSpacing * mult * speedRatio).
-  // The fix: this must FALL for orbs as orbSpacingMult rises (energy gets harder),
-  // and RISE for bombs as bombSpacingMult falls (more bombs/s) - both vs level 1.
+  // Design: orbs are FLAT per second across levels (rising speed already makes them
+  // harder to catch, so they do not also thin out), while bombs get DENSER per second
+  // as bombSpacingMult falls. Both vs level 1.
   const orbRate = (f: Flight, lvl: number, dist: number): number => {
     const mult = LEVELS.TABLE[Math.min(lvl, LEVELS.TABLE.length - 1)]!.orbSpacingMult
     return tierSpeed(lvl, 1) / (PICKUP.SPAWN_SPACING * mult * f.speedRatioAt(dist))
@@ -175,10 +185,36 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   }
   const orbL1 = orbRate(f1, 0, 400) // L1 normal section
   const orbL5 = orbRate(f5, 4, dNormalL5)
-  check('H4 orb rate FALLS L1 -> L5 (energy harder, fix works)', orbL5 < orbL1, `L1 ${orbL1.toFixed(3)}/s -> L5 ${orbL5.toFixed(3)}/s`)
+  check('H4 orb rate is FLAT L1 -> L5 (count unchanged; speed makes catching harder)', approx(orbL5, orbL1), `L1 ${orbL1.toFixed(3)}/s -> L5 ${orbL5.toFixed(3)}/s`)
   const bombL1 = bombRate(f1, 0, 400)
   const bombL5 = bombRate(f5, 4, dNormalL5)
   check('H5 bomb rate RISES L1 -> L5 (denser, as intended)', bombL5 > bombL1, `L1 ${bombL1.toFixed(3)}/s -> L5 ${bombL5.toFixed(3)}/s`)
+})()
+
+// ---- J) speed curve: per-level increment decays across bands but never plateaus ----
+;(() => {
+  const incAt = (lvl: number): number => tierSpeed(lvl, 2) - tierSpeed(lvl - 1, 2) // increment INTO level lvl
+  // 0-based: lvl 1..9 are EARLY, 10..14 MID, 15+ LATE
+  check('J1 EARLY band increment = SPEED_STEP.EARLY', approx(incAt(9), LEVELS.SPEED_STEP.EARLY), `${incAt(9)}`)
+  check('J2 MID band increment = SPEED_STEP.MID', approx(incAt(10), LEVELS.SPEED_STEP.MID), `${incAt(10)}`)
+  check('J3 LATE band increment = SPEED_STEP.LATE', approx(incAt(15), LEVELS.SPEED_STEP.LATE), `${incAt(15)}`)
+  check('J4 increment decays EARLY > MID > LATE', incAt(9) > incAt(10) && incAt(10) > incAt(15))
+  check('J5 never plateaus (every increment > 0)', incAt(40) > 0, `${incAt(40)}`)
+  // L17 fast (0-based 16) lands where the design says (~138), well below the old linear 155
+  check('J6 L17 fast ~ 138 (tamed from old 155)', approx(tierSpeed(16, 2), 138), `${tierSpeed(16, 2)}`)
+})()
+
+// ---- K) mine density: tightens past the table to a floor (mirror of levels.ts bombMult) ----
+;(() => {
+  const bombMult = (lvl: number): number => {
+    const t = LEVELS.TABLE
+    if (lvl < t.length) return t[lvl]!.bombSpacingMult
+    const last = t[t.length - 1]!.bombSpacingMult
+    return Math.max(LEVELS.BOMB_MULT_FLOOR, last - (lvl - (t.length - 1)) * LEVELS.BOMB_MULT_STEP)
+  }
+  check('K1 past-table mines denser than L5', bombMult(8) < LEVELS.TABLE[LEVELS.TABLE.length - 1]!.bombSpacingMult, `${bombMult(8)}`)
+  check('K2 mine multiplier floored (playable)', approx(bombMult(99), LEVELS.BOMB_MULT_FLOOR), `${bombMult(99)}`)
+  check('K3 floor never goes below config floor', bombMult(99) >= LEVELS.BOMB_MULT_FLOOR - 1e-9)
 })()
 
 // ---- I) gem gate: quota scaling + advance / replay behavior ----

@@ -15,7 +15,7 @@ export const PHYSICS = {
   GRAVITY_K: 11.0,    // restoring strength: angAccel includes -K*sin(theta).
                       // higher = snappier swing + harder to loop over the top.
                       // (loop needs omega_bottom > ~2*sqrt(K) = ~6.6 here)
-  DAMPING_C: 1.0,     // damping on omega: overshoots then settles. Higher = the
+  DAMPING_C: 1.3,     // damping on omega: overshoots then settles. Higher = the
                       // craft stabilizes at the bottom sooner (fewer left-rights)
   STEER_TORQUE: 19.5, // angular accel added by full steering input (rad/s^2). Higher =
                       // quicker direction change / less sluggish, especially at high
@@ -65,13 +65,23 @@ export const SPEED = {
 // gem-gated: it advances at a cycle boundary only once GEM_QUOTA_FRACTION of the
 // cycle's gems are collected, else the same cycle repeats - so a level lasts one
 // cycle if you meet the quota and longer if you fall short (see flight.ts). Each
-// level above 1 shifts every tier speed up by SPEED_INCREMENT and raises the score
-// multiplier. Per-level enemy cap + orb/bomb frequency come from TABLE (level 1 =
-// index 0); beyond the table the last row holds and the enemy cap keeps ramping.
+// level above 1 shifts every tier speed up by a per-level speed bonus (decaying but
+// never zero, see SPEED_STEP/SPEED_BAND) and raises the score multiplier. Per-level
+// enemy cap + orb/bomb frequency come from TABLE (level 1 = index 0); beyond the
+// table the enemy cap keeps ramping and the mine multiplier keeps tightening (to a
+// floor); orb frequency is flat across levels (rising speed already makes orbs harder
+// to catch, so they do not also need to thin out).
 // Levels only progress in FLIGHT.MODE 'sections' (the game); pinned slow/normal/fast
 // modes (G key) stay at level 1 with no gate.
 export const LEVELS = {
-  SPEED_INCREMENT: 5,   // u/s added to EVERY tier per level above 1 (L1 fast 75 -> L5 fast 95)
+  // Per-level speed bonus added to EVERY tier. A DECAYING-but-never-zero increment
+  // in three bands (by display level), so early levels keep the original +5/level
+  // while deep levels still speed up, ever more slowly - it never plateaus. Derived
+  // in flight.ts (speedBonus). Bands: L1-10 use EARLY, L11-15 use MID, L16+ use LATE.
+  //   fast tier (base 75): L10 -> 120, L15 -> 135, L17 -> 138, L20 -> 142.5, L30 -> 157.5
+  // (was a flat +5/level: L17 -> 155, L30 -> 220 - far too fast deep).
+  SPEED_STEP: { EARLY: 5, MID: 3, LATE: 1.5 },    // u/s added per level in each band
+  SPEED_BAND: { EARLY_UNTIL: 10, MID_UNTIL: 15 }, // display level the EARLY / MID band ends at
   SCORE_MULT_STEP: 0.5, // score multiplier = 1 + (level-1) * this (L1 x1.0, L2 x1.5, L3 x2.0 ...)
                         // scales gem + kill points (the whole score; there is no distance term)
   // Gem gate: a level advances only when you have collected this FRACTION of the gems
@@ -91,17 +101,26 @@ export const LEVELS = {
   //                a free rotor, no pendulum. Flip here if high-level slow sections
   //                feel too sluggish; accept that deep levels lose the pendulum.
   GRAVITY_MODE: 'tier' as 'tier' | 'absolute',
-  MAX_ENEMIES_CAP: 6,       // hard ceiling on the enemy pool size (sizes the pool once)
+  MAX_ENEMIES_CAP: 10,      // hard ceiling on the enemy pool size (sizes the pool once)
   BEYOND_ENEMY_LEVELS: 2,   // past the table, enemy cap rises by 1 every this many levels
+                            // (from 6 at L9 -> 10 at L17, then held by the cap)
+  // Mines keep getting denser past the table down to a floor (they are the SECONDARY
+  // threat, so they level off where enemies carry the deep difficulty). bombMult in
+  // levels.ts subtracts BOMB_MULT_STEP per level past the last TABLE row, clamped at
+  // BOMB_MULT_FLOOR (0.65 = ~54% denser/s than L1, reached ~L15).
+  BOMB_MULT_STEP: 0.01,     // mine multiplier tightening per level past the table (gentle)
+  BOMB_MULT_FLOOR: 0.65,    // densest mines ever reach (playability floor)
   // Per-level tuning. orb/bombSpacingMult are ENCOUNTER-RATE multipliers vs level 1
   // (speed-normalized in main.ts, so they hold their meaning as the tube speeds up):
   // >1 = rarer per second, <1 = denser per second. enemyMax = max raiders alive at once.
+  // orbSpacingMult is flat 1.0 (rising speed already makes orbs harder to catch);
+  // bombSpacingMult tightens L1->L5 here, then keeps tightening via bombMult past it.
   TABLE: [
     { enemyMax: 2, orbSpacingMult: 1.0, bombSpacingMult: 1.0 },  // L1 (matches current tuning)
-    { enemyMax: 2, orbSpacingMult: 1.05, bombSpacingMult: 0.92 }, // L2
-    { enemyMax: 3, orbSpacingMult: 1.1, bombSpacingMult: 0.85 },  // L3
-    { enemyMax: 3, orbSpacingMult: 1.15, bombSpacingMult: 0.8 },  // L4
-    { enemyMax: 4, orbSpacingMult: 1.2, bombSpacingMult: 0.75 },  // L5
+    { enemyMax: 2, orbSpacingMult: 1.0, bombSpacingMult: 0.92 }, // L2
+    { enemyMax: 3, orbSpacingMult: 1.0, bombSpacingMult: 0.85 }, // L3
+    { enemyMax: 3, orbSpacingMult: 1.0, bombSpacingMult: 0.8 },  // L4
+    { enemyMax: 4, orbSpacingMult: 1.0, bombSpacingMult: 0.75 }, // L5
   ],
 }
 
@@ -285,7 +304,7 @@ export const HAZARD = {
   // --- field / spawn (sparse to start; latest start so it doesn't cluster) ---
   COUNT: 5,            // mines alive in the pool; enough to keep the field filling cleanly from the fog
   SPAWN_START: 120,
-  SPAWN_SPACING: 125,  // nominal distance between mines
+  SPAWN_SPACING: 114,  // nominal distance between mines (was 125: ~10% denser overall baseline)
   SPAWN_JITTER: 30,
   RECYCLE_BEHIND: 22,
   // Slow (yellow, full-gravity) sections spawn 30% more mines: their spacing is
@@ -350,7 +369,8 @@ export const EXTRA_LIFE = {
 // to limit churn; the player-facing label is WEAPON.
 export const ENERGY = {
   MAX: 100,
-  START: 100,
+  START: 60,     // start with the weapon part-charged (~20 shots) so early levels feel
+                 // the meter; a full 100 made the first minute a free-fire range
   PER_ORB: 20,   // charge refilled per collected blue orb
   LOW: 0.28,     // fraction below which the bar turns yellow (low ammo). Below one
                  // shot's worth of charge (GUN.COST/MAX) the bar turns red (empty).

@@ -6,10 +6,10 @@ import { type Flight } from './flight'
 // the level -> tuning math sits in one focused place.
 //
 // Spacing is in DISTANCE but the field scrolls at craft speed, so encounter rate =
-// speed / spacing. Multiplying by flight.speedRatioAt makes the TABLE multipliers
-// mean a per-second rate vs level 1 (orbSpacingMult 1.2 = 20% rarer per second)
-// rather than drifting as the per-level speed rises. All lookups read the live
-// level / tier at the spawn distance, so slots placed a level ahead still pack right.
+// speed / spacing. Multiplying by flight.speedRatioAt makes the multipliers mean a
+// per-second rate vs level 1 (bombSpacingMult 0.75 = 33% denser per second) rather
+// than drifting as the per-level speed rises. All lookups read the live level / tier
+// at the spawn distance, so slots placed a level ahead still pack right.
 export interface LevelTuning {
   enemyMax(level: number): number // max raiders alive at once for a level
   orbSpacingScale(worldDistance: number): number // orb spacing multiplier at a distance
@@ -19,6 +19,18 @@ export interface LevelTuning {
 // The TABLE row for a level (clamped to the last row beyond the table).
 const levelRow = (level: number): (typeof LEVELS.TABLE)[number] =>
   LEVELS.TABLE[Math.min(level, LEVELS.TABLE.length - 1)] ?? LEVELS.TABLE[LEVELS.TABLE.length - 1]!
+
+// Mine density multiplier (smaller = denser per second): the TABLE value, then a
+// gentle procedural ramp past the table - it keeps tightening by BOMB_MULT_STEP per
+// level down to BOMB_MULT_FLOOR, so deep levels get a few more mines but stay playable
+// (mines are the secondary threat; enemies carry the unbounded difficulty).
+const bombMult = (level: number): number => {
+  const t = LEVELS.TABLE
+  if (level < t.length) return t[level]!.bombSpacingMult
+  const last = t[t.length - 1]!.bombSpacingMult
+  const denser = (level - (t.length - 1)) * LEVELS.BOMB_MULT_STEP
+  return Math.max(LEVELS.BOMB_MULT_FLOOR, last - denser)
+}
 
 export function createLevelTuning(flight: Flight): LevelTuning {
   return {
@@ -36,7 +48,7 @@ export function createLevelTuning(flight: Flight): LevelTuning {
     // mines are denser still in slow (yellow) sections, scaled by 1 / SLOW_DENSITY.
     mineSpacingScale: (wd: number): number => {
       const slow = flight.tierIndexAt(wd) === 0 ? 1 / HAZARD.SLOW_DENSITY : 1
-      return slow * levelRow(flight.levelAt(wd)).bombSpacingMult * flight.speedRatioAt(wd)
+      return slow * bombMult(flight.levelAt(wd)) * flight.speedRatioAt(wd)
     },
   }
 }
