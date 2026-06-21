@@ -116,6 +116,15 @@ export function createAudio(): Audio {
     gem(out, now) { blip(out, now, 'triangle', 880, 880, 0.09, 0.7); blip(out, now + 0.07, 'triangle', 1320, 1320, 0.14, 0.7) },
     enemyFire(out, now) { blip(out, now, 'sawtooth', 620, 180, 0.13, 0.6) },
     kill(out, now) { blip(out, now, 'square', 720, 110, 0.22, 0.7) },
+    life(out, now) {
+      // a "1-up": four rising notes of a major arpeggio (C5 E5 G5 C6) plus a
+      // high sparkle an octave up. Bright triangle tone reads as a reward and is
+      // clearly distinct from the gem's two-note chime - "you gained a ship".
+      const notes = [523, 659, 784, 1047]
+      const step = 0.085
+      for (let i = 0; i < notes.length; i++) blip(out, now + i * step, 'triangle', notes[i]!, notes[i]!, 0.13, 0.6)
+      blip(out, now + notes.length * step, 'triangle', 1568, 1568, 0.22, 0.5) // G6 sparkle tail
+    },
     gameover(out, now) { blip(out, now, 'triangle', 440, 90, 0.9, 0.7) },
     hit(out, now) {
       // bomb blast, three layers: a sharp CRACK, a booming filtered-noise BODY that

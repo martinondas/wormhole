@@ -66,6 +66,9 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - hazard:   naval-mine geometry (CORE_RADIUS big ball, cylindrical horns via
             SPIKE_LEN/BASE_R/TIP_R, EDGE_THRESHOLD), EDGE/FILL colors, SPIN/PULSE; field
             COUNT/SPAWN_* (incl. SPAWN_ANGLE), CAPTURE_*/POP_*; SLOW_DENSITY (slow-section bombs)
+- extralife:medkit-cross geometry (ARM/THICK/DEPTH extruded plus, EDGE_THRESHOLD),
+            EDGE/FILL colors, SPIN/BOB/PULSE; field COUNT/SPAWN_* (incl. SPAWN_ANGLE),
+            CAPTURE_*/POP_* (rare: COUNT 1, large SPACING). +1 life, capped at LIVES.START
 - lives:    LIVES.{START, INVULN_TIME}
 - energy:   ENERGY.{MAX,START,DRAIN,PER_ORB,LOW,CRITICAL}; SCORE.DIST_RATE
 - gun:      COST (energy/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE/Z (player->enemy),
@@ -128,7 +131,8 @@ and on-aesthetic.
       world/field.ts       generic wall-object pool (orbs/gems/mines): spawn/scroll/recycle + angle hit
                            test; optional spacingScaleAt hook for per-section / per-level density
       world/wallObject.ts  the {object,update,setResolution,setOpacity} contract for field objects
-      world/pickup.ts      blue health orb / treasure.ts gold gem / hazard.ts red mine (edge-lit WallObjects)
+      world/pickup.ts      blue health orb / treasure.ts gold gem / hazard.ts red mine /
+                           extraLife.ts green medkit-cross (rare +1 life) (edge-lit WallObjects)
       world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
       world/enemies.ts     raider pool + 4-state FSM (approach/engage/depart/dead), own worldDistance; NOT a field
       world/projectiles.ts one pooled bolt system (player + enemy bolts; camera-facing diamond glyph)
@@ -227,11 +231,15 @@ and on-aesthetic.
 | Energy orb | wireframe sphere         | blue              | ride into - refills energy          | built  |
 | Treasure   | brilliant-cut gem        | gold              | ride into - score points            | built  |
 | Hazard     | naval contact mine       | red               | avoid - hitting costs a life        | built  |
+| Extra life | medkit cross (+)         | bright green      | ride into (rare) - +1 life, capped at LIVES.START | built  |
 | Enemy      | forward-swept dart       | magenta           | shoot (forward gun); shoots back, lethal | built  |
 
-Orbs / treasures / hazards are all "ride into / avoid" wall objects sharing the
-generic `world/field.ts` engine (one `createField(cfg)` per kind; only the `onHit`
-effect differs). They ride at the SHARED derived radius `TUBE.RADIUS -
+Orbs / treasures / hazards / extra-life crosses are all "ride into / avoid" wall
+objects sharing the generic `world/field.ts` engine (one `createField(cfg)` per
+kind; only the `onHit` effect differs). The extra-life cross is the one that can
+decline an encounter: at full lives `game.addLife()` returns false, so `onHit`
+returns false and the cross passes through (no pop / no sound), exactly like a
+mine grazed during i-frames. They ride at the SHARED derived radius `TUBE.RADIUS -
 SHIP.RADIAL_OFFSET` (RIDE_RADIUS) - this is a constraint, not a tunable: the angle-only
 hit test (craft.theta vs slot.theta) is only valid when objects sit where the ship rides.
 

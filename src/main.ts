@@ -8,6 +8,7 @@ import { type WallObject } from './world/wallObject'
 import { createPickup } from './world/pickup'
 import { createTreasure } from './world/treasure'
 import { createHazard } from './world/hazard'
+import { createExtraLife } from './world/extraLife'
 import { createProjectiles } from './world/projectiles'
 import { createEnemies } from './world/enemies'
 import { Input } from './input'
@@ -19,7 +20,7 @@ import { createHud } from './hud'
 import { createAudio } from './audio'
 import { createPerfOverlay } from './render/perf'
 import { startLoop } from './loop'
-import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, INPUT, AUDIO } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, INPUT, AUDIO } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -144,6 +145,20 @@ const fields: Field[] = [
   // play the hit sfx only when a life is actually lost (hitHazard returns false
   // during i-frames), so an invuln graze stays silent.
   makeField(createHazard, HAZARD, () => playedHit(game.hitHazard()), biasedAngle(HAZARD.SPAWN_ANGLE), mineSpacingScale),
+  // extra life: a rare bright-green cross. game.addLife() caps at LIVES.START, so
+  // at full lives it returns false and the cross passes through (no pop / no sound);
+  // when it grants a life, play the 1-up cue and flash the hull green.
+  makeField(
+    createExtraLife,
+    EXTRA_LIFE,
+    () => {
+      if (!game.addLife()) return false
+      audio.play('life')
+      ship.flash(RENDER.SHIP_LIFE_FLASH_RGB)
+      return true
+    },
+    biasedAngle(EXTRA_LIFE.SPAWN_ANGLE),
+  ),
 ]
 for (const f of fields) {
   stage.scene.add(f.object)
@@ -327,7 +342,6 @@ startLoop(
     stage.render()
     hud.update({
       score: game.score(craft.distance),
-      distance: craft.distance,
       speed: craft.speed,
       energy01: game.energy / ENERGY.MAX,
       lives: game.lives,
@@ -337,7 +351,6 @@ startLoop(
       musicMuted: audio.musicMuted,
       flightMode: flight.mode,
       level: flight.level + 1, // 0-based internally, shown 1-based
-      scoreMultiplier: flight.scoreMultiplier,
       best: game.best,
     })
   },
@@ -376,5 +389,5 @@ startLoop(
   flight, // WH.flight.mode = 'slow' | 'normal' | 'fast' | 'sections' (or press G)
   audio,
   begin: beginRun, // start the run from the console / screenshot tool (skips the title gate)
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, AUDIO },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, AUDIO },
 }

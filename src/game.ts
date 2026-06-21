@@ -19,6 +19,7 @@ export interface Game {
   addScore(n: number): void
   canFire(): boolean // enough energy (and not over) to fire one shot
   spendEnergy(n: number): void // gun cost; clamps at 0 but NEVER ends the run (only update() does)
+  addLife(): boolean // extra-life pickup; true if a life was actually added (false at full lives / over)
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
   start(): void // leave the title screen and begin the first run
   update(dt: number, distance: number): void
@@ -82,6 +83,22 @@ export function createGame(): Game {
     // game-over on the next step exactly like the drain clock does.
     spendEnergy(n: number): void {
       this.energy = Math.max(0, this.energy - n)
+    },
+
+    // Extra-life pickup: grant a life only when below the starting max (the cap =
+    // 100% of lives). Returns true only if a life was actually added, so the field
+    // consumes + pops the cross only then; at full lives it passes through.
+    //
+    // INTENTIONAL: not gated on `lives <= 0`. A fatal hazard hit drops lives to 0
+    // but only latches `over` later in update(); the extra-life field runs after
+    // the mine field in the same fixed step, so flying through a cross at the
+    // instant a mine kills you revives the run (lives 0 -> 1) before update() sees
+    // it. That lucky same-tick save is a deliberate gameplay choice, not a bug -
+    // do NOT add a `lives <= 0` guard here.
+    addLife(): boolean {
+      if (this.over || this.lives >= LIVES.START) return false
+      this.lives += 1
+      return true
     },
 
     // Check invuln FIRST, before spending a life: if two mines overlap the ship

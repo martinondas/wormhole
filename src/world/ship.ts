@@ -22,7 +22,9 @@ import { type CraftState } from '../craft'
 export interface Ship {
   object: Group
   update(craft: CraftState, dt: number): void
-  flash(): void // momentary blue edge flash (orb pickup), decays over SHIP.FLASH_TIME
+  // momentary edge-color flash, decays over SHIP.FLASH_TIME. Defaults to the blue
+  // orb-pickup tint; pass an RGB (e.g. the green extra-life color) to flash that.
+  flash(rgb?: readonly [number, number, number]): void
   setResolution(w: number, h: number): void
 }
 
@@ -109,7 +111,8 @@ export function createShip(): Ship {
 
   const shipRadius = RIDE_RADIUS
 
-  // edge-color flash (orb pickup): tint toward blue, then decay back to base.
+  // edge-color flash (pickups): tint toward flashColor, then decay back to base.
+  // flashColor is set per call (blue for orbs, green for extra-life crosses).
   const baseColor = new Color().setRGB(...RENDER.SHIP_RGB)
   const flashColor = new Color().setRGB(...RENDER.SHIP_FLASH_RGB)
   let flashT = 0 // seconds of flash remaining
@@ -132,7 +135,8 @@ export function createShip(): Ship {
         lineMat.color.lerpColors(baseColor, flashColor, intensity)
       }
     },
-    flash(): void {
+    flash(rgb?: readonly [number, number, number]): void {
+      flashColor.setRGB(...(rgb ?? RENDER.SHIP_FLASH_RGB))
       flashT = SHIP.FLASH_HOLD + SHIP.FLASH_TIME
     },
     setResolution(w: number, h: number): void {

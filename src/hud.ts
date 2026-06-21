@@ -5,7 +5,6 @@ import { ENERGY, LIVES } from './config'
 // and a centered game-over panel. Thin green vector styling.
 export interface HudState {
   score: number
-  distance: number
   speed: number
   energy01: number // 0..1
   lives: number
@@ -15,7 +14,6 @@ export interface HudState {
   musicMuted: boolean // music toggled off via M (SFX still play)
   flightMode: string // experimental flight mode readout (testing)
   level: number // current level (1-based for display)
-  scoreMultiplier: number // points multiplier in force this level (1.0, 1.5, ...)
   best: number
 }
 
@@ -27,20 +25,19 @@ const CSS = `
 #hud { position:fixed; inset:0; pointer-events:none; z-index:10;
   font-family:'Courier New',ui-monospace,monospace; text-transform:uppercase;
   letter-spacing:2px; color:#7dffa6; text-shadow:0 0 6px rgba(80,255,150,0.55); }
-#hud .corner { position:absolute; font-size:15px; line-height:1.5; }
+#hud .corner { position:absolute; font-size:22px; line-height:1.5; }
 #hud .tl { top:18px; left:20px; }
-#hud .tr { top:18px; right:20px; text-align:right; }
+#hud .br { bottom:20px; right:20px; text-align:right; }
 #hud .dim { opacity:0.6; }
-#hud .lives { position:absolute; left:20px; bottom:58px; font-size:14px; letter-spacing:4px; }
+#hud .lives { position:absolute; left:20px; bottom:78px; font-size:21px; letter-spacing:6px; }
 #hud .lives .lost { opacity:0.22; }
-#hud .meter { position:absolute; left:20px; bottom:20px; width:260px; }
-#hud .meter .lbl { font-size:12px; opacity:0.8; margin-bottom:4px; }
-#hud .track { height:9px; border:1px solid rgba(125,255,166,0.5); border-radius:1px;
-  box-shadow:0 0 5px rgba(80,255,150,0.35); overflow:hidden; }
+#hud .meter { position:absolute; left:20px; bottom:20px; width:390px; }
+#hud .meter .lbl { font-size:18px; opacity:0.8; margin-bottom:6px; }
+#hud .track { height:14px; border:1px solid rgba(125,255,166,0.5); border-radius:1px;
+  box-shadow:0 0 7px rgba(80,255,150,0.35); overflow:hidden; }
 #hud .fill { height:100%; width:100%; background:#5dff9b;
   box-shadow:0 0 8px currentColor; transition:width 0.08s linear; }
-#hud .spd { position:absolute; right:20px; bottom:20px; font-size:15px; text-align:right; }
-#hud .mute { position:absolute; right:20px; top:44px; font-size:12px; color:#ff8a6a;
+#hud .mute { position:absolute; right:20px; top:18px; font-size:18px; color:#ff8a6a;
   text-shadow:0 0 6px rgba(255,120,90,0.55); opacity:0; transition:opacity 0.15s; }
 #hud .mute.show { opacity:0.9; }
 #hud .over .hint { font-size:12px; opacity:0.5; }
@@ -64,7 +61,7 @@ const CSS = `
 #hud .over .keys .a { text-align:left; opacity:0.65; letter-spacing:2px; }
 @keyframes wh-blink { 50% { opacity:0.15; } }
 #hud .levelup { position:absolute; top:30%; left:0; right:0; text-align:center;
-  font-size:64px; letter-spacing:10px; font-weight:bold; color:#9affc0;
+  font-size:77px; letter-spacing:12px; font-weight:bold; color:#9affc0;
   text-shadow:0 0 18px rgba(80,255,150,0.85), 0 0 44px rgba(80,255,150,0.5);
   opacity:0; will-change:opacity,transform; }
 #hud .levelup.show { animation:wh-levelup 2.2s ease-out forwards; }
@@ -89,11 +86,10 @@ export function createHud(): Hud {
   const root = document.createElement('div')
   root.id = 'hud'
   root.innerHTML = `
-    <div class="corner tl"><div id="wh-score">SCORE 0000000</div><div id="wh-level">LEVEL 1 &times;1.0</div><div id="wh-dist" class="dim">DIST 0000</div><div id="wh-grav" class="dim">MODE NORMAL</div></div>
-    <div class="corner tr"><div id="wh-best" class="dim">BEST 0000000</div></div>
+    <div class="corner tl"><div id="wh-level">LEVEL 1</div><div id="wh-score">SCORE 0000000</div><div id="wh-best" class="dim">BEST 0000000</div></div>
     <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl">ENERGY</div><div class="track"><div class="fill" id="wh-energy"></div></div></div>
-    <div class="spd" id="wh-spd">SPD 00</div>
+    <div class="corner br"><div id="wh-grav" class="dim">MODE NORMAL</div><div id="wh-spd">SPD 00</div></div>
     <div class="mute" id="wh-mute">&#9836; MUSIC OFF</div>
     <div class="levelup" id="wh-levelup">LEVEL 2</div>
     <div class="over" id="wh-over">
@@ -121,7 +117,6 @@ export function createHud(): Hud {
   const $ = (id: string): HTMLElement => root.querySelector('#' + id) as HTMLElement
   const elScore = $('wh-score')
   const elLevel = $('wh-level')
-  const elDist = $('wh-dist')
   const elGrav = $('wh-grav')
   const elBest = $('wh-best')
   const elLives = $('wh-lives')
@@ -154,9 +149,8 @@ export function createHud(): Hud {
   // skips the per-frame textContent/style/classList churn (forced style recalc)
   // and the string allocations that went with it.
   let lastScore = -1
-  let lastLevelKey = ''
+  let lastLevel = -1
   let lastBannerLevel = 1 // last level a "LEVEL N" banner fired for (1 = no banner for the start level)
-  let lastDist = -1
   let lastBest = -1
   let lastSpd = -1
   let lastMode = ''
@@ -174,11 +168,8 @@ export function createHud(): Hud {
     update(s: HudState): void {
       const score = Math.max(0, Math.floor(s.score))
       if (score !== lastScore) { elScore.textContent = 'SCORE ' + pad(score, 7); lastScore = score }
-      const levelKey = s.level + '|' + s.scoreMultiplier
-      if (levelKey !== lastLevelKey) {
-        elLevel.textContent = 'LEVEL ' + Math.max(1, Math.floor(s.level)) + ' ×' + s.scoreMultiplier.toFixed(1)
-        lastLevelKey = levelKey
-      }
+      const level = Math.max(1, Math.floor(s.level))
+      if (level !== lastLevel) { elLevel.textContent = 'LEVEL ' + level; lastLevel = level }
       // Big "LEVEL N" banner for ~2s when a new level is reached during a live run
       // (not level 1, the start). Fires once per level-up; the reflow restarts the
       // CSS animation, and lastBannerLevel tracks the level so a restart re-arms it.
@@ -190,8 +181,6 @@ export function createHud(): Hud {
       }
       lastBannerLevel = s.level
       if (s.over) elLevelUp.classList.remove('show') // don't linger over the game-over panel
-      const dist = Math.max(0, Math.floor(s.distance))
-      if (dist !== lastDist) { elDist.textContent = 'DIST ' + pad(dist, 4); lastDist = dist }
       const best = Math.max(0, Math.floor(s.best))
       if (best !== lastBest) { elBest.textContent = 'BEST ' + pad(best, 7); lastBest = best }
       const spd = Math.max(0, Math.floor(s.speed))

@@ -151,6 +151,7 @@ export const RENDER = {
   SHIP_RGB: [0.50, 1.50, 0.85] as [number, number, number],
   SHIP_FILL_RGB: [0.01, 0.04, 0.03] as [number, number, number],
   SHIP_FLASH_RGB: [0.10, 0.50, 4.50] as [number, number, number], // HDR blue, keyed to the orb; ship edges flash this on pickup then decay to SHIP_RGB. Low green = deep blue (not pale cyan); high blue = strong bloom pop
+  SHIP_LIFE_FLASH_RGB: [0.30, 5.00, 1.10] as [number, number, number], // HDR green, keyed to the extra-life cross; brighter than SHIP_RGB so the hull clearly lights green on a life gain, then decays back
 
   DPR_CAP: 1.5,       // cap devicePixelRatio before scaling
   RENDER_SCALE: 0.85, // render below native res, upscale (main 60fps lever)
@@ -283,6 +284,42 @@ export const HAZARD = {
   // angle-from-bottom bias (deg). Favor the lower half - a mine on the ceiling
   // is no challenge; mines near the bottom force you to swing away to dodge.
   SPAWN_ANGLE: { band: [0, 90] as [number, number], bias: 0.8, rest: [90, 180] as [number, number] },
+}
+
+// --- extra life (rare bright-green medkit cross; ride-into = +1 life) --------
+// A chunky 3D plus (the universal "health / +1" icon), so it reads instantly and
+// is shape-distinct from every other wall object (orb sphere / gem diamond / mine
+// ball / raider dart) despite green being the theme color. Edge-lit solid like
+// the mine (near-black depth-writing fill under glowing green fat-line edges,
+// NORMAL blend - the HDR green core still blooms). Adds a life ONLY when below
+// LIVES.START (game.addLife caps at 100%); at full lives it passes through
+// untouched (no pop, no sound). Very rare: one in flight, far apart.
+export const EXTRA_LIFE = {
+  ARM: 0.85,          // half-length of each cross arm (world units; full span = 1.7)
+  THICK: 0.30,        // half-thickness of the arm bars (arm width = 0.6)
+  DEPTH: 0.30,        // half-depth along z (a chunky 3D cross, not a flat sign)
+  EDGE_THRESHOLD: 1,  // EdgesGeometry threshold (deg): keeps the full plus outline, drops flat-face triangulation
+  LINE_WIDTH: 2.6,    // edge line width in px (a touch fatter than orbs/gems so it pops)
+  EDGE_RGB: [0.35, 4.20, 0.90] as [number, number, number], // bright HDR green: near-white core blooms green, far brighter than the dim tube green
+  FILL_RGB: [0.01, 0.06, 0.02] as [number, number, number],  // near-black green, dark enough to occlude
+  SPIN_SPEED: 1.4,    // rad/s about vertical (lively: ~2x the orb, to catch the eye)
+  BOB_AMP: 0.12,
+  BOB_SPEED: 2.2,
+  PULSE_SPEED: 4.0,   // throb rad/s (a beckoning pulse)
+  PULSE_AMP: 0.10,    // +/- 10% scale breathing (more than the mine: eye-catching)
+
+  // --- field / spawn (VERY rare; one in flight, far apart) ---
+  COUNT: 1,           // a single cross exists at a time; it recycles far ahead after each encounter
+  SPAWN_START: 320,   // distance ahead of the first cross
+  SPAWN_SPACING: 1500,// nominal distance between crosses (rare: ~20-50s apart depending on tier)
+  SPAWN_JITTER: 320,  // large random extra distance so it never feels metronomic
+  RECYCLE_BEHIND: 22, // recycle once it is this far behind the ship
+  CAPTURE_Z: 2.6,     // generous ride-into window (a rare reward should be easy to grab once reached)
+  CAPTURE_ANGLE: 0.46,// angular catch window (rad, ~26 deg)
+  POP_TIME: 0.22,     // collect pop duration (s)
+  POP_SCALE: 2.2,     // collect pop peak scale
+  // angle-from-bottom bias (deg). Mid-wall, so you still have to swing up for it.
+  SPAWN_ANGLE: { band: [30, 110] as [number, number], bias: 0.75, rest: [0, 180] as [number, number] },
 }
 
 // --- energy / scoring (HUD-driven survival loop) ----------------------------
@@ -455,6 +492,7 @@ export const AUDIO = {
     gem:       { synth: 'gem',       volume: 0.8 },  // bright two-note chime
     enemyFire: { synth: 'enemyFire', volume: 0.4 },  // short saw "pew"
     kill:      { synth: 'kill',      volume: 0.8 },  // descending square zap
+    life:      { synth: 'life',      volume: 0.95 }, // ascending 1-up arpeggio (extra life gained)
     hit:       { synth: 'hit',       volume: 1.8 },  // explosion (big + loud - a life lost should land like a bomb)
     gameover:  { synth: 'gameover',  volume: 0.85 }, // slow descending tone
   },
