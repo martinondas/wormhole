@@ -20,7 +20,7 @@ function check(name: string, cond: boolean, detail = ''): void {
   if (!cond) failures++
 }
 
-const NEUTRAL = { steerTarget: 0, throttle: false, brake: false, boost: false, fire: false }
+const NEUTRAL = { steerTarget: 0, fire: false }
 
 interface Rig {
   craft: CraftState

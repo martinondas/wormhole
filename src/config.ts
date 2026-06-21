@@ -100,7 +100,7 @@ export const LEVELS = {
 export const TUBE = {
   RADIUS: 6,
   RING_SPACING: 9,        // distance between cross-section rings (wider = calmer)
-  RINGS_VISIBLE: 36,      // rings drawn ahead (render distance = this * spacing)
+  RINGS_VISIBLE: 30,      // rings drawn ahead (render distance = this * spacing; kept near FOG_FAR/spacing so far rings aren't drawn past the fog)
   SEGMENTS_PER_RING: 48,  // smoothness of each ring circle
   LONGITUDINAL_LINES: 24, // lines running down the length of the tube
 }
@@ -156,6 +156,14 @@ export const RENDER = {
   DPR_CAP: 1.5,       // cap devicePixelRatio before scaling
   RENDER_SCALE: 0.85, // render below native res, upscale (main 60fps lever)
   MSAA_SAMPLES: 4,    // anti-alias the offscreen pass so thin rings don't shimmer
+  // Integrated-GPU fallback, auto-selected in scene.ts (pickRenderTier) for an
+  // integrated GPU (Intel, an AMD APU's "Radeon Graphics", or mobile): the full-res
+  // MSAA resolve + bloom fill is the dominant cost there, so render a bit smaller with
+  // lighter MSAA. Discrete GPUs (incl. the iMac's "Radeon Pro") keep the values above.
+  // Tune on the target machine (P overlay); MSAA_SAMPLES_LOW can drop to 0 if still
+  // GPU-bound (bloom hides most line shimmer).
+  RENDER_SCALE_LOW: 0.72,
+  MSAA_SAMPLES_LOW: 2,
 
   BLOOM_ENABLED: true,
   BLOOM_STRENGTH: 0.45,
@@ -195,7 +203,7 @@ export const PICKUP = {
   // visible range filled so they fade in from the far fog rather than popping.
   COUNT: 5,           // orbs alive in the pool at once
   SPAWN_START: 50,    // distance ahead of the first orb
-  SPAWN_SPACING: 125, // nominal distance between orbs (was 94; ~25% fewer)
+  SPAWN_SPACING: 125, // nominal distance between orbs (encounter rate = speed / spacing)
   SPAWN_JITTER: 14,   // random extra distance per orb
   RECYCLE_BEHIND: 22, // recycle once an orb is this far behind the ship
   CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
@@ -249,7 +257,7 @@ export const TREASURE = {
 // pointed cones, and have no bulb tips.
 export const HAZARD = {
   CORE_RADIUS: 0.72,   // faceted core ball radius (world units) - dominant body
-  SPIKE_COUNT: 12,     // documented; geometry uses the 12 icosa vertex dirs
+  // 12 horns, fixed by the geometry (the 12 icosahedron vertex directions in hazard.ts).
   SPIKE_LEN: 0.42,     // horn length out from the core (a distinct rod, not a stub)
   SPIKE_BASE_R: 0.12,  // horn radius at the core (rod thickness)
   SPIKE_TIP_R: 0.095,  // horn radius at the tip (slightly < base = subtle taper, flat end)
@@ -263,9 +271,9 @@ export const HAZARD = {
   PULSE_AMP: 0.05,     // +/- 5% scale breathing
 
   // --- field / spawn (sparse to start; latest start so it doesn't cluster) ---
-  COUNT: 5,            // was 4; +1 keeps the denser field (and slow boost) filling cleanly from the fog
+  COUNT: 5,            // mines alive in the pool; enough to keep the field filling cleanly from the fog
   SPAWN_START: 120,
-  SPAWN_SPACING: 125,  // nominal distance between mines (was 150; ~20% more)
+  SPAWN_SPACING: 125,  // nominal distance between mines
   SPAWN_JITTER: 30,
   RECYCLE_BEHIND: 22,
   // Slow (yellow, full-gravity) sections spawn 30% more mines: their spacing is
@@ -444,10 +452,7 @@ export const PROJECTILE = {
 export const INPUT = {
   left: ['ArrowLeft', 'KeyA'],
   right: ['ArrowRight', 'KeyD'],
-  throttle: ['ArrowUp', 'KeyW'],
-  brake: ['ArrowDown', 'KeyS'],
-  boost: ['ShiftLeft', 'ShiftRight'], // Space used to boost; it now FIRES (below)
-  fire: ['Space'],                    // forward gun (Shift still boosts)
+  fire: ['Space'],                    // forward gun
   start: ['Space', 'Enter'],          // title screen only: begin the first run
   restart: ['Enter'],                 // game-over restart + resume-from-pause. NOT Space:
                                       // a player still tapping the fire key after losing

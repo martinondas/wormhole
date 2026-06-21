@@ -2,19 +2,14 @@ import { INPUT } from './config'
 
 export interface InputState {
   steerTarget: number // -1 left, +1 right, 0 none
-  throttle: boolean
-  brake: boolean
-  boost: boolean
   fire: boolean
 }
 
-const ALL_CODES = new Set<string>([
-  ...INPUT.left, ...INPUT.right, ...INPUT.throttle, ...INPUT.brake, ...INPUT.boost, ...INPUT.fire,
-])
+const ALL_CODES = new Set<string>([...INPUT.left, ...INPUT.right, ...INPUT.fire])
 
 export class Input {
   private pressed = new Set<string>()
-  readonly state: InputState = { steerTarget: 0, throttle: false, brake: false, boost: false, fire: false }
+  readonly state: InputState = { steerTarget: 0, fire: false }
 
   constructor() {
     window.addEventListener('keydown', this.onDown)
@@ -51,9 +46,6 @@ export class Input {
     const left = this.has(INPUT.left)
     const right = this.has(INPUT.right)
     this.state.steerTarget = (right ? 1 : 0) - (left ? 1 : 0)
-    this.state.throttle = this.has(INPUT.throttle)
-    this.state.brake = this.has(INPUT.brake)
-    this.state.boost = this.has(INPUT.boost)
     this.state.fire = this.has(INPUT.fire)
   }
 

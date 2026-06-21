@@ -25,10 +25,43 @@ export interface Stage {
   render(): void
 }
 
+// Pick render quality from the GPU. Integrated GPUs (Intel / mobile) pay the most
+// for the full-res MSAA resolve + bloom fill every frame, so they get lighter MSAA
+// and a smaller render scale; discrete GPUs keep the higher-quality defaults. This
+// is best-effort: an unrecognized or privacy-masked renderer string keeps the
+// defaults, so the worst case is the current behavior.
+function pickRenderTier(renderer: WebGLRenderer): { msaa: number; scale: number } {
+  const hi = { msaa: RENDER.MSAA_SAMPLES, scale: RENDER.RENDER_SCALE }
+  const low = { msaa: RENDER.MSAA_SAMPLES_LOW, scale: RENDER.RENDER_SCALE_LOW }
+  try {
+    const gl = renderer.getContext()
+    const ext = gl.getExtension('WEBGL_debug_renderer_info')
+    if (!ext) return hi
+    const name = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? '').toLowerCase()
+    // Discrete GPUs keep the defaults. Guard the discrete AMD lines ("Radeon Pro" =
+    // the iMac, "Radeon RX") and NVIDIA first, so the broad "radeon" integrated arm
+    // below does not catch them.
+    if (/radeon pro|radeon rx|geforce|nvidia|quadro/.test(name)) return hi
+    // Integrated: Intel + common mobile GPUs, and AMD APUs, which report a plain
+    // "Radeon Graphics" / "Radeon(TM) Graphics" with no Pro/RX (e.g. the ThinkPad E14).
+    const integrated = /intel|iris|uhd|hd graphics|adreno|mali|powervr|radeon/.test(name)
+    return integrated ? low : hi
+  } catch {
+    return hi
+  }
+}
+
 export function createStage(container: HTMLElement): Stage {
-  const renderer = new WebGLRenderer({ antialias: true, powerPreference: 'high-performance' })
+  // antialias:false on the context: all rendering goes through the composer's
+  // multisampled offscreen target (below) and the final OutputPass is a full-screen
+  // quad blit, so MSAA on the default framebuffer would only cost memory/bandwidth.
+  const renderer = new WebGLRenderer({ antialias: false, powerPreference: 'high-performance' })
   renderer.setClearColor(new Color(RENDER.BG_COLOR), 1)
   container.appendChild(renderer.domElement)
+
+  // lighter MSAA + render scale on integrated GPUs (see pickRenderTier); tune the
+  // _LOW values on the target machine with the P overlay.
+  const tier = pickRenderTier(renderer)
 
   const scene = new Scene()
   // Subtle deep-space backdrop (gradient + stars); fog fades far lines into the
@@ -43,7 +76,7 @@ export function createStage(container: HTMLElement): Stage {
 
   // Multisampled, HDR (half-float) target so the offscreen pass is anti-aliased
   // (thin scrolling rings stop shimmering) and bloom keeps its bright cores.
-  const rt = new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: RENDER.MSAA_SAMPLES })
+  const rt = new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: tier.msaa })
   const composer = new EffectComposer(renderer, rt)
   composer.addPass(new RenderPass(scene, camera))
   if (RENDER.BLOOM_ENABLED) {
@@ -65,7 +98,7 @@ export function createStage(container: HTMLElement): Stage {
   function resize(): void {
     const w = container.clientWidth || window.innerWidth
     const h = container.clientHeight || window.innerHeight
-    const pr = Math.min(window.devicePixelRatio, RENDER.DPR_CAP) * RENDER.RENDER_SCALE
+    const pr = Math.min(window.devicePixelRatio, RENDER.DPR_CAP) * tier.scale
 
     renderer.setPixelRatio(pr)
     renderer.setSize(w, h)
