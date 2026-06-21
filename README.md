@@ -40,11 +40,13 @@ You only steer and shoot. Everything else flows from the swing.
   are light and floaty (blue walls), normal sits in between (green). The walls show
   the upcoming section's colour ahead of you.
 - Ride into **blue orbs** to recharge your weapon (the blue bar).
-- Ride into **gold gems** for score.
+- Ride into **gold gems** for score - and to advance. Each level has a gem quota (the pip
+  row top-left); collect it to unlock the next level. Fall short and the level repeats until
+  you do, so you cannot coast through on dodging alone.
 - Grab a rare **green cross** for an extra ship (up to your starting maximum).
 - Avoid **red spiky mines** - a hit costs one of your three ships, with brief
   invulnerability after.
-- Difficulty climbs with distance: the tiers get faster and the fields denser, and a
+- Difficulty climbs with each level: the tiers get faster and the fields denser, and a
   score multiplier rises each level.
 - **Magenta raiders** fly in ahead, weave to stay hard to hit, then charge and fire
   back. Shoot them with the forward gun: a dead-centre hit destroys one outright, a
@@ -93,10 +95,11 @@ Early but playable.
 
 - **Built**: scrolling wireframe tube, procedural edge-lit ship, damped-driven
   pendulum physics, banking chase cam; speed-tiered "sections" flight where the tube
-  section sets both speed and gravity; distance-based difficulty levels (rising speed,
-  a score multiplier, denser fields); weapon-charge orbs, treasure gems, hazard mines, and a
-  rare extra-life cross on a generic "wall field" engine; a forward gun with pooled
-  projectiles and magenta raiders that shoot back; lives with invulnerability; music
+  section sets both speed and gravity; gem-gated difficulty levels (rising speed,
+  a score multiplier, denser fields; each level unlocked by collecting its gem quota);
+  weapon-charge orbs, treasure gems, hazard mines, and a rare extra-life cross on a generic
+  "wall field" engine; a forward gun with pooled projectiles and magenta raiders that shoot
+  back; lives with invulnerability; a run timer; music
   and procedural sound effects; a title screen and a minimal in-theme HUD, score with a
   persistent local best, and a deep-space backdrop with stars.
 - **Next**: raiders that hold and close in instead of peeling off, and combat scaling

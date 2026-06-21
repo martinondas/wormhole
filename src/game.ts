@@ -1,30 +1,34 @@
-import { ENERGY, SCORE, LIVES, GUN } from './config'
+import { ENERGY, LIVES, GUN } from './config'
 
 // Run state. ONE fail condition: lives are spent by hazard / enemy / ram hits;
 // hitting zero ends the run. Weapon charge (`energy`) is the gun's ammo - it is
 // spent by firing and refilled by orbs / kills, but it NEVER ends the run (at
-// zero the gun just goes inert). Score grows with distance plus treasure bonuses;
-// `elapsed` is the run timer (HUD + game-over). Best persists in localStorage.
+// zero the gun just goes inert). Score comes ONLY from active play - gems and
+// kills, each scaled by the level multiplier; there is no passive distance
+// baseline, so a pure dodger scores nothing. `elapsed` is the run timer (HUD +
+// game-over) and the level reached captures how far you got. Best persists locally.
 const BEST_KEY = 'wormhole.best'
 
 export interface Game {
   energy: number // weapon charge (ammo); player-facing label is WEAPON
   lives: number
   invuln: number // seconds of invulnerability remaining (0 = vulnerable)
-  scoreBonus: number // points from treasures etc. (distance is added on top)
+  scoreBonus: number // the run score: gem + kill points (each scaled by level at award time)
+  gemsThisLevel: number // gems collected toward the current level's gate quota (reset on level-up)
   elapsed: number // seconds of active play this run (paused/over freeze it)
   started: boolean // false on the title screen; true once the first run begins (stays true)
   over: boolean
   best: number
-  score(distance: number): number
+  score(): number
   addEnergy(n: number): boolean // true if any charge was added (false if already full)
   addScore(n: number): void
+  addGem(): void // count one collected gem toward the level gate (separate from its score)
   canFire(): boolean // enough charge (and not over) to fire one shot
   spendEnergy(n: number): void // gun cost; clamps at 0, never ends the run
   addLife(): boolean // extra-life pickup; true if a life was actually added (false at full lives / over)
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
   start(): void // leave the title screen and begin the first run
-  update(dt: number, distance: number): void
+  update(dt: number): void
   toTitle(): void // reset the run and return to the title screen (game-over -> intro)
 }
 
@@ -45,10 +49,10 @@ function saveBest(n: number): void {
 }
 
 export function createGame(): Game {
-  function endRun(self: Game, distance: number): void {
+  function endRun(self: Game): void {
     if (self.over) return
     self.over = true
-    const final = self.score(distance)
+    const final = self.score()
     if (final > self.best) {
       self.best = final
       saveBest(final)
@@ -60,13 +64,16 @@ export function createGame(): Game {
     lives: LIVES.START,
     invuln: 0,
     scoreBonus: 0,
+    gemsThisLevel: 0,
     elapsed: 0,
     started: false,
     over: false,
     best: loadBest(),
 
-    score(distance: number): number {
-      return Math.floor(distance * SCORE.DIST_RATE) + this.scoreBonus
+    // The run score is just the accumulated gem + kill points (already level-scaled
+    // at award time). No distance term: passive flying earns nothing.
+    score(): number {
+      return this.scoreBonus
     },
 
     // Refill weapon charge. Returns false (no-op) when already full, so the orb
@@ -80,6 +87,12 @@ export function createGame(): Game {
 
     addScore(n: number): void {
       this.scoreBonus += n
+    },
+
+    // Count a collected gem toward the current level's gate. main resets this to 0
+    // on the level-up edge (when flight advances the level) and toTitle clears it.
+    addGem(): void {
+      this.gemsThisLevel += 1
     },
 
     canFire(): boolean {
@@ -116,8 +129,8 @@ export function createGame(): Game {
       if (this.over || this.invuln > 0) return false
       this.lives -= 1
       this.invuln = LIVES.INVULN_TIME
-      // game-over is finalized in update() against the live distance; here we
-      // just leave lives at <= 0 for update() to see on the next step.
+      // game-over is finalized in update(); here we just leave lives at <= 0 for
+      // update() to see on the next step.
       return true
     },
 
@@ -129,11 +142,11 @@ export function createGame(): Game {
     // the whole step on started/!paused/!over). Ticks i-frames + the run timer and
     // finalizes game-over the instant lives reach zero. Weapon charge is not
     // touched here - it changes only on a shot (spendEnergy) or a refill (addEnergy).
-    update(dt: number, distance: number): void {
+    update(dt: number): void {
       if (this.over) return
       if (this.invuln > 0) this.invuln = Math.max(0, this.invuln - dt)
       this.elapsed += dt
-      if (this.lives <= 0) endRun(this, distance)
+      if (this.lives <= 0) endRun(this)
     },
 
     // Reset the run and return to the title screen. The next run begins from the
@@ -144,6 +157,7 @@ export function createGame(): Game {
       this.lives = LIVES.START
       this.invuln = 0
       this.scoreBonus = 0
+      this.gemsThisLevel = 0
       this.elapsed = 0
       this.started = false
       this.over = false

@@ -21,7 +21,7 @@ import { createHud } from './hud'
 import { createAudio } from './audio'
 import { createPerfOverlay } from './render/perf'
 import { startLoop } from './loop'
-import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, INPUT, AUDIO } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, INPUT, AUDIO } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -114,8 +114,10 @@ const fields: Field[] = [
     levels.orbSpacingScale,
   ),
   // gems: the level multiplier scales the points at award time (frequency is constant).
+  // addGem() also counts it toward the level gate (collect the quota to advance).
   makeField(createTreasure, TREASURE, () => {
     game.addScore(Math.round(TREASURE.SCORE * flight.scoreMultiplier))
+    game.addGem()
     audio.play('gem')
     return true
   }),
@@ -181,6 +183,8 @@ const projCtx = {
 // returns to the title (intro + instructions) and the next run starts from there.
 let wasOver = false // detects the run-ending edge once in render (sting)
 let lastTargetSpeed = SPEED.NORMAL // detects flight-tier step-ups -> accelerate layer
+let lastFlightLevel = 0 // detects the gem-gated level-up edge -> reset the per-level gem counter
+let gemHintShown = false // the one-time gem-gate reminder fires on the first run of the session
 // Flight inputs are stable within a frame, so preUpdate computes them once per
 // frame and the fixed substeps reuse these.
 let frameTargetSpeed = SPEED.NORMAL
@@ -198,13 +202,15 @@ function musicTrack(): 'menu' | 'play' {
 function beginRun(): void {
   game.start()
   paused = false
-  flight.update(craft.distance)
+  flight.update(craft.distance, game.gemsThisLevel)
   lastTargetSpeed = flight.targetSpeed() // no accel sting on the first step
+  lastFlightLevel = flight.level // start tracking the gem-gate level edge from level 0
   // queue the run track before unlocking so audio releases straight to it - the
   // menu track never sounds when Space is the very first (unlocking) keypress.
   audio.playMusic(musicTrack())
   audio.unlock()
   input.releaseFireKeys() // the Space that started the run must not fire a bolt on step 1
+  if (!gemHintShown) { hud.flashGemHint(); gemHintShown = true } // one-time gate reminder
 }
 
 // Game-over -> intro: reset the run and show the title screen (instructions),
@@ -212,12 +218,17 @@ function beginRun(): void {
 // on Space/Enter (beginRun), exactly like the first run on load.
 function returnToTitle(): void {
   resetCraft(craft)
+  // flight.reset() MUST run before the field reset: field layout() calls the
+  // spacingScaleAt hooks, which read flight's now-stateful level / speed-ratio.
+  // Reset flight first so the title-screen and next-run fields lay out at level-0
+  // density, not the stale density of whatever level the run ended on.
+  flight.reset() // back to level 0 at distance 0 so the HUD reads LEVEL 1
+  lastFlightLevel = 0
   for (const f of fields) f.reset(craft.distance)
   projectiles.reset()
   gun.reset()
   enemies.reset(craft.distance)
   game.toTitle()
-  flight.update(craft.distance) // craft.distance is 0 now; resets the cached level so the HUD reads LEVEL 1
 }
 
 window.addEventListener('keydown', (e) => {
@@ -305,7 +316,7 @@ startLoop(
     enemies.update(craft, dt)
     projCtx.shipTheta = craft.theta
     projectiles.update(dt, projCtx)
-    game.update(dt, craft.distance)
+    game.update(dt)
   },
   (frameDt) => {
     ship.update(craft, frameDt)
@@ -326,10 +337,13 @@ startLoop(
     tube.update(craft.distance, tierIndexAt, flight.mode)
     stage.render()
     hud.update({
-      score: game.score(craft.distance),
+      score: game.score(),
       speed: craft.speed,
       energy01: game.energy / ENERGY.MAX,
       lives: game.lives,
+      gemsThisLevel: game.gemsThisLevel,
+      // pinned G-key modes have no gate, so report quota 0 there (HUD blanks the pip row)
+      gemQuota: flight.mode === 'sections' ? flight.gemQuota(flight.level) : 0,
       elapsed: game.elapsed,
       over: game.over,
       started: game.started,
@@ -347,7 +361,11 @@ startLoop(
     // enemy cap follows the level here too (level changes slowly, once per frame is fine).
     preUpdate: () => {
       if (!game.started || debug.paused || game.over || paused) return
-      flight.update(craft.distance)
+      // flight gates the level-up on the gem quota, so it needs the live count; on a
+      // level-up edge reset the counter so the next level starts its quota from zero.
+      flight.update(craft.distance, game.gemsThisLevel)
+      if (flight.level > lastFlightLevel) game.gemsThisLevel = 0
+      lastFlightLevel = flight.level
       frameTargetSpeed = flight.targetSpeed()
       if (frameTargetSpeed > lastTargetSpeed) audio.playAccel() // tier stepped up
       lastTargetSpeed = frameTargetSpeed
@@ -375,5 +393,5 @@ startLoop(
   flight, // WH.flight.mode = 'slow' | 'normal' | 'fast' | 'sections' (or press G)
   audio,
   begin: beginRun, // start the run from the console / screenshot tool (skips the title gate)
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, INPUT, AUDIO },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, INPUT, AUDIO },
 }

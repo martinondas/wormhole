@@ -59,18 +59,27 @@ export const SPEED = {
   EASE: 28,   // accel/decel toward the active tier's speed (units/s^2)
 }
 
-// --- levels (difficulty ramp by distance; one level = one slow->normal->fast
-// cycle). A level lasts TIERS x FLIGHT.SECTION_SECONDS in time (3 x 10 = 30s by
-// default - not hard-coded: change SECTION_SECONDS or the tier set and it
-// follows). Each level above 1 shifts every tier speed up by SPEED_INCREMENT and
-// raises the score multiplier. Per-level enemy cap + orb/bomb frequency come from
-// TABLE (level 1 = index 0); beyond the table the last row holds and the enemy
-// cap keeps ramping. Levels only progress in FLIGHT.MODE 'sections' (the game);
-// pinned slow/normal/fast modes (G key) stay at level 1.
+// --- levels (gem-gated difficulty ramp; one level = one slow->normal->fast cycle).
+// A cycle is TIERS x FLIGHT.SECTION_SECONDS in time (3 x 10 = 30s by default - not
+// hard-coded: change SECTION_SECONDS or the tier set and it follows). A LEVEL is
+// gem-gated: it advances at a cycle boundary only once GEM_QUOTA_FRACTION of the
+// cycle's gems are collected, else the same cycle repeats - so a level lasts one
+// cycle if you meet the quota and longer if you fall short (see flight.ts). Each
+// level above 1 shifts every tier speed up by SPEED_INCREMENT and raises the score
+// multiplier. Per-level enemy cap + orb/bomb frequency come from TABLE (level 1 =
+// index 0); beyond the table the last row holds and the enemy cap keeps ramping.
+// Levels only progress in FLIGHT.MODE 'sections' (the game); pinned slow/normal/fast
+// modes (G key) stay at level 1 with no gate.
 export const LEVELS = {
   SPEED_INCREMENT: 5,   // u/s added to EVERY tier per level above 1 (L1 fast 75 -> L5 fast 95)
   SCORE_MULT_STEP: 0.5, // score multiplier = 1 + (level-1) * this (L1 x1.0, L2 x1.5, L3 x2.0 ...)
-                        // applies to gems + kills only; distance stays a flat baseline (see SCORE.DIST_RATE)
+                        // scales gem + kill points (the whole score; there is no distance term)
+  // Gem gate: a level advances only when you have collected this FRACTION of the gems
+  // that pass in one slow->normal->fast cycle (quota = round(cycleLen / TREASURE.SPAWN_SPACING
+  // * this), derived in flight.ts so it auto-scales as cycles get longer). Fall short at the
+  // cycle boundary and the level repeats (same speeds/colors) until you qualify. 0 disables
+  // the gate (pure distance progression). Lower it if half forces too many replays in playtest.
+  GEM_QUOTA_FRACTION: 0.5,
   // Gravity across levels:
   //   'tier'     - full gravity at the level's OWN slow speed, zero at its own
   //                fast speed: each section keeps its feel as speeds climb (the
@@ -341,7 +350,7 @@ export const EXTRA_LIFE = {
 export const ENERGY = {
   MAX: 100,
   START: 100,
-  PER_ORB: 25,   // charge refilled per collected blue orb
+  PER_ORB: 20,   // charge refilled per collected blue orb
   LOW: 0.28,     // fraction below which the bar turns yellow (low ammo). Below one
                  // shot's worth of charge (GUN.COST/MAX) the bar turns red (empty).
 }
@@ -352,13 +361,10 @@ export const LIVES = {
   INVULN_TIME: 1.6, // seconds of invulnerability after a hit (drives ship flicker)
 }
 
-export const SCORE = {
-  // Points per world unit travelled - a flat survival baseline, NOT multiplied by
-  // the level (so cruising never out-earns active play). Distance per level still
-  // grows on its own as tiers speed up. Calibration target (level 1): all gems in
-  // a level ~= 3x distance points, one kill = 3x a gem (see TREASURE.SCORE / ENEMY.SCORE).
-  DIST_RATE: 0.7,
-}
+// Score comes only from active play: gem points (TREASURE.SCORE) and kill points
+// (ENEMY.SCORE), each multiplied by the level multiplier at award time. There is
+// no distance / survival baseline, so passive flying earns nothing and progressing
+// (which raises the multiplier) is the only way to score more.
 
 // --- gun (forward weapon: Space fires; each shot spends weapon charge) --------
 // A shot spends weapon charge (the blue HUD bar / "ammo"); at zero charge the gun
@@ -368,7 +374,7 @@ export const SCORE = {
 // travel down -Z along that theta, so you AIM by lining up the pendulum onto a
 // target's theta - aiming reuses the swing.
 export const GUN = {
-  COST: 3,            // weapon charge spent per shot (~8 shots per orb at PER_ORB 25)
+  COST: 3,            // weapon charge spent per shot (~6-7 shots per orb at PER_ORB 20)
   COOLDOWN: 0.25,     // seconds between shots (tap or hold -> ~4/s)
   BOLT_SPEED: 185,    // player bolt speed down -Z (units/s; >> SPEED.FAST so it leads quickly, less lead error vs strafing enemies)
   BOLT_TTL: 1.4,      // seconds before a player bolt recycles (~259u reach)
@@ -391,8 +397,9 @@ export const GUN = {
 export const ENEMY = {
   HP: 2,              // hits to kill (burst-to-kill: one quick double-tap once aligned)
   SCORE: 750,         // points per kill (3x a gem; the highest-value event). Multiplied by the level multiplier at award time.
-  ENERGY_REFUND: 6,   // charge returned per kill (clamped at MAX); ~ a clean 2-hit kill's cost, so a
-                      // kill is roughly ammo-neutral (a precision 1-shot kill nets a little) and orbs stay needed
+  ENERGY_REFUND: 2,   // charge returned per kill (clamped at MAX); well under a kill's shot cost, so a
+                      // kill is a net ammo SINK (precision 1-shot ~ -1, sloppy chip-kill ~ -4): you cannot
+                      // hold-and-spray, you must aim deliberately and lean on orbs to stay armed
   COUNT: 2,           // enemies alive in the pool at once (one engaging, one approaching/departing)
 
   // --- spawn / lifecycle ---

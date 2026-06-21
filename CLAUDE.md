@@ -22,11 +22,16 @@ Design priorities that drive the code:
 - Weapon charge (the blue HUD bar) is the gun's ammo: spent only by firing, refilled by blue
   orbs and kills. At zero the gun is inert until recharged; running dry never ends the run.
 - The single fail condition is lives reaching zero (collisions / enemy fire / ram).
-- Difficulty ramps with distance: faster, denser obstacles, tighter gaps - this is the run's
+- Levels are gem-gated: a level advances only once you have collected its gem quota (a fraction
+  of the gems that pass in one slow->normal->fast cycle, so it scales with the cycle). Fall short
+  at the cycle boundary and the same level repeats - same speeds, same three tier colors, no
+  level-up - until you qualify. This pulls the player into active collecting instead of coasting;
+  forward motion never stops (more flying always means more gems). A HUD pip row shows progress.
+- Difficulty ramps with level: faster, denser obstacles, tighter gaps - this is the run's
   pressure, not a survival clock.
 - Death leads to a score screen (score, level reached, run time), then restart. Local best persists.
-- HUD is minimal and in-theme (thin green vector text/lines): level, score, best, run time,
-  lives, weapon charge, speed.
+- HUD is minimal and in-theme (thin green vector text/lines): level, gem-gate pips, score, best,
+  run time, lives, weapon charge, speed.
 
 ## Physics model - the damped, driven pendulum (the heart of the game)
 The craft's position is an angle `theta` around the circular cross-section of the tube
@@ -55,9 +60,10 @@ The craft's position is an angle `theta` around the circular cross-section of th
             by LEVELS.SPEED_INCREMENT), EASE (accel toward the active tier). Speed is set
             by the flight tier/section, not a player throttle; FLIGHT.{MODE, SECTION_SECONDS}
             + tube tier colors live alongside.
-- levels:   LEVELS.{SPEED_INCREMENT, SCORE_MULT_STEP, GRAVITY_MODE ('tier' default |
-            'absolute'), MAX_ENEMIES_CAP, BEYOND_ENEMY_LEVELS, TABLE[] (per-level enemyMax
-            + orb/bombSpacingMult - speed-normalized per-second rate multipliers)}
+- levels:   LEVELS.{SPEED_INCREMENT, SCORE_MULT_STEP, GEM_QUOTA_FRACTION (gem gate: fraction
+            of one cycle's gems needed to advance a level; derived quota in flight.ts), GRAVITY_MODE
+            ('tier' default | 'absolute'), MAX_ENEMIES_CAP, BEYOND_ENEMY_LEVELS, TABLE[] (per-level
+            enemyMax + orb/bombSpacingMult - speed-normalized per-second rate multipliers)}
 - tube:     TUBE.{RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES}
 - ship:     SHIP.{Z, RADIAL_OFFSET, SCALE, BANK, LINE_WIDTH, FLASH_HOLD, FLASH_TIME}; RIDE_RADIUS derived
 - camera:   CAMERA.{FOV, HFOV_MAX, BACK, RISE, LOOK_AHEAD, ORBIT_FOLLOW, ROLL_FOLLOW, AIM_FOLLOW, FOLLOW_LAG}
@@ -78,7 +84,9 @@ The craft's position is an angle `theta` around the circular cross-section of th
             CAPTURE_*/POP_* (rare: COUNT 1, large SPACING). +1 life, capped at LIVES.START
 - lives:    LIVES.{START, INVULN_TIME}
 - weapon:   ENERGY.{MAX,START,PER_ORB,LOW} (weapon charge / ammo; internal name kept as
-            ENERGY, HUD label is WEAPON; empty = below GUN.COST -> red bar); SCORE.DIST_RATE
+            ENERGY, HUD label is WEAPON; empty = below GUN.COST -> red bar)
+- score:    no distance term - score = gem points (TREASURE.SCORE) + kill points (ENEMY.SCORE),
+            each x the level multiplier (LEVELS.SCORE_MULT_STEP); passive flight earns nothing
 - gun:      COST (charge/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE_KILL/HIT_ANGLE/HIT_Z
             (player->enemy: inner cone kills, outer cone chips 1), BULLET_HIT_ANGLE/Z
             (enemy bolt->ship dodge window)
@@ -132,8 +140,9 @@ and on-aesthetic.
       loop.ts              fixed-timestep accumulator; update vs render split
       input.ts             keyboard -> steer (left/right) / fire (Space)
       craft.ts             player state: pendulum + speed + smoothed steer (level-aware speed clamp)
-      flight.ts            distance-based level + section model: per-level tier speeds, score
-                           multiplier, tier-relative gravity, speed cap, tier/level lookups
+      flight.ts            gem-gated level + section model: per-level tier speeds, score multiplier,
+                           tier-relative gravity, speed cap, tier/level lookups, derived gem quota
+                           (a level advances only when its quota is met, else the cycle repeats)
       levels.ts            per-level difficulty tuning (enemy cap + field density), derived from flight
       audio.ts             Web Audio mixer: streamed music + decoded/synth SFX (wired in main.ts)
       gun.ts               forward-gun trigger: cooldown + charge spend; returns fire/dry intent
@@ -150,8 +159,9 @@ and on-aesthetic.
       world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
       world/enemies.ts     raider pool + 4-state FSM (approach/engage/depart/dead), own worldDistance; NOT a field
       world/projectiles.ts one pooled bolt system (player + enemy bolts; camera-facing diamond glyph)
-      game.ts              run state: weapon charge refill/spend, run timer, score, lives, game-over, best
-      hud.ts               DOM HUD overlay (level/score/best/time/weapon/lives/speed + game-over)
+      game.ts              run state: weapon charge refill/spend, gems-this-level (gate counter),
+                           run timer, score, lives, game-over, best
+      hud.ts               DOM HUD overlay (level/gem-gate pips/score/best/time/weapon/lives/speed + game-over)
       render/scene.ts      Three scene/camera/renderer + bloom composer, fog/fade
       render/camera.ts     chase follow + bank from theta (sin-based, smooth loops)
       render/background.ts deep-space gradient backdrop (scene.background)
@@ -216,14 +226,27 @@ and on-aesthetic.
           scales gems + kills (NOT distance), and LEVELS.TABLE sets max enemies +
           orb/bomb frequency (speed-normalized via `flight.speedRatioAt` so the
           multipliers mean a per-second rate; a procedural ramp continues past the
-          table). Level tracking is distance-based (`flight.ts` locate() over cumulative
-          cycle lengths). Gravity is tier-relative (LEVELS.GRAVITY_MODE 'tier' default:
+          table). Gravity is tier-relative (LEVELS.GRAVITY_MODE 'tier' default:
           full at the level's own slow speed, zero at its own fast speed; 'absolute'
           switch reverts to the global span). Craft speed clamp follows the level's
-          fast-tier speed. Scoring: SCORE.DIST_RATE 0.7, gem 250, kill 750 (level-1
-          target: all gems ~= 3x distance, one kill = 3x a gem). HUD shows level +
-          multiplier. BUILT + verified (npm run sim:levels: 40 checks; combat sim 14;
-          build; 4-lens adversarial review).
+          fast-tier speed. Scoring: gem 250, kill 750, both x the level multiplier
+          (one kill = 3x a gem). HUD shows level + multiplier. BUILT + verified
+          (npm run sim:levels: 40 checks; combat sim 14; build; 4-lens adversarial review).
+- [x] M5  Gameplay legibility. (a) Energy -> weapon charge: the blue HUD bar is the gun's
+          ammo (spent only by firing, refilled by blue orbs + kills) and NEVER ends the run -
+          the single fail condition is lives -> 0. Empty disarms the gun (dull dry-fire click,
+          red RECHARGE bar; ENEMY.ENERGY_REFUND tuned so a kill is roughly ammo-neutral).
+          (b) Run timer (MM:SS.X) on the HUD + the game-over screen. (c) Gem-gated levels:
+          a level advances only once its gem quota is collected (LEVELS.GEM_QUOTA_FRACTION of
+          one cycle's gems, derived in flight.ts so it scales with the cycle); short at the
+          boundary -> the same cycle repeats (no level-up) until met, so passive coasting no
+          longer reaches deeper levels. HUD gem pips + a one-time hint. flight.ts is now
+          stateful (gated), not pure distance. (d) Score is active-only: the distance/survival
+          baseline is removed, so score = gems + kills (x level multiplier) and a pure dodger
+          (or a level-1 camper) scores nothing - closing the farm where frozen difficulty +
+          accruing distance let camping out-score progressing. BUILT + verified (sim:levels
+          gate checks; combat sim incl. passive-scores-0; build; live Playwright: advance on
+          quota met / hold when short / pips / movement intact).
 
 ### Next up (start here)
 1. Enemy persistence (change a little at a time): raiders currently ENGAGE then
@@ -245,7 +268,7 @@ and on-aesthetic.
 | Type       | Look                     | Color             | Interaction                         | Status |
 |------------|--------------------------|-------------------|-------------------------------------|--------|
 | Charge orb | wireframe sphere         | blue              | ride into - recharges the weapon    | built  |
-| Treasure   | brilliant-cut gem        | gold              | ride into - score points            | built  |
+| Treasure   | brilliant-cut gem        | gold              | ride into - score + level-gate progress | built  |
 | Hazard     | naval contact mine       | red               | avoid - hitting costs a life        | built  |
 | Extra life | medkit cross (+)         | bright green      | ride into (rare) - +1 life, capped at LIVES.START | built  |
 | Enemy      | forward-swept dart       | magenta           | shoot (forward gun); shoots back, lethal | built  |
@@ -273,8 +296,8 @@ their ship-relative z is advanced by the bolt's own speed.
 - [x] LIVES + invulnerability i-frames (ship flicker); game-over when lives reach zero (the
       only fail condition - weapon charge running dry just disarms the gun, never ends the run).
 - [x] Forward gun + projectiles + magenta raiders (shoot, get shot at; lethal) - see M3.
-- [x] Difficulty ramp with distance (levels: per-level speed, score multiplier, enemy
-      cap, orb/bomb frequency) - see M4.
+- [x] Difficulty ramp by level (per-level speed, score multiplier, enemy cap, orb/bomb
+      frequency) - see M4; gem-gated level advancement - see M5.
 - [ ] CRT scanline toggle (bloom already on)
 - [x] Web Audio synthesis (procedural SFX + streamed music; continuous engine hum not yet done)
 - [x] High-score persistence (localStorage)

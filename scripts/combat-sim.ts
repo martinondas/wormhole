@@ -61,7 +61,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
     shipTheta: r.craft.theta,
     onShipHit: () => r.game.hitHazard(),
   })
-  r.game.update(dt, r.craft.distance)
+  r.game.update(dt)
 }
 
 // ---- A) gun: energy per shot, rate limit, inert at low energy, never ends run
@@ -91,6 +91,16 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   check('A4 firing never ends the run', r.game.over === overBefore && !r.game.over)
 })()
 
+// ---- G) scoring: passive flight earns nothing (no distance baseline) ----
+// Regression for the no-farm fix: flying without collecting or killing must score
+// 0, however far you travel. (Distance points were removed precisely so a passive
+// dodger - and a level-1 camper - cannot farm score by surviving.)
+;(() => {
+  const r = makeRig()
+  for (let i = 0; i < PHYSICS.HZ * 3; i++) step(r, false) // 3s of passive flight, no firing
+  check('G1 passive flight scores 0 (no distance points)', r.game.score() === 0, `score=${r.game.score()}, dist=${Math.round(r.craft.distance)}`)
+})()
+
 // ---- B) kill: 2 aligned hits -> +SCORE, +ENERGY_REFUND, killed==1
 ;(() => {
   const ampWas = ENEMY.STRAFE_AMP
@@ -99,17 +109,23 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   ENEMY.FIRE_COOLDOWN = 999 // do not let it shoot back during the kill test
   const r = makeRig()
   r.enemies.debugStage(0, -32) // engage, dead ahead, in the band
-  const scoreBefore = r.game.score(r.craft.distance)
-  const energyBefore = r.game.energy
+  r.game.energy = 50 // mid-bar: the refund lands unclamped and observable for any refund value
+  const scoreBefore = r.game.score()
+  // The killing bolt is fired ~0.17s before it lands, so the step that resolves the
+  // kill does not also fire (cooldown). preKillStep is the charge at the start of that
+  // step, so its delta is exactly the applied refund - independent of refund magnitude
+  // (this is a net ammo SINK now, so the old "kill is net-positive" proxy no longer holds).
+  let preKillStep = r.game.energy
   let steps = 0
   while (r.enemies.killed < 1 && steps < PHYSICS.HZ * 3) {
+    preKillStep = r.game.energy
     step(r, true)
     steps++
   }
   check('B1 enemy killed by aligned fire', r.enemies.killed === 1, `killed=${r.enemies.killed} in ${(steps * dt).toFixed(2)}s`)
   check('B2 kill scores ENEMY.SCORE', r.game.scoreBonus === ENEMY.SCORE, `scoreBonus=${r.game.scoreBonus}`)
-  check('B3 score jumped > a gem (250)', r.game.score(r.craft.distance) - scoreBefore >= ENEMY.SCORE, '')
-  check('B4 kill refunded energy', r.game.energy > energyBefore - ENEMY.ENERGY_REFUND, `energy ${energyBefore.toFixed(1)} -> ${r.game.energy.toFixed(1)}`)
+  check('B3 score jumped > a gem (250)', r.game.score() - scoreBefore >= ENEMY.SCORE, '')
+  check('B4 kill applied ENERGY_REFUND', Math.abs((r.game.energy - preKillStep) - ENEMY.ENERGY_REFUND) < 1e-6, `kill-step refund=${(r.game.energy - preKillStep).toFixed(1)}`)
   ENEMY.STRAFE_AMP = ampWas
   ENEMY.FIRE_COOLDOWN = fireWas
 })()

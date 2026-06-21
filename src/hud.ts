@@ -9,6 +9,8 @@ export interface HudState {
   speed: number
   energy01: number // 0..1 (weapon charge)
   lives: number
+  gemsThisLevel: number // gems collected toward the current level's gate
+  gemQuota: number // gems needed to clear the current level
   elapsed: number // seconds of active play this run (run timer)
   over: boolean
   started: boolean // false on the title screen (before the first run begins)
@@ -21,6 +23,7 @@ export interface HudState {
 
 export interface Hud {
   update(s: HudState): void
+  flashGemHint(): void // one-time "collect gems to advance" reminder on the first run
 }
 
 const CSS = `
@@ -32,6 +35,9 @@ const CSS = `
 #hud .tr { top:18px; right:20px; text-align:right; }
 #hud .br { bottom:20px; right:20px; text-align:right; }
 #hud .dim { opacity:0.6; }
+#hud .gems { font-size:16px; letter-spacing:3px; color:#f1c34a; text-shadow:0 0 6px rgba(255,200,70,0.5); }
+#hud .gems .rem { opacity:0.3; }
+#hud .gems .ready { color:#9affc0; letter-spacing:2px; }
 #hud .lives { position:absolute; left:20px; bottom:78px; font-size:21px; letter-spacing:6px; }
 #hud .lives .lost { opacity:0.22; }
 #hud .meter { position:absolute; left:20px; bottom:20px; width:390px; }
@@ -66,6 +72,11 @@ const CSS = `
 #hud .over .keys .k { text-align:right; color:#9affc0; letter-spacing:2px; }
 #hud .over .keys .a { text-align:left; opacity:0.65; letter-spacing:2px; }
 @keyframes wh-blink { 50% { opacity:0.15; } }
+#hud .gemhint { position:absolute; top:120px; left:0; right:0; text-align:center;
+  font-size:18px; letter-spacing:3px; color:#f1c34a; text-shadow:0 0 10px rgba(255,200,70,0.6);
+  opacity:0; pointer-events:none; }
+#hud .gemhint.show { animation:wh-gemhint 4.5s ease-out forwards; }
+@keyframes wh-gemhint { 0%{opacity:0;} 12%{opacity:0.95;} 75%{opacity:0.95;} 100%{opacity:0;} }
 #hud .levelup { position:absolute; top:30%; left:0; right:0; text-align:center;
   font-size:77px; letter-spacing:12px; font-weight:bold; color:#9affc0;
   text-shadow:0 0 18px rgba(80,255,150,0.85), 0 0 44px rgba(80,255,150,0.5);
@@ -99,12 +110,13 @@ export function createHud(): Hud {
   const root = document.createElement('div')
   root.id = 'hud'
   root.innerHTML = `
-    <div class="corner tl"><div id="wh-level">LEVEL 1</div><div id="wh-score">SCORE 0000000</div><div id="wh-best" class="dim">BEST 0000000</div></div>
+    <div class="corner tl"><div id="wh-level">LEVEL 1</div><div id="wh-gems" class="gems">GEMS</div><div id="wh-score">SCORE 0000000</div><div id="wh-best" class="dim">BEST 0000000</div></div>
     <div class="corner tr"><div id="wh-time">TIME 00:00.0</div></div>
     <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl" id="wh-weplbl">WEAPON</div><div class="track" id="wh-track"><div class="fill" id="wh-energy"></div></div></div>
     <div class="corner br"><div id="wh-grav" class="dim">MODE NORMAL</div><div id="wh-spd">SPD 00</div></div>
     <div class="mute" id="wh-mute">&#9836; MUSIC OFF</div>
+    <div class="gemhint" id="wh-gemhint">COLLECT GEMS TO ADVANCE</div>
     <div class="levelup" id="wh-levelup">LEVEL 2</div>
     <div class="over" id="wh-over">
       <h1 id="wh-over-title">SHIP DESTROYED</h1>
@@ -118,7 +130,7 @@ export function createHud(): Hud {
       <h1>WORMHOLE</h1>
       <p class="intro">A wormhole has torn open - a fold in spacetime no craft has crossed and returned from, where relativity bends time and minutes inside are years back home. You are the pilot sent in: ride its gravity deeper and faster into the unknown.</p>
       <p class="mission">MISSION - chart the deepest passage through spacetime, and live to bring it back.</p>
-      <p class="legend">Blue orbs refill energy &middot; gold is score &middot; red mines and magenta raiders end the run - shoot the raiders before they shoot you.</p>
+      <p class="legend">Blue orbs recharge your weapon &middot; gold gems score and unlock the next level &middot; red mines and magenta raiders cost a ship - shoot the raiders before they shoot you.</p>
       <div class="keys">
         <span class="k">ARROWS / A D</span><span class="a">STEER UP THE WALLS</span>
         <span class="k">SPACE</span><span class="a">FIRE</span>
@@ -136,6 +148,7 @@ export function createHud(): Hud {
   const elGrav = $('wh-grav')
   const elBest = $('wh-best')
   const elTime = $('wh-time')
+  const elGems = $('wh-gems')
   const elLives = $('wh-lives')
   const elEnergy = $('wh-energy')
   const elWepLbl = $('wh-weplbl')
@@ -150,6 +163,7 @@ export function createHud(): Hud {
   const elOverTime = $('wh-over-time')
   const elOverBest = $('wh-over-best')
   const elLevelUp = $('wh-levelup')
+  const elGemHint = $('wh-gemhint')
 
   // ship glyphs: bright for remaining, dim for spent (shows the max at a glance)
   let lastLives = -1
@@ -161,6 +175,30 @@ export function createHud(): Hud {
       glyphs += `<span class="${i < lives ? '' : 'lost'}">&#9650;</span>`
     }
     elLives.innerHTML = 'SHIPS ' + glyphs
+  }
+
+  // gem-gate pips: filled gold diamond per collected gem, dim outline per remaining,
+  // with a numeric tail so it stays readable as the quota climbs. At the quota it
+  // flips to READY (the next level opens at the upcoming cycle boundary). Rebuilt
+  // only when the count or quota changes (a few times per level), like renderLives.
+  let lastGot = -1
+  let lastQuota = -1
+  function renderGems(gems: number, quota: number): void {
+    // Cache the CLAMPED count, not the raw one: collecting past the quota (the
+    // over-quota window before the boundary) keeps gems rising but the row is
+    // saturated, so caching raw `gems` would rebuild an identical string each time.
+    const got = Math.min(Math.max(0, gems), Math.max(0, quota))
+    if (got === lastGot && quota === lastQuota) return
+    lastGot = got
+    lastQuota = quota
+    if (quota <= 0) {
+      elGems.innerHTML = ''
+      return
+    }
+    let pips = ''
+    for (let i = 0; i < quota; i++) pips += i < got ? '&#9670;' : '<span class="rem">&#9671;</span>'
+    const tail = got >= quota ? ' <span class="ready">READY &#9656;</span>' : ` ${got}/${quota}`
+    elGems.innerHTML = 'GEMS ' + pips + tail
   }
 
   // hud.update() runs every render frame. The DOM only changes a few times a
@@ -193,6 +231,7 @@ export function createHud(): Hud {
       if (score !== lastScore) { elScore.textContent = 'SCORE ' + pad(score, 7); lastScore = score }
       const level = Math.max(1, Math.floor(s.level))
       if (level !== lastLevel) { elLevel.textContent = 'LEVEL ' + level; lastLevel = level }
+      renderGems(s.gemsThisLevel, s.gemQuota)
       // Big "LEVEL N" banner for ~2s when a new level is reached during a live run
       // (not level 1, the start). Fires once per level-up; the reflow restarts the
       // CSS animation, and lastBannerLevel tracks the level so a restart re-arms it.
@@ -249,6 +288,14 @@ export function createHud(): Hud {
         if (timeTenths !== lastOverTime) { elOverTime.textContent = 'TIME ' + fmtTime(s.elapsed); lastOverTime = timeTenths }
         if (best !== lastOverBest) { elOverBest.textContent = 'BEST ' + pad(best, 7); lastOverBest = best }
       }
+    },
+
+    // Play the one-time gem-gate reminder (fades in then out). The reflow restarts
+    // the CSS animation; main calls this once, on the first run of the session.
+    flashGemHint(): void {
+      elGemHint.classList.remove('show')
+      void elGemHint.offsetWidth
+      elGemHint.classList.add('show')
     },
   }
 }
