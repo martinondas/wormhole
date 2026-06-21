@@ -10,6 +10,7 @@ import { createTreasure } from './world/treasure'
 import { createHazard } from './world/hazard'
 import { createExtraLife } from './world/extraLife'
 import { createProjectiles } from './world/projectiles'
+import { createBurst } from './world/burst'
 import { createEnemies } from './world/enemies'
 import { Input } from './input'
 import { createCraft, updateCraft, resetCraft } from './craft'
@@ -21,7 +22,7 @@ import { createHud } from './hud'
 import { createAudio } from './audio'
 import { createPerfOverlay } from './render/perf'
 import { startLoop } from './loop'
-import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, INPUT, AUDIO } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -57,6 +58,24 @@ const playedHit = (lostLife: boolean): boolean => {
   return lostLife
 }
 
+// Impact bursts (white-hot flash + shards): a shared pooled effect played on a real
+// hit so the player SEES it. Created before the fields/enemies so their onHit/onKill
+// closures can spawn into it. A damaging hit (mine / ram / enemy bolt) flashes the hull
+// red AND spawns a big, short, world-anchored red burst at the impact point; a kill
+// spawns a magenta burst at the raider (see config BURST for the two kinds).
+const burst = createBurst()
+stage.scene.add(burst.object)
+stage.onResize((w, h) => burst.setResolution(w, h))
+const damageFx = (theta: number, z: number): void => {
+  ship.flash(RENDER.SHIP_HIT_FLASH_RGB) // red hull flash on the same hit
+  burst.spawn('damage', theta, z, craft.distance)
+}
+// ram / enemy-bolt hits land on the ship; composes with playedHit (returns lostLife).
+const damageBurst = (lostLife: boolean): boolean => {
+  if (lostLife) damageFx(craft.theta, SHIP.Z)
+  return lostLife
+}
+
 // --- wall objects: orbs (energy), gems (score), mines (a hit costs a life) --
 // All three are pools of WallObjects on the tube wall, driven by one generic
 // field; only the onHit effect differs. The per-kind config blocks share these
@@ -75,7 +94,7 @@ interface FieldConsts {
 function makeField(
   create: () => WallObject,
   c: FieldConsts,
-  onHit: () => boolean,
+  onHit: (theta: number, z: number) => boolean,
   sampleTheta?: () => number,
   spacingScaleAt?: (worldDistance: number) => number,
 ): Field {
@@ -122,8 +141,19 @@ const fields: Field[] = [
     return true
   }),
   // play the hit sfx only when a life is actually lost (hitHazard returns false
-  // during i-frames), so an invuln graze stays silent.
-  makeField(createHazard, HAZARD, () => playedHit(game.hitHazard()), biasedAngle(HAZARD.SPAWN_ANGLE), levels.mineSpacingScale),
+  // during i-frames), so an invuln graze stays silent. A real hit also bursts at
+  // the mine's own (theta, z) - the detonation blooms where the mine was.
+  makeField(
+    createHazard,
+    HAZARD,
+    (theta, z) => {
+      const lost = playedHit(game.hitHazard())
+      if (lost) damageFx(theta, z) // red hull flash + red burst at the mine
+      return lost
+    },
+    biasedAngle(HAZARD.SPAWN_ANGLE),
+    levels.mineSpacingScale,
+  ),
   // extra life: a rare bright-green cross. game.addLife() caps at LIVES.START, so
   // at full lives it returns false and the cross passes through (no pop / no sound);
   // when it grants a life, play the 1-up cue and flash the hull green.
@@ -157,11 +187,12 @@ const enemies = createEnemies({
     audio.play('enemyFire')
     projectiles.spawn('enemy', theta, z, vz)
   },
-  onRam: () => playedHit(game.hitHazard()), // lethal hull contact (enemy survives)
-  onKill: () => {
+  onRam: () => damageBurst(playedHit(game.hitHazard())), // lethal hull contact (enemy survives); burst at the ship
+  onKill: (theta, z) => {
     game.addScore(Math.round(ENEMY.SCORE * flight.scoreMultiplier))
     game.addEnergy(ENEMY.ENERGY_REFUND) // energy refund is NOT score-multiplied
     audio.play('kill')
+    burst.spawn('kill', theta, z, craft.distance) // magenta detonation where the raider died
   },
 })
 for (const sys of [enemies, projectiles]) {
@@ -174,7 +205,7 @@ for (const sys of [enemies, projectiles]) {
 const projCtx = {
   tryKillEnemy: (theta: number, z: number): boolean => enemies.tryKill(theta, z),
   shipTheta: 0,
-  onShipHit: (): boolean => playedHit(game.hitHazard()),
+  onShipHit: (): boolean => damageBurst(playedHit(game.hitHazard())),
 }
 
 // Run-flow gate: the sim is frozen on the title screen (game.started=false) and
@@ -226,6 +257,7 @@ function returnToTitle(): void {
   lastFlightLevel = 0
   for (const f of fields) f.reset(craft.distance)
   projectiles.reset()
+  burst.reset()
   gun.reset()
   enemies.reset(craft.distance)
   game.toTitle()
@@ -320,6 +352,11 @@ startLoop(
   },
   (frameDt) => {
     ship.update(craft, frameDt)
+    // impact bursts are pure-visual, frame-paced; frozen during a gameplay pause so a
+    // burst caught mid-flight resumes on unpause (matches the frozen field pops). NOT
+    // gated on game-over (a final death-burst plays through) or debug.paused (the
+    // SHOOT_BURST harness animates staged bursts under it).
+    if (!paused) burst.update(frameDt, craft.distance)
     // i-frame flicker: blink the ship while invulnerable so a hit reads clearly
     // (and so losing a life never feels random). Always visible once the run is
     // over, paused, or invulnerability has lapsed (a paused run freezes invuln, so
@@ -388,10 +425,11 @@ startLoop(
   fields,
   enemies,
   projectiles,
+  burst,
   gun,
   game,
   flight, // WH.flight.mode = 'slow' | 'normal' | 'fast' | 'sections' (or press G)
   audio,
   begin: beginRun, // start the run from the console / screenshot tool (skips the title gate)
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, INPUT, AUDIO },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO },
 }

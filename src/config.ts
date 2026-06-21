@@ -161,6 +161,7 @@ export const RENDER = {
   SHIP_FILL_RGB: [0.01, 0.04, 0.03] as [number, number, number],
   SHIP_FLASH_RGB: [0.10, 0.50, 4.50] as [number, number, number], // HDR blue, keyed to the orb; ship edges flash this on pickup then decay to SHIP_RGB. Low green = deep blue (not pale cyan); high blue = strong bloom pop
   SHIP_LIFE_FLASH_RGB: [0.30, 5.00, 1.10] as [number, number, number], // HDR green, keyed to the extra-life cross; brighter than SHIP_RGB so the hull clearly lights green on a life gain, then decays back
+  SHIP_HIT_FLASH_RGB: [5.00, 0.18, 0.08] as [number, number, number], // HDR red, keyed to the mine; the hull flashes this on a damaging hit (mine / ram / bolt) then decays back. Low green/blue = pure red, not pink
 
   DPR_CAP: 1.5,       // cap devicePixelRatio before scaling
   RENDER_SCALE: 0.85, // render below native res, upscale (main 60fps lever)
@@ -462,6 +463,44 @@ export const PROJECTILE = {
   LINE_WIDTH: 3.0,    // fat-line width in px (fatter than hulls so bolts pop)
   PLAYER_RGB: [0.55, 2.0, 1.1] as [number, number, number], // hot white-green (yours; SHIP hue family)
   ENEMY_RGB: [2.0, 0.15, 1.6] as [number, number, number],  // white-hot magenta (theirs)
+}
+
+// --- burst (impact effect: white-hot flash + glowing shards) ----------------
+// A pooled shard-burst played on a REAL hit (see world/burst.ts) so the player SEES
+// the impact, not just hears it. TWO kinds; both start white-hot (FLASH_RGB blooms
+// hard at BLOOM_THRESHOLD 0 = the flash) then resolve to the kind color and fade.
+//   'kill'   - a raider destroyed: magenta, frozen at spawn z (stays framed), and
+//              distance-compensated to a constant screen size (near/far kills bloom alike).
+//   'damage' - a life lost (mine / ram / enemy bolt): a big, bright, SHORT red flash,
+//              WORLD-ANCHORED so it stays put in space and recedes as the craft flies
+//              forward (not hanging in front of it); NOT distance-compensated, so it reads
+//              big right at the ship. The craft hull also flashes red on the same hit
+//              (RENDER.SHIP_HIT_FLASH_RGB).
+export const BURST = {
+  POOL: 14,           // max concurrent bursts (kills + damage rarely overlap this much; excess drop)
+  SHARDS: 13,         // line shards per burst (odd count avoids an obviously symmetric look)
+  FLASH_RGB: [4.0, 4.0, 4.0] as [number, number, number], // white-hot start (both kinds); blooms hard = the flash
+  FLASH_FRACTION: 0.4,// shards stay white-hot then resolve to the kind color by this fraction of life.
+                      // Decoupled from the (slower) opacity fade so the hue is visible WHILE the shard is
+                      // bright - the core clamps to white under NoToneMapping, so a hue tied to the fade
+                      // only shows once nearly faded (see burst.ts).
+
+  // KILL burst (raider destroyed)
+  KILL_RGB: [3.2, 0.2, 2.8] as [number, number, number], // hot magenta (keyed to the enemy hue)
+  SPREAD: 3.0,        // peak shard-tip radius for kills at/beyond REF_DIST. CLOSER kills scale DOWN
+                      // proportionally so they keep a glowing-flash screen size instead of blowing up into
+                      // big bare lines (bloom is a fixed screen-space size: a large on-screen burst gets only
+                      // a thin glow rim while a small one is swallowed = flash).
+  REF_DIST: 40,       // camera distance (world u) at/beyond which full SPREAD applies (~ the kill band, so
+                      // band kills are unchanged); a closer kill shrinks toward it.
+  DURATION: 0.34,     // kill flash-to-gone (s)
+  LINE_WIDTH: 3.0,    // kill shard width in px (matches the bold bolt weight)
+
+  // DAMAGE burst (life lost: mine / ram / enemy bolt) - see the header note
+  DAMAGE_RGB: [6.0, 0.3, 0.1] as [number, number, number], // bright red (the mine's hue, brighter for a strong bloom)
+  DAMAGE_SPREAD: 3.4, // peak shard-tip radius; NOT distance-compensated, so it engulfs the mine (~2u) at the ship
+  DAMAGE_DURATION: 0.2, // short + punchy: it recedes fast and must not linger in front of the craft
+  DAMAGE_LINE_WIDTH: 6.0, // fat shards = more bright pixels = more bloom glow at close range
 }
 
 // --- input key bindings (KeyboardEvent.code) --------------------------------

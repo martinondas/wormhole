@@ -32,7 +32,10 @@ export interface FieldConfig {
   // packs objects denser over that stretch (e.g. more mines in slow sections).
   // Default: 1 everywhere (uniform spacing).
   spacingScaleAt?: (worldDistance: number) => number
-  onHit: () => boolean
+  // Fired once when the ship reaches an armed object; (theta, z) is where the
+  // object sits at that moment, so an effect (e.g. an impact burst) can play at
+  // the contact point. Returns whether the object was CONSUMED (see above).
+  onHit: (theta: number, z: number) => boolean
 }
 
 // Spawn-angle bias keyed by "angle from the bottom" (0 deg = bottom where the
@@ -171,7 +174,7 @@ export function createField(cfg: FieldConfig): Field {
           Math.abs(angleDiff(craft.theta, slot.theta)) < cfg.captureAngle
         ) {
           slot.triggered = true
-          if (cfg.onHit()) {
+          if (cfg.onHit(slot.theta, z)) {
             consumed += 1
             slot.state = 'popping'
             slot.popT = 0

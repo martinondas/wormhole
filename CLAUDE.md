@@ -159,6 +159,7 @@ and on-aesthetic.
       world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
       world/enemies.ts     raider pool + 4-state FSM (approach/engage/depart/dead), own worldDistance; NOT a field
       world/projectiles.ts one pooled bolt system (player + enemy bolts; camera-facing diamond glyph)
+      world/burst.ts       pooled impact burst (white-hot flash + shard starburst); spawned on a kill / damage hit
       game.ts              run state: weapon charge refill/spend, gems-this-level (gate counter),
                            run timer, score, lives, game-over, best
       hud.ts               DOM HUD overlay (level/gem-gate pips/score/best/time/weapon/lives/speed + game-over)
@@ -256,9 +257,9 @@ and on-aesthetic.
 2. High-level combat scaling: ENEMY.BULLET_SPEED / GUN.BOLT_SPEED are not scaled per
    level, so at deep levels craft speed approaches enemy bolt speed. Scale bolt speeds
    (or lead) with level once high levels are actually reached in playtest.
-3. Combat polish deferred from M3: a shard-burst death (currently the expand+fade pop),
-   a muzzle flash on fire, and a richer head-on raider silhouette. Playtest the near-edge
-   enemy-bolt dodge window (ENGAGE_Z_NEAR) and only widen it if it reads as unfair.
+3. Combat polish deferred from M3: a muzzle flash on fire and a richer head-on raider
+   silhouette. Playtest the near-edge enemy-bolt dodge window (ENGAGE_Z_NEAR) and only
+   widen it if it reads as unfair.
 4. Watch: enemies + the three fields are independent streams, so objects can overlap at
    nearly the same (z, theta). Mitigated by staggered spawns + color/shape dominance; add
    cross-stream de-collision ONLY if playtesting shows it is unfair - do not build it preemptively.
@@ -296,6 +297,8 @@ their ship-relative z is advanced by the bolt's own speed.
 - [x] LIVES + invulnerability i-frames (ship flicker); game-over when lives reach zero (the
       only fail condition - weapon charge running dry just disarms the gun, never ends the run).
 - [x] Forward gun + projectiles + magenta raiders (shoot, get shot at; lethal) - see M3.
+- [x] Impact bursts: white-hot flash + shard starburst on a kill (magenta) / damage hit
+      (orange: mine, ram, enemy bolt), so a hit reads visually, not just by sound (world/burst.ts).
 - [x] Difficulty ramp by level (per-level speed, score multiplier, enemy cap, orb/bomb
       frequency) - see M4; gem-gated level advancement - see M5.
 - [ ] CRT scanline toggle (bloom already on)

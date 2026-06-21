@@ -147,6 +147,28 @@ if (process.env.SHOOT_GAMEOVER) {
   console.log(`visible bolt meshes = ${visN}`)
   await page.waitForTimeout(300)
   await page.screenshot({ path: out })
+} else if (process.env.SHOOT_BURST) {
+  // Impact-burst art check: freeze physics, then fire a big red DAMAGE burst (close, up
+  // the wall + at the ship) and a magenta KILL burst far in the engagement band, so one
+  // grab compares both kinds. (Recede + hull flash are motion - not visible in a still.)
+  await page.evaluate(() => {
+    const wh = (globalThis as Record<string, unknown>).WH as
+      | {
+          debug?: { paused: boolean }
+          craft?: { theta: number; omega: number; distance: number }
+          burst?: { spawn(kind: string, theta: number, z: number, craftDist: number): void }
+        }
+      | undefined
+    if (!wh?.burst || !wh.debug) return
+    wh.debug.paused = true // freeze the sim; the render loop still animates bursts
+    if (wh.craft) { wh.craft.theta = 0; wh.craft.omega = 0 }
+    const d = wh.craft?.distance ?? 0
+    wh.burst?.spawn('damage', 0.9, 0, d) // damage close, up the wall (unobstructed)
+    wh.burst?.spawn('kill', 0.0, -42, d) // kill far (engagement band)
+    wh.burst?.spawn('damage', 0.0, 0, d) // damage at the real ship position (overlaps the hull)
+  })
+  await page.waitForTimeout(80) // catch them near the bright flash phase
+  await page.screenshot({ path: out })
 } else if (hold.length) {
   const holdMs = Number(process.env.SHOOT_HOLD_MS ?? 1200)
   const settleMs = Number(process.env.SHOOT_SETTLE_MS ?? 0) // if >0, release then settle before the shot

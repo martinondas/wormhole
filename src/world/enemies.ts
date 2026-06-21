@@ -18,7 +18,7 @@ import { createEnemy, type Enemy } from './enemy'
 export interface EnemyDeps {
   spawnEnemyBolt(theta: number, z: number, vz: number): void
   onRam(): boolean // lethal contact with the hull (routes to game.hitHazard); enemy survives
-  onKill(): void // a kill landed (score + energy refund)
+  onKill(theta: number, z: number): void // a kill landed (score + energy refund); (theta,z) = where the raider died
 }
 
 export interface Enemies {
@@ -295,7 +295,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
             slot.charging = false
             slot.enemy.setCharge(0)
             killed += 1
-            deps.onKill()
+            deps.onKill(slot.theta, enemyZ)
           } else {
             slot.flashT = FLASH_TIME
           }
