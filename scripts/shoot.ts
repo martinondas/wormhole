@@ -109,12 +109,15 @@ if (process.env.SHOOT_GAMEOVER) {
   const combat = {
     et: Number(process.env.ENEMY_THETA ?? 0.18),
     ez: Number(process.env.ENEMY_Z ?? -11),
+    dist: Number(process.env.COMBAT_DIST ?? 0), // craft distance -> tube section colour (0 = opening yellow; ~500 = green normal)
     bolts: !process.env.NO_BOLTS,
   }
   const visN = await page.evaluate((c) => {
     const wh = (globalThis as Record<string, unknown>).WH as
       | {
           debug?: { paused: boolean }
+          craft?: { distance: number; theta: number; omega: number }
+          flight?: { update(distance: number): void }
           enemies?: { debugStage(theta: number, z: number): void }
           projectiles?: {
             object: { children: { visible: boolean }[] }
@@ -124,6 +127,13 @@ if (process.env.SHOOT_GAMEOVER) {
       | undefined
     if (!wh?.debug) return -1
     wh.debug.paused = true // freeze physics so the staged pose holds
+    if (c.dist && wh.craft) {
+      // jump to a distance so the tube shows that section's colour (e.g. green normal)
+      wh.craft.distance = c.dist
+      wh.craft.theta = 0
+      wh.craft.omega = 0
+      wh.flight?.update(c.dist) // refresh level/tier so the HUD + tube colour match
+    }
     wh.enemies?.debugStage(c.et, c.ez) // raider up the wall, close ahead
     if (c.bolts) {
       // a stream of player bolts forward + one enemy bolt closing on the ship

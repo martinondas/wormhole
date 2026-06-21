@@ -23,6 +23,7 @@ to ride high up the wall, or all the way over the top.
 | Steer / swing up the walls | Left / Right arrows, or A / D |
 | Fire the forward gun | Space |
 | Start / restart (after game over) | Space or Enter |
+| Pause / resume | Esc |
 | Mute / unmute music (sound effects keep playing) | M |
 
 You do not control speed - the tube section sets it (see Gameplay). Two extra keys
@@ -39,8 +40,11 @@ You only steer and shoot. Everything else flows from the swing.
   the upcoming section's colour ahead of you.
 - Energy drains continuously - ride into **blue orbs** to refill it.
 - Ride into **gold gems** for score.
+- Grab a rare **green cross** for an extra ship (up to your starting maximum).
 - Avoid **red spiky mines** - a hit costs one of your three ships, with brief
   invulnerability after.
+- Difficulty climbs with distance: the tiers get faster and the fields denser, and a
+  score multiplier rises each level.
 - **Magenta raiders** fly in ahead, weave to stay hard to hit, then charge and fire
   back. Shoot them with the forward gun: a dead-centre hit destroys one outright, a
   glancing hit only chips it. A kill scores points and refunds some energy. Taking
@@ -87,12 +91,14 @@ Early but playable.
 
 - **Built**: scrolling wireframe tube, procedural edge-lit ship, damped-driven
   pendulum physics, banking chase cam; speed-tiered "sections" flight where the tube
-  section sets both speed and gravity; energy orbs, treasure gems, and hazard mines
-  on a generic "wall field" engine; a forward gun with pooled projectiles and magenta
-  raiders that shoot back; lives with invulnerability; music and procedural sound
-  effects; a minimal in-theme HUD, score with a persistent local best, and a
-  deep-space backdrop with stars.
-- **Next**: a difficulty ramp with distance - faster, denser fields and tighter gaps.
+  section sets both speed and gravity; distance-based difficulty levels (rising speed,
+  a score multiplier, denser fields); energy orbs, treasure gems, hazard mines, and a
+  rare extra-life cross on a generic "wall field" engine; a forward gun with pooled
+  projectiles and magenta raiders that shoot back; lives with invulnerability; music
+  and procedural sound effects; a title screen and a minimal in-theme HUD, score with a
+  persistent local best, and a deep-space backdrop with stars.
+- **Next**: raiders that hold and close in instead of peeling off, and combat scaling
+  (bolt speed / lead) at deep levels.
 
 See [CLAUDE.md](CLAUDE.md) for the full design spec, physics model, architecture,
 and roadmap.

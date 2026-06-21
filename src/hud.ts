@@ -1,8 +1,9 @@
 import { ENERGY, LIVES } from './config'
 
 // Minimal in-theme HUD as a DOM overlay (crisp text, no bloom interference):
-// score + distance top-left, best top-right, an energy bar + speed bottom,
-// and a centered game-over panel. Thin green vector styling.
+// level / score / best top-left, ships + energy bottom-left, mode + speed
+// bottom-right, and centered title / level-up / game-over panels. Thin green
+// vector styling.
 export interface HudState {
   score: number
   speed: number

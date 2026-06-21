@@ -13,8 +13,8 @@ Design priorities that drive the code:
   (spirit of Psyborg, S.T.U.N. Runner, Tunnels of Armageddon, with modern execution).
 
 ## Game design spec (condensed)
-- Constant forward motion; the craft never halts. Speed is changeable: a cruise baseline,
-  throttle/boost to accelerate, ease off to slow toward a floor above zero (never to a stop).
+- Constant forward motion; the craft never halts. Speed is set by the tube section (slow /
+  normal / fast tiers), not a player throttle; the craft eases between tiers, never to a stop.
 - Steer left / right to ride up the walls (pendulum swing, see Physics).
 - Collect pickups around the tube wall (rings / energy pods) for score and to refill energy.
 - Dodge obstacles fixed to the tube (rocks, struts, gates); hits cost energy or a life.
@@ -45,8 +45,8 @@ The craft's position is an angle `theta` around the circular cross-section of th
   possible when pumped hard. Tuning controls how reachable the top is.
 
 ### Tunable constants (live in `src/config.ts`, grouped; values are starting points, tune freely)
-- physics:  GRAVITY_K, DAMPING_C, STEER_TORQUE, STEER_OMEGA_MAX (soft spin cap), STEER_ATTACK,
-            STEER_RELEASE, PHYSICS_HZ
+- physics:  PHYSICS.{GRAVITY_K, DAMPING_C, STEER_TORQUE, STEER_OMEGA_MAX (soft spin cap),
+            STEER_ATTACK, STEER_RELEASE, HZ}
 - speed:    SLOW / NORMAL / FAST (the three tier speeds, level-1 base; raised per level
             by LEVELS.SPEED_INCREMENT), EASE (accel toward the active tier). Speed is set
             by the flight tier/section, not a player throttle; FLIGHT.{MODE, SECTION_SECONDS}
@@ -54,11 +54,14 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - levels:   LEVELS.{SPEED_INCREMENT, SCORE_MULT_STEP, GRAVITY_MODE ('tier' default |
             'absolute'), MAX_ENEMIES_CAP, BEYOND_ENEMY_LEVELS, TABLE[] (per-level enemyMax
             + orb/bombSpacingMult - speed-normalized per-second rate multipliers)}
-- tube:     TUBE_RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES
-- camera:   CAM_BACK, CAM_RISE, CAM_FOV, CAM_ROLL_FOLLOW, CAM_ROLL_LAG
-- render:   RING_RGB, LONG_RGB, SHIP_RGB, FOG_NEAR, FOG_FAR, RENDER_SCALE, MSAA_SAMPLES,
-            BLOOM_ENABLED (on), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD
-- background:BACKGROUND.{CENTER,MID,EDGE,MID_STOP} gradient; STARS, STAR_ALPHA, STAR_SPREAD_DEG
+- tube:     TUBE.{RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES}
+- ship:     SHIP.{Z, RADIAL_OFFSET, SCALE, BANK, LINE_WIDTH, FLASH_HOLD, FLASH_TIME}; RIDE_RADIUS derived
+- camera:   CAMERA.{FOV, HFOV_MAX, BACK, RISE, LOOK_AHEAD, ORBIT_FOLLOW, ROLL_FOLLOW, AIM_FOLLOW, FOLLOW_LAG}
+- render:   RENDER.{BG_COLOR, FOG_NEAR, FOG_FAR, RING_RGB, LONG_RGB, SHIP_RGB, SHIP_FILL_RGB,
+            SHIP_FLASH_RGB, SHIP_LIFE_FLASH_RGB, DPR_CAP, RENDER_SCALE(_LOW), MSAA_SAMPLES(_LOW),
+            BLOOM_ENABLED (on), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD}
+            (the _LOW variants are the integrated-GPU fallback, auto-selected in scene.ts)
+- background:BACKGROUND.{ENABLED, CENTER, MID, EDGE, MID_STOP} gradient; STARS, STAR_ALPHA, STAR_SPREAD_DEG
 - pickup:   RADIUS, EDGE_RGB, GLOW_RGB, GLOW_OPACITY, SPIN/BOB; COUNT, SPAWN_* (incl.
             SPAWN_ANGLE = per-kind angle-from-bottom bias), CAPTURE_Z, CAPTURE_ANGLE, POP_TIME/SCALE
 - treasure: gem geometry (RADIUS, FACETS, TABLE/CROWN/PAVILION_RATIO, EDGE_THRESHOLD), EDGE/FILL
@@ -71,20 +74,23 @@ The craft's position is an angle `theta` around the circular cross-section of th
             CAPTURE_*/POP_* (rare: COUNT 1, large SPACING). +1 life, capped at LIVES.START
 - lives:    LIVES.{START, INVULN_TIME}
 - energy:   ENERGY.{MAX,START,DRAIN,PER_ORB,LOW,CRITICAL}; SCORE.DIST_RATE
-- gun:      COST (energy/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE/Z (player->enemy),
-            BULLET_HIT_ANGLE/Z (enemy bolt->ship dodge window)
+- gun:      COST (energy/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE_KILL/HIT_ANGLE/HIT_Z
+            (player->enemy: inner cone kills, outer cone chips 1), BULLET_HIT_ANGLE/Z
+            (enemy bolt->ship dodge window)
 - enemy:    HP, SCORE (per kill), ENERGY_REFUND; COUNT/SPAWN_*/RECYCLE; ENGAGE band + speeds
             (CLOSE/STATION/DEPART deltas relative to craft.speed); STRAFE_* (hard-capped <<
             player STEER_OMEGA_MAX = hittability), FIRE_COOLDOWN/CHARGE_TIME/BULLET_SPEED,
             RAM_ANGLE/Z; dart geometry + EDGE/FILL/CHARGE colors, SCALE/BANK/POP_*
 - projectile: MAX_PLAYER/MAX_ENEMY (fixed pools), LENGTH/LINE_WIDTH, PLAYER_RGB/ENEMY_RGB
-- input:    left/right/throttle/brake; boost = Shift; fire = Space (forward gun)
+- input:    INPUT.{left, right} steer; fire = Space; plus start / restart / mute / pause /
+            modeCycle (G) / perf (P) bindings
 
 ### Camera feel (decided default, easy to change)
-Chase cam sits behind and slightly above the craft AT the craft's angular position, so it
-orbits the tube to stay behind the ship and the world appears to rotate as you swing. Roll
-follows `theta` with lag (`CAM_ROLL_FOLLOW`, `CAM_ROLL_LAG`) so fast swings feel weighty and
-you still see a little wall ahead. Going over the top rolls the view through the loop.
+Chase cam sits behind and slightly above the craft. It orbits the tube a little with the
+craft (`CAMERA.ORBIT_FOLLOW`, smoothed by `CAMERA.FOLLOW_LAG`) and banks the view with
+`CAMERA.ROLL_FOLLOW`; both are driven by `sin(theta)`, so they sit at zero when the craft
+rests at the bottom and stay continuous over the top (loops roll through smoothly). The aim
+is biased toward the craft by `CAMERA.AIM_FOLLOW` so it stays framed while you still see wall ahead.
 
 ## Tech stack and why
 - TypeScript (strict) + Vite + Three.js. No game engine, no heavy frameworks.
@@ -119,10 +125,12 @@ and on-aesthetic.
       main.ts              bootstrap, canvas, resize, start loop, WH debug handle
       config.ts            ALL tunable constants, grouped (see above)
       loop.ts              fixed-timestep accumulator; update vs render split
-      input.ts             keyboard -> steer / throttle / boost (Shift) / fire (Space)
+      input.ts             keyboard -> steer (left/right) / fire (Space)
       craft.ts             player state: pendulum + speed + smoothed steer (level-aware speed clamp)
       flight.ts            distance-based level + section model: per-level tier speeds, score
                            multiplier, tier-relative gravity, speed cap, tier/level lookups
+      levels.ts            per-level difficulty tuning (enemy cap + field density), derived from flight
+      audio.ts             Web Audio mixer: streamed music + decoded/synth SFX (wired in main.ts)
       gun.ts               forward-gun trigger: cooldown + energy spend; returns fire intent
       util/math.ts         clamp / approach / lerp / angleDiff (shared signed angle delta)
       physics/pendulum.ts  theta integrator (damped driven pendulum)
@@ -131,6 +139,7 @@ and on-aesthetic.
       world/field.ts       generic wall-object pool (orbs/gems/mines): spawn/scroll/recycle + angle hit
                            test; optional spacingScaleAt hook for per-section / per-level density
       world/wallObject.ts  the {object,update,setResolution,setOpacity} contract for field objects
+      world/edgeLitSolid.ts shared builder: near-black fill + glowing fat-line edges (gem/mine/cross/raider)
       world/pickup.ts      blue health orb / treasure.ts gold gem / hazard.ts red mine /
                            extraLife.ts green medkit-cross (rare +1 life) (edge-lit WallObjects)
       world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
@@ -142,7 +151,7 @@ and on-aesthetic.
       render/camera.ts     chase follow + bank from theta (sin-based, smooth loops)
       render/background.ts deep-space gradient backdrop (scene.background)
       render/stars.ts      world-space starfield (follows camera pos, holds orientation)
-    test/                  vitest (pendulum math) - added when useful
+      render/perf.ts       toggleable FPS / frame-time overlay (P key)
     scripts/shoot.ts       Playwright screenshot (SET_THETA/HOLD/POSE/COMBAT; logs state)
     scripts/combat-sim.ts  headless behavior sim of the combat loop (npm run sim; bundled via esbuild)
     scripts/levels-sim.ts  headless sim of the level math: boundaries, speeds, multiplier,
@@ -153,8 +162,10 @@ and on-aesthetic.
 - Run (dev):  `npm run dev`   then open the printed localhost URL
 - Build:      `npm run build` (output in `dist/`, static + offline)
 - Preview:    `npm run preview`
+- Typecheck:  `npm run typecheck` (`tsc --noEmit`; also the first half of build)
 - Screenshot: `npm run shoot` (Playwright headless capture for visual self-check)
 - Combat sim: `npm run sim` (headless behavior checks for the gun/enemies/projectiles loop)
+- Levels sim: `npm run sim:levels` (headless checks for the level / difficulty math)
 
 ## Coding conventions and performance budget
 - TypeScript strict mode. Small, typed, modular files. No premature abstraction - refactor
@@ -258,9 +269,9 @@ their ship-relative z is advanced by the bolt's own speed.
 - [x] Difficulty ramp with distance (levels: per-level speed, score multiplier, enemy
       cap, orb/bomb frequency) - see M4.
 - [ ] CRT scanline toggle (bloom already on)
-- [ ] Web Audio synthesis (bleeps, engine hum rising with speed)
-- [ ] High-score persistence (localStorage)
-- [ ] Title screen
+- [x] Web Audio synthesis (procedural SFX + streamed music; continuous engine hum not yet done)
+- [x] High-score persistence (localStorage)
+- [x] Title screen (intro + controls; Space to start)
 - [ ] Full-loop (360) tube sections
 - [ ] Fully rendered surfaces (Descent II direction)
 - [ ] Gamepad support
