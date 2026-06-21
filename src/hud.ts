@@ -27,7 +27,12 @@ export interface Hud {
 }
 
 const CSS = `
-#hud { position:fixed; inset:0; pointer-events:none; z-index:10;
+/* translateZ(0) keeps the whole overlay on its own GPU compositor layer: the
+   browser composites it as ONE cached texture over the canvas, instead of
+   re-rasterizing this full-screen, text-shadow-heavy overlay every frame as the
+   canvas updates beneath it. Without it, that per-frame repaint costs ~25ms on
+   Apple Silicon / ProMotion-Retina (120fps -> 30fps); 60Hz machines hid it. */
+#hud { position:fixed; inset:0; pointer-events:none; z-index:10; transform:translateZ(0);
   font-family:'Courier New',ui-monospace,monospace; text-transform:uppercase;
   letter-spacing:2px; color:#7dffa6; text-shadow:0 0 6px rgba(80,255,150,0.55); }
 #hud .corner { position:absolute; font-size:22px; line-height:1.5; }
