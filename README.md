@@ -39,7 +39,7 @@ You only steer and shoot. Everything else flows from the swing.
   fast and back. Slow sections pull hard and swing heavy (yellow walls), fast ones
   are light and floaty (blue walls), normal sits in between (green). The walls show
   the upcoming section's colour ahead of you.
-- Energy drains continuously - ride into **blue orbs** to refill it.
+- Ride into **blue orbs** to recharge your weapon (the blue bar).
 - Ride into **gold gems** for score.
 - Grab a rare **green cross** for an extra ship (up to your starting maximum).
 - Avoid **red spiky mines** - a hit costs one of your three ships, with brief
@@ -48,10 +48,11 @@ You only steer and shoot. Everything else flows from the swing.
   score multiplier rises each level.
 - **Magenta raiders** fly in ahead, weave to stay hard to hit, then charge and fire
   back. Shoot them with the forward gun: a dead-centre hit destroys one outright, a
-  glancing hit only chips it. A kill scores points and refunds some energy. Taking
+  glancing hit only chips it. A kill scores points and refunds some weapon charge. Taking
   their bolt, or being rammed, costs a ship.
-- Firing spends energy, so you cannot hold the trigger forever.
-- The run ends when energy or ships run out. Your local best score persists.
+- Firing spends weapon charge; run the bar dry and the gun goes quiet (the bar turns red and
+  reads RECHARGE) until blue orbs top it up - but this never ends the run.
+- The run ends only when your ships run out. Your local best score persists.
 
 ## Running it
 
@@ -93,7 +94,7 @@ Early but playable.
 - **Built**: scrolling wireframe tube, procedural edge-lit ship, damped-driven
   pendulum physics, banking chase cam; speed-tiered "sections" flight where the tube
   section sets both speed and gravity; distance-based difficulty levels (rising speed,
-  a score multiplier, denser fields); energy orbs, treasure gems, hazard mines, and a
+  a score multiplier, denser fields); weapon-charge orbs, treasure gems, hazard mines, and a
   rare extra-life cross on a generic "wall field" engine; a forward gun with pooled
   projectiles and magenta raiders that shoot back; lives with invulnerability; music
   and procedural sound effects; a title screen and a minimal in-theme HUD, score with a

@@ -105,7 +105,7 @@ const fields: Field[] = [
     createPickup,
     PICKUP,
     () => {
-      game.addEnergy(ENERGY.PER_ORB)
+      if (!game.addEnergy(ENERGY.PER_ORB)) return false // full charge: orb sails past, no pop/sound
       audio.play('orb')
       ship.flash()
       return true
@@ -297,6 +297,8 @@ startLoop(
     if (shot.fire) {
       projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)
       audio.play('shoot')
+    } else if (shot.dry) {
+      audio.play('empty') // trigger pulled with no charge: dull click (throttled in gun.ts)
     }
     // enemies move + fire + ram BEFORE projectiles, so a bolt fired/spawned this
     // step and a raider's new position are both resolved in projectiles.update.
@@ -328,6 +330,7 @@ startLoop(
       speed: craft.speed,
       energy01: game.energy / ENERGY.MAX,
       lives: game.lives,
+      elapsed: game.elapsed,
       over: game.over,
       started: game.started,
       paused,

@@ -1,24 +1,26 @@
 import { ENERGY, SCORE, LIVES, GUN } from './config'
 
-// Run state. Two independent fail conditions:
-//  - energy drains over time (refilled by orbs); hitting zero ends the run.
-//  - lives are spent by hazard hits; hitting zero ends the run.
-// Score grows with distance plus treasure bonuses. Best persists in localStorage.
+// Run state. ONE fail condition: lives are spent by hazard / enemy / ram hits;
+// hitting zero ends the run. Weapon charge (`energy`) is the gun's ammo - it is
+// spent by firing and refilled by orbs / kills, but it NEVER ends the run (at
+// zero the gun just goes inert). Score grows with distance plus treasure bonuses;
+// `elapsed` is the run timer (HUD + game-over). Best persists in localStorage.
 const BEST_KEY = 'wormhole.best'
 
 export interface Game {
-  energy: number
+  energy: number // weapon charge (ammo); player-facing label is WEAPON
   lives: number
   invuln: number // seconds of invulnerability remaining (0 = vulnerable)
   scoreBonus: number // points from treasures etc. (distance is added on top)
+  elapsed: number // seconds of active play this run (paused/over freeze it)
   started: boolean // false on the title screen; true once the first run begins (stays true)
   over: boolean
   best: number
   score(distance: number): number
-  addEnergy(n: number): void
+  addEnergy(n: number): boolean // true if any charge was added (false if already full)
   addScore(n: number): void
-  canFire(): boolean // enough energy (and not over) to fire one shot
-  spendEnergy(n: number): void // gun cost; clamps at 0 but NEVER ends the run (only update() does)
+  canFire(): boolean // enough charge (and not over) to fire one shot
+  spendEnergy(n: number): void // gun cost; clamps at 0, never ends the run
   addLife(): boolean // extra-life pickup; true if a life was actually added (false at full lives / over)
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
   start(): void // leave the title screen and begin the first run
@@ -58,6 +60,7 @@ export function createGame(): Game {
     lives: LIVES.START,
     invuln: 0,
     scoreBonus: 0,
+    elapsed: 0,
     started: false,
     over: false,
     best: loadBest(),
@@ -66,8 +69,13 @@ export function createGame(): Game {
       return Math.floor(distance * SCORE.DIST_RATE) + this.scoreBonus
     },
 
-    addEnergy(n: number): void {
+    // Refill weapon charge. Returns false (no-op) when already full, so the orb
+    // field declines the pickup and lets a full-charge orb sail past untouched
+    // (no pop / no sound) - the same not-consumed path as a grazed mine.
+    addEnergy(n: number): boolean {
+      if (this.energy >= ENERGY.MAX) return false
       this.energy = Math.min(ENERGY.MAX, this.energy + n)
+      return true
     },
 
     addScore(n: number): void {
@@ -78,9 +86,9 @@ export function createGame(): Game {
       return !this.over && this.energy >= GUN.COST
     },
 
-    // Spend energy on a shot. Clamp at 0 but do NOT call endRun here: firing must
-    // never be a fail condition. If a shot empties the meter, update() finalizes
-    // game-over on the next step exactly like the drain clock does.
+    // Spend weapon charge on a shot. Clamps at 0. Running the bar to empty just
+    // disarms the gun (canFire() goes false) - it is never a fail condition, so
+    // there is no endRun path here at all.
     spendEnergy(n: number): void {
       this.energy = Math.max(0, this.energy - n)
     },
@@ -117,15 +125,14 @@ export function createGame(): Game {
       this.started = true
     },
 
+    // Called LAST in the fixed step, and only during active play (main.ts gates
+    // the whole step on started/!paused/!over). Ticks i-frames + the run timer and
+    // finalizes game-over the instant lives reach zero. Weapon charge is not
+    // touched here - it changes only on a shot (spendEnergy) or a refill (addEnergy).
     update(dt: number, distance: number): void {
       if (this.over) return
       if (this.invuln > 0) this.invuln = Math.max(0, this.invuln - dt)
-      this.energy -= ENERGY.DRAIN * dt
-      if (this.energy <= 0) {
-        this.energy = 0
-        endRun(this, distance)
-        return
-      }
+      this.elapsed += dt
       if (this.lives <= 0) endRun(this, distance)
     },
 
@@ -137,6 +144,7 @@ export function createGame(): Game {
       this.lives = LIVES.START
       this.invuln = 0
       this.scoreBonus = 0
+      this.elapsed = 0
       this.started = false
       this.over = false
     },

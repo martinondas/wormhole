@@ -198,12 +198,14 @@ export const PICKUP = {
   BOB_SPEED: 2.2,     // bob rad/s
 
   // --- spawn / collection mechanic ---
-  // Energy orbs are meant to be occasional: ~1/3 the old density. Density is
-  // set by SPACING (encounter rate = speed / spacing); COUNT just keeps the
-  // visible range filled so they fade in from the far fog rather than popping.
+  // Blue orbs recharge the weapon (ammo), so they are deliberately sparse: you
+  // cannot top up fast enough to fire continuously without pause. Density is set
+  // by SPACING (encounter rate = speed / spacing); COUNT just keeps the visible
+  // range filled so they fade in from the far fog rather than popping. SPACING is
+  // a starting point - tune against how combat-heavy the levels feel in playtest.
   COUNT: 5,           // orbs alive in the pool at once
   SPAWN_START: 50,    // distance ahead of the first orb
-  SPAWN_SPACING: 125, // nominal distance between orbs (encounter rate = speed / spacing)
+  SPAWN_SPACING: 190, // nominal distance between orbs (encounter rate = speed / spacing)
   SPAWN_JITTER: 14,   // random extra distance per orb
   RECYCLE_BEHIND: 22, // recycle once an orb is this far behind the ship
   CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
@@ -330,14 +332,18 @@ export const EXTRA_LIFE = {
   SPAWN_ANGLE: { band: [30, 110] as [number, number], bias: 0.75, rest: [0, 180] as [number, number] },
 }
 
-// --- energy / scoring (HUD-driven survival loop) ----------------------------
+// --- weapon charge (HUD bar shown as WEAPON; blue orbs refill it) ------------
+// The gun's ammo. Spent ONLY by firing (GUN.COST/shot), refilled by blue orbs
+// (PER_ORB) and kills (ENEMY.ENERGY_REFUND). It never ends the run: at zero the
+// gun is inert (the trigger dry-clicks) until recharged. The ONLY fail condition
+// is lives -> 0 (collisions / enemy fire / ram). Kept the name ENERGY internally
+// to limit churn; the player-facing label is WEAPON.
 export const ENERGY = {
   MAX: 100,
   START: 100,
-  DRAIN: 3.5,    // energy lost per second
-  PER_ORB: 25,   // energy refilled per collected orb
-  LOW: 0.28,     // fraction below which the bar warns (amber)
-  CRITICAL: 0.13,// fraction below which the bar is red
+  PER_ORB: 25,   // charge refilled per collected blue orb
+  LOW: 0.28,     // fraction below which the bar turns yellow (low ammo). Below one
+                 // shot's worth of charge (GUN.COST/MAX) the bar turns red (empty).
 }
 
 // --- lives (hazards cost a life; brief i-frames after a hit) ----------------
@@ -354,13 +360,15 @@ export const SCORE = {
   DIST_RATE: 0.7,
 }
 
-// --- gun (forward energy weapon: Space fires; each shot spends energy) -------
-// The gun is the player's risk/reward against their OWN survival meter: a shot
-// costs energy, a kill scores big AND refunds energy (see ENEMY). Bolts freeze
-// theta at fire time and travel down -Z along that theta, so you AIM by lining
-// up the pendulum onto a target's theta - aiming reuses the swing.
+// --- gun (forward weapon: Space fires; each shot spends weapon charge) --------
+// A shot spends weapon charge (the blue HUD bar / "ammo"); at zero charge the gun
+// is inert (the trigger dry-clicks) until blue orbs recharge it - running dry is
+// NOT a fail condition. A kill scores big AND refunds charge (see ENEMY), so
+// accurate aggression sustains its own ammo. Bolts freeze theta at fire time and
+// travel down -Z along that theta, so you AIM by lining up the pendulum onto a
+// target's theta - aiming reuses the swing.
 export const GUN = {
-  COST: 3,            // energy spent per shot (~0.86s of survival at DRAIN 3.5)
+  COST: 3,            // weapon charge spent per shot (~8 shots per orb at PER_ORB 25)
   COOLDOWN: 0.25,     // seconds between shots (tap or hold -> ~4/s)
   BOLT_SPEED: 185,    // player bolt speed down -Z (units/s; >> SPEED.FAST so it leads quickly, less lead error vs strafing enemies)
   BOLT_TTL: 1.4,      // seconds before a player bolt recycles (~259u reach)
@@ -383,7 +391,8 @@ export const GUN = {
 export const ENEMY = {
   HP: 2,              // hits to kill (burst-to-kill: one quick double-tap once aligned)
   SCORE: 750,         // points per kill (3x a gem; the highest-value event). Multiplied by the level multiplier at award time.
-  ENERGY_REFUND: 12,  // energy returned on a kill (clamped at MAX; below PER_ORB so it is not a farm)
+  ENERGY_REFUND: 6,   // charge returned per kill (clamped at MAX); ~ a clean 2-hit kill's cost, so a
+                      // kill is roughly ammo-neutral (a precision 1-shot kill nets a little) and orbs stay needed
   COUNT: 2,           // enemies alive in the pool at once (one engaging, one approaching/departing)
 
   // --- spawn / lifecycle ---
@@ -497,6 +506,7 @@ export const AUDIO = {
     gem:       { synth: 'gem',       volume: 0.8 },  // bright two-note chime
     enemyFire: { synth: 'enemyFire', volume: 0.4 },  // short saw "pew"
     kill:      { synth: 'kill',      volume: 0.8 },  // descending square zap
+    empty:     { synth: 'empty',     volume: 0.5 },  // dull dry-fire click (no charge to fire)
     life:      { synth: 'life',      volume: 0.95 }, // ascending 1-up arpeggio (extra life gained)
     hit:       { synth: 'hit',       volume: 1.8 },  // explosion (big + loud - a life lost should land like a bomb)
     gameover:  { synth: 'gameover',  volume: 0.85 }, // slow descending tone

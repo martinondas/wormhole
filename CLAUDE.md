@@ -16,13 +16,17 @@ Design priorities that drive the code:
 - Constant forward motion; the craft never halts. Speed is set by the tube section (slow /
   normal / fast tiers), not a player throttle; the craft eases between tiers, never to a stop.
 - Steer left / right to ride up the walls (pendulum swing, see Physics).
-- Collect pickups around the tube wall (rings / energy pods) for score and to refill energy.
-- Dodge obstacles fixed to the tube (rocks, struts, gates); hits cost energy or a life.
+- Collect pickups around the tube wall: gold gems for score, blue orbs to recharge the weapon.
+- Dodge obstacles fixed to the tube (rocks, struts, gates); a hit costs a life.
 - Forward gun to clear hazards / enemies coming toward you.
-- Energy/time drains continuously; running out ends the run. Pickups extend it.
-- Difficulty ramps with distance: faster, denser obstacles, tighter gaps.
-- Death / out-of-energy leads to a score screen, then restart. Local high score persists.
-- HUD is minimal and in-theme (thin green vector text/lines): score, energy/time, lives, speed, distance.
+- Weapon charge (the blue HUD bar) is the gun's ammo: spent only by firing, refilled by blue
+  orbs and kills. At zero the gun is inert until recharged; running dry never ends the run.
+- The single fail condition is lives reaching zero (collisions / enemy fire / ram).
+- Difficulty ramps with distance: faster, denser obstacles, tighter gaps - this is the run's
+  pressure, not a survival clock.
+- Death leads to a score screen (score, level reached, run time), then restart. Local best persists.
+- HUD is minimal and in-theme (thin green vector text/lines): level, score, best, run time,
+  lives, weapon charge, speed.
 
 ## Physics model - the damped, driven pendulum (the heart of the game)
 The craft's position is an angle `theta` around the circular cross-section of the tube
@@ -73,8 +77,9 @@ The craft's position is an angle `theta` around the circular cross-section of th
             EDGE/FILL colors, SPIN/BOB/PULSE; field COUNT/SPAWN_* (incl. SPAWN_ANGLE),
             CAPTURE_*/POP_* (rare: COUNT 1, large SPACING). +1 life, capped at LIVES.START
 - lives:    LIVES.{START, INVULN_TIME}
-- energy:   ENERGY.{MAX,START,DRAIN,PER_ORB,LOW,CRITICAL}; SCORE.DIST_RATE
-- gun:      COST (energy/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE_KILL/HIT_ANGLE/HIT_Z
+- weapon:   ENERGY.{MAX,START,PER_ORB,LOW} (weapon charge / ammo; internal name kept as
+            ENERGY, HUD label is WEAPON; empty = below GUN.COST -> red bar); SCORE.DIST_RATE
+- gun:      COST (charge/shot), COOLDOWN, BOLT_SPEED/TTL, HIT_ANGLE_KILL/HIT_ANGLE/HIT_Z
             (player->enemy: inner cone kills, outer cone chips 1), BULLET_HIT_ANGLE/Z
             (enemy bolt->ship dodge window)
 - enemy:    HP, SCORE (per kill), ENERGY_REFUND; COUNT/SPAWN_*/RECYCLE; ENGAGE band + speeds
@@ -131,7 +136,7 @@ and on-aesthetic.
                            multiplier, tier-relative gravity, speed cap, tier/level lookups
       levels.ts            per-level difficulty tuning (enemy cap + field density), derived from flight
       audio.ts             Web Audio mixer: streamed music + decoded/synth SFX (wired in main.ts)
-      gun.ts               forward-gun trigger: cooldown + energy spend; returns fire intent
+      gun.ts               forward-gun trigger: cooldown + charge spend; returns fire/dry intent
       util/math.ts         clamp / approach / lerp / angleDiff (shared signed angle delta)
       physics/pendulum.ts  theta integrator (damped driven pendulum)
       world/tube.ts        build + scroll the wireframe tube mesh
@@ -145,8 +150,8 @@ and on-aesthetic.
       world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
       world/enemies.ts     raider pool + 4-state FSM (approach/engage/depart/dead), own worldDistance; NOT a field
       world/projectiles.ts one pooled bolt system (player + enemy bolts; camera-facing diamond glyph)
-      game.ts              run state: energy drain/refill + per-shot spend, score, lives, game-over, best
-      hud.ts               DOM HUD overlay (score/dist/best/energy/speed + game-over)
+      game.ts              run state: weapon charge refill/spend, run timer, score, lives, game-over, best
+      hud.ts               DOM HUD overlay (level/score/best/time/weapon/lives/speed + game-over)
       render/scene.ts      Three scene/camera/renderer + bloom composer, fog/fade
       render/camera.ts     chase follow + bank from theta (sin-based, smooth loops)
       render/background.ts deep-space gradient backdrop (scene.background)
@@ -239,7 +244,7 @@ and on-aesthetic.
 
 | Type       | Look                     | Color             | Interaction                         | Status |
 |------------|--------------------------|-------------------|-------------------------------------|--------|
-| Energy orb | wireframe sphere         | blue              | ride into - refills energy          | built  |
+| Charge orb | wireframe sphere         | blue              | ride into - recharges the weapon    | built  |
 | Treasure   | brilliant-cut gem        | gold              | ride into - score points            | built  |
 | Hazard     | naval contact mine       | red               | avoid - hitting costs a life        | built  |
 | Extra life | medkit cross (+)         | bright green      | ride into (rare) - +1 life, capped at LIVES.START | built  |
@@ -247,10 +252,11 @@ and on-aesthetic.
 
 Orbs / treasures / hazards / extra-life crosses are all "ride into / avoid" wall
 objects sharing the generic `world/field.ts` engine (one `createField(cfg)` per
-kind; only the `onHit` effect differs). The extra-life cross is the one that can
-decline an encounter: at full lives `game.addLife()` returns false, so `onHit`
-returns false and the cross passes through (no pop / no sound), exactly like a
-mine grazed during i-frames. They ride at the SHARED derived radius `TUBE.RADIUS -
+kind; only the `onHit` effect differs). Two pickups decline an encounter when they
+have nothing to give: at full charge `game.addEnergy()` returns false (the orb
+sails past) and at full lives `game.addLife()` returns false (the cross passes
+through). Both return false from `onHit`, so the object passes through with no pop /
+no sound, exactly like a mine grazed during i-frames. They ride at the SHARED derived radius `TUBE.RADIUS -
 SHIP.RADIAL_OFFSET` (RIDE_RADIUS) - this is a constraint, not a tunable: the angle-only
 hit test (craft.theta vs slot.theta) is only valid when objects sit where the ship rides.
 
@@ -262,9 +268,10 @@ dodge (enemy bolt vs ship), and ram. Bolts (`world/projectiles.ts`) also ride th
 their ship-relative z is advanced by the bolt's own speed.
 
 ### Systems / backlog
-- [x] HUD + score + energy meter (drains; orbs refill) + game-over + restart + best
-      (localStorage).
-- [x] LIVES + invulnerability i-frames (ship flicker); game-over on energy OR lives.
+- [x] HUD + score + run timer + weapon-charge meter (blue; spent by firing, orbs/kills
+      refill; red RECHARGE when empty) + game-over (with run time) + restart + best (localStorage).
+- [x] LIVES + invulnerability i-frames (ship flicker); game-over when lives reach zero (the
+      only fail condition - weapon charge running dry just disarms the gun, never ends the run).
 - [x] Forward gun + projectiles + magenta raiders (shoot, get shot at; lethal) - see M3.
 - [x] Difficulty ramp with distance (levels: per-level speed, score multiplier, enemy
       cap, orb/bomb frequency) - see M4.

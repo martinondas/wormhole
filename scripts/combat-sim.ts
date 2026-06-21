@@ -6,7 +6,7 @@
 //
 // Run:  npm run sim   (bundles with esbuild + runs under node; the local source
 // uses extensionless imports that bare `node` cannot resolve - see package.json).
-import { PHYSICS, SPEED, SHIP, GUN, ENEMY, ENERGY } from '../src/config'
+import { PHYSICS, SPEED, SHIP, GUN, ENEMY } from '../src/config'
 import { createCraft, updateCraft, type CraftState } from '../src/craft'
 import { createGame, type Game } from '../src/game'
 import { createGun, type Gun } from '../src/gun'
@@ -70,10 +70,11 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   const e0 = r.game.energy
   let shots = 0
   for (let i = 0; i < PHYSICS.HZ; i++) {
-    // count shots by watching energy steps from the gun (spendEnergy) vs drain
+    // count shots by watching the per-step charge drop: charge changes only on a
+    // shot now (spendEnergy), so any drop of about a shot's cost is one shot.
     const before = r.game.energy
     step(r, true)
-    if (before - r.game.energy > ENERGY.DRAIN * dt + GUN.COST * 0.5) shots++
+    if (before - r.game.energy > GUN.COST * 0.5) shots++
   }
   check('A1 gun fires ~4/s while held', shots >= 3 && shots <= 5, `shots=${shots}`)
   check('A2 firing drains energy', r.game.energy < e0, `energy ${e0.toFixed(1)} -> ${r.game.energy.toFixed(1)}`)

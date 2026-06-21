@@ -116,6 +116,9 @@ export function createAudio(): Audio {
     gem(out, now) { blip(out, now, 'triangle', 880, 880, 0.09, 0.7); blip(out, now + 0.07, 'triangle', 1320, 1320, 0.14, 0.7) },
     enemyFire(out, now) { blip(out, now, 'sawtooth', 620, 180, 0.13, 0.6) },
     kill(out, now) { blip(out, now, 'square', 720, 110, 0.22, 0.7) },
+    // dull dry-fire "tock": a short low square drop, no pitch reward - reads as an
+    // empty trigger, not a shot. Deliberately quiet + brief so it informs, not nags.
+    empty(out, now) { blip(out, now, 'square', 160, 70, 0.05, 0.32) },
     life(out, now) {
       // a "1-up": four rising notes of a major arpeggio (C5 E5 G5 C6) plus a
       // high sparkle an octave up. Bright triangle tone reads as a reward and is
