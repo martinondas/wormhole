@@ -23,7 +23,7 @@ export interface Game {
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
   start(): void // leave the title screen and begin the first run
   update(dt: number, distance: number): void
-  restart(): void
+  toTitle(): void // reset the run and return to the title screen (game-over -> intro)
 }
 
 function loadBest(): number {
@@ -129,12 +129,15 @@ export function createGame(): Game {
       if (this.lives <= 0) endRun(this, distance)
     },
 
-    restart(): void {
+    // Reset the run and return to the title screen. The next run begins from the
+    // title on Space/Enter (beginRun), so a game-over leads back through the intro
+    // + instructions rather than dropping straight into a fresh run.
+    toTitle(): void {
       this.energy = ENERGY.START
       this.lives = LIVES.START
       this.invuln = 0
       this.scoreBonus = 0
-      this.started = true // a restart goes straight into a live run, never back to the title
+      this.started = false
       this.over = false
     },
   }

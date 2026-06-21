@@ -454,9 +454,9 @@ export const INPUT = {
   right: ['ArrowRight', 'KeyD'],
   fire: ['Space'],                    // forward gun
   start: ['Space', 'Enter'],          // title screen only: begin the first run
-  restart: ['Enter'],                 // game-over restart + resume-from-pause. NOT Space:
-                                      // a player still tapping the fire key after losing
-                                      // the last life would otherwise restart by accident.
+  confirm: ['Enter'],                 // Enter: game-over -> title, and resume-from-pause.
+                                      // NOT Space, so a fire key still held when the last
+                                      // life is lost cannot dismiss the screen by accident.
   mute: ['KeyM'],                     // toggle MUSIC on/off (SFX keep playing; handled in main.ts)
   pause: ['Escape'],                  // pause a live run, or resume a paused one (handled in main.ts)
   modeCycle: ['KeyG'],                // cycle flight mode for testing (handled in main.ts)

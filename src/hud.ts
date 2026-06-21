@@ -48,6 +48,7 @@ const CSS = `
   backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); }
 #hud .over.show { display:flex; }
 #hud .over h1 { font-size:34px; margin:0; color:#9affc0; letter-spacing:5px; }
+#hud .over .lvl { font-size:30px; color:#9affc0; letter-spacing:4px; }
 #hud .over .big { font-size:22px; }
 #hud .over .blink { font-size:15px; opacity:0.85; animation:wh-blink 1.1s steps(2,end) infinite; }
 #hud .over .intro { max-width:560px; margin:0; font-size:14px; line-height:1.6;
@@ -95,9 +96,10 @@ export function createHud(): Hud {
     <div class="levelup" id="wh-levelup">LEVEL 2</div>
     <div class="over" id="wh-over">
       <h1 id="wh-over-title">ENERGY DEPLETED</h1>
+      <div class="lvl" id="wh-over-level">REACHED LEVEL 1</div>
       <div class="big" id="wh-over-score">SCORE 0000000</div>
       <div id="wh-over-best" class="dim">BEST 0000000</div>
-      <div class="blink">PRESS ENTER TO RESTART</div>
+      <div class="blink">PRESS ENTER TO CONTINUE</div>
     </div>
     <div class="over" id="wh-title">
       <h1>WORMHOLE</h1>
@@ -129,6 +131,7 @@ export function createHud(): Hud {
   const elTitlePrompt = $('wh-title-prompt')
   const elOverTitle = $('wh-over-title')
   const elOverScore = $('wh-over-score')
+  const elOverLevel = $('wh-over-level')
   const elOverBest = $('wh-over-best')
   const elLevelUp = $('wh-levelup')
 
@@ -163,6 +166,7 @@ export function createHud(): Hud {
   let lastOver = false
   let lastOverTitle = ''
   let lastOverScore = -1
+  let lastOverLevel = -1
   let lastOverBest = -1
 
   return {
@@ -209,6 +213,7 @@ export function createHud(): Hud {
         const title = s.lives <= 0 ? 'SHIP DESTROYED' : 'ENERGY DEPLETED'
         if (title !== lastOverTitle) { elOverTitle.textContent = title; lastOverTitle = title }
         if (score !== lastOverScore) { elOverScore.textContent = 'SCORE ' + pad(score, 7); lastOverScore = score }
+        if (level !== lastOverLevel) { elOverLevel.textContent = 'REACHED LEVEL ' + level; lastOverLevel = level }
         if (best !== lastOverBest) { elOverBest.textContent = 'BEST ' + pad(best, 7); lastOverBest = best }
       }
     },

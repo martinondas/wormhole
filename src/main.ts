@@ -177,8 +177,8 @@ const projCtx = {
 
 // Run-flow gate: the sim is frozen on the title screen (game.started=false) and
 // on the game-over screen (game.over). menu.mp3 plays on both; music.mp3 during
-// a run. The first run starts on Space from the title; later runs restart from
-// the game-over screen the same way.
+// a run. The first run starts on Space from the title; after a game over, Enter
+// returns to the title (intro + instructions) and the next run starts from there.
 let wasOver = false // detects the run-ending edge once in render (sting)
 let lastTargetSpeed = SPEED.NORMAL // detects flight-tier step-ups -> accelerate layer
 // Flight inputs are stable within a frame, so preUpdate computes them once per
@@ -207,17 +207,22 @@ function beginRun(): void {
   input.releaseFireKeys() // the Space that started the run must not fire a bolt on step 1
 }
 
-function restart(): void {
+// Game-over -> intro: reset the run and show the title screen (instructions),
+// rather than dropping straight into a new run. The next run starts from the title
+// on Space/Enter (beginRun), exactly like the first run on load.
+function returnToTitle(): void {
   resetCraft(craft)
   for (const f of fields) f.reset(craft.distance)
   projectiles.reset()
   gun.reset()
   enemies.reset(craft.distance)
-  game.restart()
-  beginRun()
+  game.toTitle()
+  flight.update(craft.distance) // craft.distance is 0 now; resets the cached level so the HUD reads LEVEL 1
 }
 
 window.addEventListener('keydown', (e) => {
+  if (e.repeat) return // run-flow keys act once per press, never on auto-repeat (a held
+  // Enter must not carry a game-over -> title transition straight on into a new run)
   if (INPUT.mute.includes(e.code)) {
     audio.toggleMusic()
     return
@@ -250,17 +255,17 @@ window.addEventListener('keydown', (e) => {
     return
   }
   if (game.over) {
-    // game-over: restart on Enter only (NOT Space) so a held/tapped fire key cannot
-    // restart the run by accident the instant the last life is lost.
-    if (INPUT.restart.includes(e.code)) {
+    // game-over: Enter returns to the title screen (instructions), NOT Space - so a
+    // held/tapped fire key cannot dismiss the screen the instant the last life is lost.
+    if (INPUT.confirm.includes(e.code)) {
       e.preventDefault()
-      restart()
+      returnToTitle()
     }
     return
   }
   if (paused) {
     // resume on Enter (Esc above also toggles a paused run back to running); not Space.
-    if (INPUT.restart.includes(e.code)) {
+    if (INPUT.confirm.includes(e.code)) {
       e.preventDefault()
       paused = false
       input.releaseFireKeys()

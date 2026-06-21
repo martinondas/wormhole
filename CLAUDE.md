@@ -82,8 +82,8 @@ The craft's position is an angle `theta` around the circular cross-section of th
             player STEER_OMEGA_MAX = hittability), FIRE_COOLDOWN/CHARGE_TIME/BULLET_SPEED,
             RAM_ANGLE/Z; dart geometry + EDGE/FILL/CHARGE colors, SCALE/BANK/POP_*
 - projectile: MAX_PLAYER/MAX_ENEMY (fixed pools), LENGTH/LINE_WIDTH, PLAYER_RGB/ENEMY_RGB
-- input:    INPUT.{left, right} steer; fire = Space; plus start / restart / mute / pause /
-            modeCycle (G) / perf (P) bindings
+- input:    INPUT.{left, right} steer; fire = Space; plus start / confirm (Enter: game-over
+            -> title, resume-from-pause) / mute / pause / modeCycle (G) / perf (P) bindings
 
 ### Camera feel (decided default, easy to change)
 Chase cam sits behind and slightly above the craft. It orbits the tube a little with the

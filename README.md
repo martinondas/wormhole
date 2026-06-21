@@ -22,7 +22,8 @@ to ride high up the wall, or all the way over the top.
 |--------|------|
 | Steer / swing up the walls | Left / Right arrows, or A / D |
 | Fire the forward gun | Space |
-| Start / restart (after game over) | Space or Enter |
+| Start the run | Space or Enter |
+| Return to the title screen (after game over) | Enter |
 | Pause / resume | Esc |
 | Mute / unmute music (sound effects keep playing) | M |
 
