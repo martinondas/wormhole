@@ -1,29 +1,14 @@
-import {
-  IcosahedronGeometry,
-  CylinderGeometry,
-  EdgesGeometry,
-  BufferGeometry,
-  Mesh,
-  MeshBasicMaterial,
-  Group,
-  Color,
-  Vector3,
-  Quaternion,
-  FrontSide,
-} from 'three'
+import { IcosahedronGeometry, CylinderGeometry, BufferGeometry, Group, Vector3, Quaternion } from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { HAZARD } from '../config'
 import { type WallObject } from './wallObject'
+import { createEdgeLitSolid } from './edgeLitSolid'
 
-// A red naval contact mine: a big faceted core ball with 12 short, stubby cone
-// horns tipped by small bulbs (the classic sea-mine silhouette - a dominant
-// sphere, not a spiky virus). Edge-lit solid: a near-black depth-writing fill
-// under glowing red fat-line edges. It is the ONLY red object on the tube, so it
-// reads as danger on sight. Players AVOID it; a hit costs a life. It rides at the
-// same radius as the orb, so the existing proximity check works directly.
+// A red naval contact mine: a big faceted core ball with 12 short cylindrical horns
+// (the classic sea-mine silhouette - a dominant sphere, not a spiky virus). It is
+// the ONLY red object on the tube, so it reads as danger on sight. Players AVOID it;
+// a hit costs a life. It rides at the shared RIDE_RADIUS, so the angle-only
+// proximity check works directly. Edge-lit solid - see createEdgeLitSolid.
 
 // Unique radial spike directions = the 12 vertices of a unit icosahedron.
 // The position buffer repeats vertices per face, so dedupe by distance.
@@ -77,39 +62,8 @@ function buildMine(): BufferGeometry {
 }
 
 export function createHazard(): WallObject {
-  const mine = buildMine()
-
-  // dark, depth-writing fill so the mine reads as a solid edge-lit body
-  // (transparent for the death-pop fade; opaque at rest with opacity 1, like the
-  // orb and gem fills).
-  const fillMat = new MeshBasicMaterial({
-    color: new Color().setRGB(...HAZARD.FILL_RGB),
-    side: FrontSide,
-    transparent: true,
-  })
-  const fill = new Mesh(mine, fillMat)
-
-  // glowing red edges (fat lines). NORMAL blend (depthTest) so the red edges
-  // stay red over the fill; additive HDR red would bloom toward white/pink.
-  const edgesGeo = new EdgesGeometry(mine, HAZARD.EDGE_THRESHOLD)
-  const lineGeo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo)
-  const lineMat = new LineMaterial({
-    color: new Color().setRGB(...HAZARD.EDGE_RGB).getHex(),
-    linewidth: HAZARD.LINE_WIDTH,
-    worldUnits: false,
-    transparent: true,
-    depthTest: true,
-    fog: true, // fade in through the tube fog as it approaches
-  })
-  lineMat.color.setRGB(...HAZARD.EDGE_RGB) // keep HDR (>1) red for strong bloom
-  const edges = new LineSegments2(lineGeo, lineMat)
-  edges.computeLineDistances()
-  edgesGeo.dispose()
-
-  // inner group spins + pulses; the outer group is positioned by the pool
-  const inner = new Group()
-  inner.add(fill)
-  inner.add(edges)
+  const solid = createEdgeLitSolid(buildMine(), HAZARD.EDGE_RGB, HAZARD.FILL_RGB, HAZARD.LINE_WIDTH, HAZARD.EDGE_THRESHOLD)
+  const inner = solid.inner // spins + pulses; the outer group is positioned by the pool
   const object = new Group()
   object.add(inner)
 
@@ -126,12 +80,7 @@ export function createHazard(): WallObject {
       const s = 1 + Math.sin(t * HAZARD.PULSE_SPEED) * HAZARD.PULSE_AMP
       inner.scale.setScalar(HAZARD.SCALE * s)
     },
-    setResolution(w: number, h: number): void {
-      lineMat.resolution.set(w, h)
-    },
-    setOpacity(o: number): void {
-      fillMat.opacity = o
-      lineMat.opacity = o
-    },
+    setResolution: solid.setResolution,
+    setOpacity: solid.setOpacity,
   }
 }

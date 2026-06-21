@@ -4,7 +4,7 @@ import { type Group } from 'three'
 // mine). A generic field (see field.ts) owns a pool of these: it positions the
 // outer `object` group on the tube wall and drives the collect/explode fade via
 // scale + setOpacity. Each object animates its own inner group (spin/bob/pulse)
-// in update(dt). Identical surface to the original Pickup interface.
+// in update(dt).
 export interface WallObject {
   object: Group
   update(dt: number): void

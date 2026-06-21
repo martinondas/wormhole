@@ -1,21 +1,8 @@
-import {
-  BoxGeometry,
-  ConeGeometry,
-  CylinderGeometry,
-  EdgesGeometry,
-  BufferGeometry,
-  Mesh,
-  MeshBasicMaterial,
-  Group,
-  Color,
-  FrontSide,
-} from 'three'
+import { BoxGeometry, ConeGeometry, CylinderGeometry, BufferGeometry, Group } from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { ENEMY } from '../config'
 import { lerp } from '../util/math'
+import { createEdgeLitSolid } from './edgeLitSolid'
 
 // The magenta raider: a lean FORWARD-SWEPT DART, edge-lit like the ship/mine but
 // hot magenta-violet on NORMAL blend (additive HDR magenta would wash to white).
@@ -79,35 +66,9 @@ function buildDart(): BufferGeometry {
 }
 
 export function createEnemy(): Enemy {
-  const dart = buildDart()
-
-  // dark, depth-writing fill: occludes the tube + back edges so it reads solid
-  const fillMat = new MeshBasicMaterial({
-    color: new Color().setRGB(...ENEMY.FILL_RGB),
-    side: FrontSide,
-    transparent: true,
-  })
-  const fill = new Mesh(dart, fillMat)
-
-  // glowing magenta edges (fat lines), NORMAL blend so they stay magenta over the fill
-  const edgesGeo = new EdgesGeometry(dart, ENEMY.EDGE_THRESHOLD)
-  const lineGeo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo)
-  const lineMat = new LineMaterial({
-    color: new Color().setRGB(...ENEMY.EDGE_RGB).getHex(),
-    linewidth: ENEMY.LINE_WIDTH,
-    worldUnits: false,
-    transparent: true,
-    depthTest: true,
-    fog: true,
-  })
-  lineMat.color.setRGB(...ENEMY.EDGE_RGB)
-  const edges = new LineSegments2(lineGeo, lineMat)
-  edgesGeo.dispose()
-
-  // inner group throbs (scale); the pool owns the outer group's position + bank.
-  const inner = new Group()
-  inner.add(fill)
-  inner.add(edges)
+  const solid = createEdgeLitSolid(buildDart(), ENEMY.EDGE_RGB, ENEMY.FILL_RGB, ENEMY.LINE_WIDTH, ENEMY.EDGE_THRESHOLD)
+  const inner = solid.inner // throbs (scale); the pool owns the outer group's position + bank
+  const lineMat = solid.lineMat
   const object = new Group()
   object.add(inner)
 
@@ -120,13 +81,8 @@ export function createEnemy(): Enemy {
       const s = 1 + Math.sin(t * ENEMY.THROB_SPEED) * ENEMY.THROB_AMP
       inner.scale.setScalar(ENEMY.SCALE * s)
     },
-    setResolution(w: number, h: number): void {
-      lineMat.resolution.set(w, h)
-    },
-    setOpacity(o: number): void {
-      fillMat.opacity = o
-      lineMat.opacity = o
-    },
+    setResolution: solid.setResolution,
+    setOpacity: solid.setOpacity,
     setCharge(t01: number): void {
       // Called every substep for every active enemy, but the level only changes
       // while charging or hit-flashing - an idle raider asks for the same value

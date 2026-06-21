@@ -1,20 +1,8 @@
-import {
-  ConeGeometry,
-  CylinderGeometry,
-  EdgesGeometry,
-  BufferGeometry,
-  Mesh,
-  MeshBasicMaterial,
-  Group,
-  Color,
-  FrontSide,
-} from 'three'
+import { ConeGeometry, CylinderGeometry, BufferGeometry, Group } from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { TREASURE } from '../config'
 import { type WallObject } from './wallObject'
+import { createEdgeLitSolid } from './edgeLitSolid'
 
 // A gold brilliant-cut gem: a flat table on top, a faceted crown widening to the
 // waist, then a long pavilion tapering to a point - the universal "treasure"
@@ -50,36 +38,15 @@ function buildGem(): BufferGeometry {
 }
 
 export function createTreasure(): WallObject {
-  const inner = new Group()
-  const geom = buildGem()
-
-  // dark, gold-tinted depth-writing fill: occludes the back facets + the tube
-  // behind so the gem reads as a solid jewel, not a wire cage.
-  const fillMat = new MeshBasicMaterial({
-    color: new Color().setRGB(...TREASURE.FILL_RGB),
-    side: FrontSide,
-    transparent: true,
-    opacity: TREASURE.FILL_OPACITY,
-  })
-  inner.add(new Mesh(geom, fillMat))
-
-  // bright gold facet edges. Normal blend (depthTest) so the edges stay gold
-  // over the fill; additive HDR gold would sum toward white and lose the hue.
-  const edgesGeo = new EdgesGeometry(geom, TREASURE.EDGE_THRESHOLD)
-  const lineGeo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo)
-  const lineMat = new LineMaterial({
-    color: new Color().setRGB(...TREASURE.EDGE_RGB).getHex(),
-    linewidth: TREASURE.LINE_WIDTH,
-    worldUnits: false,
-    transparent: true,
-    depthTest: true,
-    fog: true, // fade in through the tube fog as it approaches
-  })
-  lineMat.color.setRGB(...TREASURE.EDGE_RGB) // preserve HDR (>1) values for bloom
-  const edges = new LineSegments2(lineGeo, lineMat)
-  edges.computeLineDistances()
-  inner.add(edges)
-  edgesGeo.dispose()
+  const solid = createEdgeLitSolid(
+    buildGem(),
+    TREASURE.EDGE_RGB,
+    TREASURE.FILL_RGB,
+    TREASURE.LINE_WIDTH,
+    TREASURE.EDGE_THRESHOLD,
+    TREASURE.FILL_OPACITY,
+  )
+  const inner = solid.inner
 
   const object = new Group()
   object.add(inner)
@@ -92,12 +59,7 @@ export function createTreasure(): WallObject {
       inner.rotation.y += TREASURE.SPIN_SPEED * dt // brisk jewel spin
       inner.position.y = Math.sin(t * TREASURE.BOB_SPEED) * TREASURE.BOB_AMP
     },
-    setResolution(w: number, h: number): void {
-      lineMat.resolution.set(w, h)
-    },
-    setOpacity(o: number): void {
-      fillMat.opacity = TREASURE.FILL_OPACITY * o
-      lineMat.opacity = o
-    },
+    setResolution: solid.setResolution,
+    setOpacity: solid.setOpacity,
   }
 }
