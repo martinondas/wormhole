@@ -27,7 +27,7 @@ export interface Enemies {
   setMaxActive(n: number): void // max raiders alive at once (raised by the level)
   tryKill(theta: number, z: number): boolean // a player bolt at (theta,z) - true if it struck an enemy
   setResolution(w: number, h: number): void
-  reset(craftDistance: number): void
+  reset(atDistance: number): void
   debugStage(theta: number, z: number): void // harness: stage one engaged enemy at a fixed pose
   readonly killed: number
 }
@@ -280,7 +280,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
 
     tryKill(theta: number, z: number): boolean {
       for (const slot of slots) {
-        if (!slot.active || (slot.phase !== 'approach' && slot.phase !== 'engage')) continue
+        // any live phase is shootable except the death pop. depart is included so a
+        // raider peeling off (still rammable on its fly-by) can also be shot down.
+        if (!slot.active || slot.phase === 'dead') continue
         const enemyZ = craftDistance - slot.worldDistance
         const dAngle = Math.abs(angleDiff(theta, slot.theta))
         if (dAngle < GUN.HIT_ANGLE && Math.abs(z - enemyZ) < GUN.HIT_Z) {
@@ -307,9 +309,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       for (const slot of slots) slot.enemy.setResolution(w, h)
     },
 
-    reset(craftDistance0: number): void {
+    reset(atDistance: number): void {
       killed = 0
-      craftDistance = craftDistance0
+      craftDistance = atDistance
       craftTheta = 0
       slots.forEach((slot, i) => {
         // clear EVERY mutable field so reset() and arm()/enterEngage() cannot

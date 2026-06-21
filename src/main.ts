@@ -14,6 +14,7 @@ import { createEnemies } from './world/enemies'
 import { Input } from './input'
 import { createCraft, updateCraft, resetCraft } from './craft'
 import { createFlight } from './flight'
+import { createLevelTuning } from './levels'
 import { createGame } from './game'
 import { createGun } from './gun'
 import { createHud } from './hud'
@@ -95,32 +96,8 @@ function makeField(
   })
 }
 
-// --- per-level tuning lookups (one level = one slow->normal->fast cycle) ------
-// The LEVELS.TABLE row for a level (clamped to the last row beyond the table).
-const levelRow = (level: number): (typeof LEVELS.TABLE)[number] =>
-  LEVELS.TABLE[Math.min(level, LEVELS.TABLE.length - 1)] ?? LEVELS.TABLE[LEVELS.TABLE.length - 1]!
-// Max raiders alive at once for a level: table value, then a procedural ramp
-// (+1 every BEYOND_ENEMY_LEVELS) once past the table, capped at MAX_ENEMIES_CAP.
-function levelEnemyMax(level: number): number {
-  const t = LEVELS.TABLE
-  if (level < t.length) return t[level]!.enemyMax
-  const last = t[t.length - 1]!
-  const extra = Math.floor((level - (t.length - 1)) / LEVELS.BEYOND_ENEMY_LEVELS)
-  return Math.min(LEVELS.MAX_ENEMIES_CAP, last.enemyMax + extra)
-}
-
-// Field density scales per level (and, for mines, denser still in slow sections).
-// Spacing is in DISTANCE but the field scrolls at craft speed, so encounter rate =
-// speed / spacing. We multiply by flight.speedRatioAt so the table multipliers mean
-// a TIME rate vs level 1 (orbSpacingMult 1.2 = 20% rarer per second, not drowned
-// out by the rising per-level speed). All read the live level/tier at the spawn
-// distance, so slots placed a level ahead of the craft still pack correctly.
-const orbSpacingScale = (wd: number): number =>
-  levelRow(flight.levelAt(wd)).orbSpacingMult * flight.speedRatioAt(wd)
-const mineSpacingScale = (wd: number): number => {
-  const slow = flight.tierIndexAt(wd) === 0 ? 1 / HAZARD.SLOW_DENSITY : 1
-  return slow * levelRow(flight.levelAt(wd)).bombSpacingMult * flight.speedRatioAt(wd)
-}
+// Per-level difficulty tuning (enemy cap + field density) lives in levels.ts.
+const levels = createLevelTuning(flight)
 
 const fields: Field[] = [
   // orbs favor mid-wall (swing up for energy); gems anywhere; mines hug the bottom.
@@ -134,7 +111,7 @@ const fields: Field[] = [
       return true
     },
     biasedAngle(PICKUP.SPAWN_ANGLE),
-    orbSpacingScale,
+    levels.orbSpacingScale,
   ),
   // gems: the level multiplier scales the points at award time (frequency is constant).
   makeField(createTreasure, TREASURE, () => {
@@ -144,7 +121,7 @@ const fields: Field[] = [
   }),
   // play the hit sfx only when a life is actually lost (hitHazard returns false
   // during i-frames), so an invuln graze stays silent.
-  makeField(createHazard, HAZARD, () => playedHit(game.hitHazard()), biasedAngle(HAZARD.SPAWN_ANGLE), mineSpacingScale),
+  makeField(createHazard, HAZARD, () => playedHit(game.hitHazard()), biasedAngle(HAZARD.SPAWN_ANGLE), levels.mineSpacingScale),
   // extra life: a rare bright-green cross. game.addLife() caps at LIVES.START, so
   // at full lives it returns false and the cross passes through (no pop / no sound);
   // when it grants a life, play the 1-up cue and flash the hull green.
@@ -205,7 +182,7 @@ const projCtx = {
 let wasOver = false // detects the run-ending edge once in render (sting)
 let lastTargetSpeed = SPEED.NORMAL // detects flight-tier step-ups -> accelerate layer
 // Flight inputs are stable within a frame, so preUpdate computes them once per
-// frame and the fixed substeps reuse these (was recomputed every substep).
+// frame and the fixed substeps reuse these.
 let frameTargetSpeed = SPEED.NORMAL
 let frameGravity = flight.gravityForSpeed(SPEED.NORMAL)
 let frameSpeedMax = SPEED.FAST // upper speed clamp for the current level (grows with the level)
@@ -327,8 +304,9 @@ startLoop(
     ship.update(craft, frameDt)
     // i-frame flicker: blink the ship while invulnerable so a hit reads clearly
     // (and so losing a life never feels random). Always visible once the run is
-    // over or invulnerability has lapsed.
-    ship.object.visible = game.over || game.invuln <= 0 || Math.floor(game.invuln * 12) % 2 === 0
+    // over, paused, or invulnerability has lapsed (a paused run freezes invuln, so
+    // without this the blink could freeze mid-off and the ship vanish under the menu).
+    ship.object.visible = paused || game.over || game.invuln <= 0 || Math.floor(game.invuln * 12) % 2 === 0
     if (game.over && !wasOver) audio.play('gameover') // one-shot sting on the run-ending edge
     wasOver = game.over
     const music = musicTrack() // switch tracks only on a state change, not every frame
@@ -367,7 +345,7 @@ startLoop(
       lastTargetSpeed = frameTargetSpeed
       frameGravity = flight.gravityForSpeed(craft.speed)
       frameSpeedMax = flight.speedMax()
-      enemies.setMaxActive(levelEnemyMax(flight.level))
+      enemies.setMaxActive(levels.enemyMax(flight.level))
     },
     onStats: (s) => perf.sample(s), // feed the FPS / frame-time overlay (toggle: P)
   },
@@ -389,5 +367,5 @@ startLoop(
   flight, // WH.flight.mode = 'slow' | 'normal' | 'fast' | 'sections' (or press G)
   audio,
   begin: beginRun, // start the run from the console / screenshot tool (skips the title gate)
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, AUDIO },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, SCORE, GUN, ENEMY, PROJECTILE, INPUT, AUDIO },
 }

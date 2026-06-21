@@ -110,6 +110,10 @@ export function createField(cfg: FieldConfig): Field {
     slots.forEach((slot, i) => {
       farthest = i === 0 ? base + cfg.spawnStart : farthest + cfg.spawnSpacing * scaleAt(farthest)
       arm(slot, farthest + Math.random() * cfg.spawnJitter)
+      // place at its resting z now (base = the craft distance at layout time) so a
+      // freshly laid-out field renders down the tube, not clumped at the origin,
+      // before the first (gated) update runs - e.g. on the title screen.
+      place(slot, base - slot.worldDistance)
     })
   }
 

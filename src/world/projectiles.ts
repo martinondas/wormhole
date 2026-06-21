@@ -163,9 +163,9 @@ export function createProjectiles(): Projectiles {
       }
     },
 
-    setResolution(w: number, h2: number): void {
-      playerMat.resolution.set(w, h2)
-      enemyMat.resolution.set(w, h2)
+    setResolution(w: number, h: number): void {
+      playerMat.resolution.set(w, h)
+      enemyMat.resolution.set(w, h)
     },
 
     reset(): void {
