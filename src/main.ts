@@ -91,18 +91,21 @@ interface FieldConsts {
   POP_TIME: number
   POP_SCALE: number
 }
+interface FieldOpts {
+  sampleTheta?: () => number
+  spacingScaleAt?: (worldDistance: number) => number
+  avoid?: (worldDistance: number, theta: number) => boolean
+}
 function makeField(
   create: () => WallObject,
   c: FieldConsts,
   onHit: (theta: number, z: number) => boolean,
-  sampleTheta?: () => number,
-  spacingScaleAt?: (worldDistance: number) => number,
+  opts: FieldOpts = {},
 ): Field {
   return createField({
     create,
     onHit,
-    sampleTheta,
-    spacingScaleAt,
+    ...opts,
     count: c.COUNT,
     spawnStart: c.SPAWN_START,
     spawnSpacing: c.SPAWN_SPACING,
@@ -118,8 +121,20 @@ function makeField(
 // Per-level difficulty tuning (enemy cap + field density) lives in levels.ts.
 const levels = createLevelTuning(flight)
 
-const fields: Field[] = [
-  // orbs favor mid-wall (swing up for energy); gems anywhere; mines hug the bottom.
+// Cross-field spawn de-confliction: every (re)spawn asks the OTHER fields whether
+// the spot is taken (see config SPAWN_CLEAR), so kinds cannot stack at nearly the
+// same (z, theta) - a mine hiding inside a gem read as a luck death in playtest.
+// nextAvoid() captures the index its field is about to occupy, so the fields must
+// be pushed ONE AT A TIME (a single multi-arg push would evaluate every closure at
+// length 0). While the array is still filling, each initial layout de-conflicts
+// against the kinds created before it; every later recycle checks all of them.
+const fields: Field[] = []
+const nextAvoid = (): ((worldDistance: number, theta: number) => boolean) => {
+  const self = fields.length
+  return (worldDistance, theta) => fields.some((f, i) => i !== self && f.occupies(worldDistance, theta))
+}
+// orbs favor mid-wall (swing up for energy); gems anywhere; mines hug the bottom.
+fields.push(
   makeField(
     createPickup,
     PICKUP,
@@ -129,20 +144,28 @@ const fields: Field[] = [
       ship.flash()
       return true
     },
-    biasedAngle(PICKUP.SPAWN_ANGLE),
-    levels.orbSpacingScale,
+    { sampleTheta: biasedAngle(PICKUP.SPAWN_ANGLE), spacingScaleAt: levels.orbSpacingScale, avoid: nextAvoid() },
   ),
-  // gems: the level multiplier scales the points at award time (frequency is constant).
-  // addGem() also counts it toward the level gate (collect the quota to advance).
-  makeField(createTreasure, TREASURE, () => {
-    game.addScore(Math.round(TREASURE.SCORE * flight.scoreMultiplier))
-    game.addGem()
-    audio.play('gem')
-    return true
-  }),
-  // play the hit sfx only when a life is actually lost (hitHazard returns false
-  // during i-frames), so an invuln graze stays silent. A real hit also bursts at
-  // the mine's own (theta, z) - the detonation blooms where the mine was.
+)
+// gems: the level multiplier scales the points at award time (frequency is constant).
+// addGem() also counts it toward the level gate (collect the quota to advance).
+fields.push(
+  makeField(
+    createTreasure,
+    TREASURE,
+    () => {
+      game.addScore(Math.round(TREASURE.SCORE * flight.scoreMultiplier))
+      game.addGem()
+      audio.play('gem')
+      return true
+    },
+    { avoid: nextAvoid() },
+  ),
+)
+// play the hit sfx only when a life is actually lost (hitHazard returns false
+// during i-frames), so an invuln graze stays silent. A real hit also bursts at
+// the mine's own (theta, z) - the detonation blooms where the mine was.
+fields.push(
   makeField(
     createHazard,
     HAZARD,
@@ -151,12 +174,13 @@ const fields: Field[] = [
       if (lost) damageFx(theta, z) // red hull flash + red burst at the mine
       return lost
     },
-    biasedAngle(HAZARD.SPAWN_ANGLE),
-    levels.mineSpacingScale,
+    { sampleTheta: biasedAngle(HAZARD.SPAWN_ANGLE), spacingScaleAt: levels.mineSpacingScale, avoid: nextAvoid() },
   ),
-  // extra life: a rare bright-green cross. game.addLife() caps at LIVES.START, so
-  // at full lives it returns false and the cross passes through (no pop / no sound);
-  // when it grants a life, play the 1-up cue and flash the hull green.
+)
+// extra life: a rare bright-green cross. game.addLife() caps at LIVES.START, so
+// at full lives it returns false and the cross passes through (no pop / no sound);
+// when it grants a life, play the 1-up cue and flash the hull green.
+fields.push(
   makeField(
     createExtraLife,
     EXTRA_LIFE,
@@ -166,9 +190,9 @@ const fields: Field[] = [
       ship.flash(RENDER.SHIP_LIFE_FLASH_RGB)
       return true
     },
-    biasedAngle(EXTRA_LIFE.SPAWN_ANGLE),
+    { sampleTheta: biasedAngle(EXTRA_LIFE.SPAWN_ANGLE), avoid: nextAvoid() },
   ),
-]
+)
 for (const f of fields) {
   stage.scene.add(f.object)
   stage.onResize((w, h) => f.setResolution(w, h))

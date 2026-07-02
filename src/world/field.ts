@@ -1,5 +1,5 @@
 import { Group } from 'three'
-import { RIDE_RADIUS } from '../config'
+import { RIDE_RADIUS, SPAWN_CLEAR } from '../config'
 import { type CraftState } from '../craft'
 import { angleDiff } from '../util/math'
 import { type WallObject } from './wallObject'
@@ -36,6 +36,11 @@ export interface FieldConfig {
   // object sits at that moment, so an effect (e.g. an impact burst) can play at
   // the contact point. Returns whether the object was CONSUMED (see above).
   onHit: (theta: number, z: number) => boolean
+  // Cross-field de-confliction: returns true when (worldDistance, theta) is too
+  // close to another kind's object (see config SPAWN_CLEAR). A (re)spawn then
+  // resamples its angle, and nudges forward as a last resort. Default: no check
+  // (a field never conflicts with itself - its own spacing handles that).
+  avoid?: (worldDistance: number, theta: number) => boolean
 }
 
 // Spawn-angle bias keyed by "angle from the bottom" (0 deg = bottom where the
@@ -63,6 +68,9 @@ export interface Field {
   update(craft: CraftState, dt: number): void
   setResolution(w: number, h: number): void
   reset(craftDistance: number): void
+  // True when one of this field's objects sits within the SPAWN_CLEAR window of
+  // (worldDistance, theta) - the query side of cross-field de-confliction.
+  occupies(worldDistance: number, theta: number): boolean
   readonly consumed: number // items consumed this run (debug / feel only)
 }
 
@@ -99,6 +107,18 @@ export function createField(cfg: FieldConfig): Field {
   function arm(slot: Slot, worldDistance: number): void {
     slot.worldDistance = worldDistance
     slot.theta = sampleTheta()
+    if (cfg.avoid) {
+      // Cross-field de-confliction: resample the angle first (keeps this field's
+      // z rhythm), then push forward until clear (see config SPAWN_CLEAR). Both
+      // loops are try-capped; a still-conflicting spot after that is accepted -
+      // this is mitigation for stacked kinds, not a placement guarantee.
+      for (let i = 0; i < SPAWN_CLEAR.TRIES && cfg.avoid(slot.worldDistance, slot.theta); i++) {
+        slot.theta = sampleTheta()
+      }
+      for (let i = 0; i < SPAWN_CLEAR.TRIES && cfg.avoid(slot.worldDistance, slot.theta); i++) {
+        slot.worldDistance += SPAWN_CLEAR.NUDGE
+      }
+    }
     slot.triggered = false
     slot.state = 'idle'
     slot.popT = 0
@@ -191,6 +211,17 @@ export function createField(cfg: FieldConfig): Field {
     reset(craftDistance: number): void {
       consumed = 0
       layout(craftDistance)
+    },
+    occupies(worldDistance: number, theta: number): boolean {
+      for (const slot of slots) {
+        if (
+          Math.abs(slot.worldDistance - worldDistance) < SPAWN_CLEAR.DZ &&
+          Math.abs(angleDiff(theta, slot.theta)) < SPAWN_CLEAR.ANGLE
+        ) {
+          return true
+        }
+      }
+      return false
     },
     get consumed(): number {
       return consumed

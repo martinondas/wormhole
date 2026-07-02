@@ -369,6 +369,22 @@ export const EXTRA_LIFE = {
   SPAWN_ANGLE: { band: [30, 110] as [number, number], bias: 0.75, rest: [0, 180] as [number, number] },
 }
 
+// --- field spawn de-confliction (cross-kind minimum separation) --------------
+// The fields spawn independently, so two kinds could land at nearly the same
+// (z, theta) - a mine hiding inside a gem reads as a luck death, not a dodge
+// failure. Every field (re)spawn checks the OTHER fields' objects against this
+// window: it resamples its angle up to TRIES times (keeping the field's own z
+// rhythm), then nudges forward as a last resort. Enemies are excluded - they fly
+// and strafe, so a static spawn check cannot hold for them.
+export const SPAWN_CLEAR = {
+  DZ: 12,      // along-tube half-window (u); > the summed capture z of any two kinds
+  ANGLE: 0.85, // angular half-window (rad); > the mine's 0.62 capture cone + margin,
+               // so an object at the window's edge is safely collectable next to a mine
+  TRIES: 6,    // theta resamples, then forward nudges, before accepting the spot
+  NUDGE: 14,   // forward push (u) per nudge when every theta try conflicted (> DZ,
+               // so one nudge fully clears the conflicting object)
+}
+
 // --- weapon charge (HUD bar shown as WEAPON; blue orbs refill it) ------------
 // The gun's ammo. Spent ONLY by firing (GUN.COST/shot), refilled by blue orbs
 // (PER_ORB) and kills (ENEMY.ENERGY_REFUND). It never ends the run: at zero the
@@ -461,6 +477,13 @@ export const ENEMY = {
   // --- firing (telegraphed so a lethal shot is always fairly dodgeable) ---
   FIRE_COOLDOWN: 2.0, // seconds between shots, ENGAGE only
   FIRE_JITTER: 0.4,   // +/- on the cooldown so volleys are not metronomic
+  FIRE_SLOTS: 2,      // global cap on raiders charging/firing AT ONCE (Galaga-style
+                      // attack slots): any number can engage, but incoming fire never
+                      // exceeds this many simultaneous tells, so deep levels feel
+                      // crowded without turning into an unreadable bolt hail
+  FIRE_SLOT_RETRY: 0.25, // mean wait (s, +/-50% jitter) before a raider denied a
+                      // fire slot re-tries; the jitter keeps a fixed pool order
+                      // from always winning the next free slot
   CHARGE_TIME: 0.45,  // nose brightens toward white-hot for this long before each shot (the tell)
   BULLET_SPEED: 90,   // enemy bolt speed toward +Z (> player top speed so it leads in)
   RAM_ANGLE: 0.55,    // ram hit window (rad); mirrors HAZARD.CAPTURE_ANGLE (wingspan + body)

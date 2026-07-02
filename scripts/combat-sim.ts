@@ -29,13 +29,16 @@ interface Rig {
   projectiles: Projectiles
   enemies: Enemies
 }
-function makeRig(): Rig {
+function makeRig(onEnemyBolt?: () => void): Rig {
   const craft = createCraft()
   const game = createGame()
   const gun = createGun()
   const projectiles = createProjectiles()
   const enemies = createEnemies({
-    spawnEnemyBolt: (t, z, vz) => projectiles.spawn('enemy', t, z, vz),
+    spawnEnemyBolt: (t, z, vz) => {
+      onEnemyBolt?.()
+      projectiles.spawn('enemy', t, z, vz)
+    },
     onRam: () => game.hitHazard(),
     onKill: () => {
       game.addScore(ENEMY.SCORE)
@@ -217,6 +220,34 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   ENEMY.FIRE_COOLDOWN = fireWas
   ENEMY.ENGAGE_TIME = engWas
   ENEMY.ENGAGE_TIME_JITTER = jitWas
+})()
+
+// ---- H) fire-slot cap: many engaged raiders, bounded simultaneous fire ----
+// Stage 5 raiders in the band with a near-zero cooldown: every one of them wants
+// to fire immediately. A bolt requires holding one of the ENEMY.FIRE_SLOTS for the
+// full CHARGE_TIME, so bolts over a window T are hard-bounded by
+// FIRE_SLOTS * (T / CHARGE_TIME + 1) - independent of how many raiders engage.
+// (Uncapped, 5 parallel chargers would fire roughly 5 * T / CHARGE_TIME, ~2x over.)
+;(() => {
+  const ampWas = ENEMY.STRAFE_AMP
+  const fireWas = ENEMY.FIRE_COOLDOWN
+  const jitWas = ENEMY.FIRE_JITTER
+  ENEMY.STRAFE_AMP = 0
+  ENEMY.FIRE_COOLDOWN = 0.01
+  ENEMY.FIRE_JITTER = 0
+  let bolts = 0
+  const r = makeRig(() => bolts++)
+  r.enemies.setMaxActive(5)
+  // thetas well off the ship's line (theta 0) so no bolt lands and no ram triggers
+  for (let i = 0; i < 5; i++) r.enemies.debugStage(1.0 + i * 0.8, -35, i)
+  const T = 2
+  for (let i = 0; i < PHYSICS.HZ * T; i++) step(r, false, { integrate: false })
+  const bound = ENEMY.FIRE_SLOTS * (T / ENEMY.CHARGE_TIME + 1)
+  check('H1 bolts bounded by the fire slots', bolts <= bound, `bolts=${bolts} bound=${bound.toFixed(1)}`)
+  check('H2 raiders still fire under the cap', bolts >= 2, `bolts=${bolts}`)
+  ENEMY.STRAFE_AMP = ampWas
+  ENEMY.FIRE_COOLDOWN = fireWas
+  ENEMY.FIRE_JITTER = jitWas
 })()
 
 console.log(failures === 0 ? '\nALL COMBAT SIM CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)

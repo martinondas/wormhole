@@ -28,7 +28,7 @@ export interface Enemies {
   tryKill(theta: number, z: number): boolean // a player bolt at (theta,z) - true if it struck an enemy
   setResolution(w: number, h: number): void
   reset(atDistance: number): void
-  debugStage(theta: number, z: number): void // harness: stage one engaged enemy at a fixed pose
+  debugStage(theta: number, z: number, slotIndex?: number): void // harness: stage an engaged enemy at a fixed pose
   readonly killed: number
 }
 
@@ -67,6 +67,10 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   // Max raiders allowed on screen at once. The pool is sized to MAX_ENEMIES_CAP;
   // the level raises maxActive up to that cap. Starts at ENEMY.COUNT (level 1).
   let maxActive = ENEMY.COUNT
+  // Raiders currently holding a fire slot (charging). Recounted at the top of each
+  // update(), incremented on a grant mid-step - so one step can never exceed
+  // ENEMY.FIRE_SLOTS; frees (fired / departed / killed) land on the next recount.
+  let chargers = 0
 
   // craft snapshot, refreshed each update() so tryKill() (called afterward, from
   // projectiles.update) and debugStage() can compute ship-relative z.
@@ -211,8 +215,17 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       } else {
         slot.fireCd -= dt
         if (slot.fireCd <= 0) {
-          slot.charging = true
-          slot.chargeT = 0
+          if (chargers < ENEMY.FIRE_SLOTS) {
+            // claim a fire slot: at most FIRE_SLOTS raiders charge at once, so
+            // incoming fire stays a readable rhythm however many are engaged.
+            chargers++
+            slot.charging = true
+            slot.chargeT = 0
+          } else {
+            // all fire slots busy: back off a beat and re-try (jittered, so no
+            // fixed pool order always wins the next free slot).
+            slot.fireCd = ENEMY.FIRE_SLOT_RETRY * rand(0.5, 1.5)
+          }
         }
       }
 
@@ -266,6 +279,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       // step counts immediately, so a single step can never exceed maxActive.
       let active = 0
       for (const slot of slots) if (slot.active) active++
+      // Recount the busy fire slots (see FIRE_SLOTS in updateSlot).
+      chargers = 0
+      for (const slot of slots) if (slot.active && slot.charging) chargers++
       for (const slot of slots) {
         const canArm = active < maxActive
         const wasActive = slot.active
@@ -338,8 +354,8 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       })
     },
 
-    debugStage(theta: number, z: number): void {
-      const slot = slots[0]
+    debugStage(theta: number, z: number, slotIndex = 0): void {
+      const slot = slots[slotIndex]
       if (!slot) return
       slot.active = true
       slot.phase = 'engage'

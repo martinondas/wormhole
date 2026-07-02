@@ -66,8 +66,9 @@ The craft's position is an angle `theta` around the circular cross-section of th
             STEER_ATTACK, STEER_RELEASE, HZ}
 - speed:    SLOW / NORMAL / FAST (the three tier speeds, level-1 base; raised per level
             by the LEVELS speed bonus), EASE (accel toward the active tier). Speed is set
-            by the flight tier/section, not a player throttle; FLIGHT.{MODE, SECTION_SECONDS}
-            + tube tier colors live alongside.
+            by the flight tier/section, not a player throttle; FLIGHT.{MODE, SECTION_SECONDS,
+            GRAVITY_FLOOR, GRAVITY_CURVE (gravity fades slow->fast to a FLOOR, never zero -
+            every tier keeps a pendulum pull)} + tube tier colors live alongside.
 - levels:   LEVELS.{SPEED_STEP/SPEED_BAND (per-level speed bonus: a decaying-but-never-zero
             increment in bands - EARLY/MID/LATE by display level - so deep levels keep speeding
             up, slowly; derived in flight.ts speedBonus), SCORE_MULT_STEP, GEM_QUOTA_FRACTION
@@ -94,6 +95,8 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - extralife:medkit-cross geometry (ARM/THICK/DEPTH extruded plus, EDGE_THRESHOLD),
             EDGE/FILL colors, SPIN/BOB/PULSE; field COUNT/SPAWN_* (incl. SPAWN_ANGLE),
             CAPTURE_*/POP_* (rare: COUNT 1, large SPACING). +1 life, capped at LIVES.START
+- spawnclear: SPAWN_CLEAR.{DZ, ANGLE, TRIES, NUDGE} cross-kind spawn separation: a field
+            (re)spawn avoids the OTHER fields' objects (resample angle, then nudge forward)
 - lives:    LIVES.{START, INVULN_TIME}
 - weapon:   ENERGY.{MAX,START,PER_ORB,LOW} (weapon charge / ammo; internal name kept as
             ENERGY, HUD label is WEAPON; empty = below GUN.COST -> red bar)
@@ -105,6 +108,7 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - enemy:    HP, SCORE (per kill), ENERGY_REFUND; COUNT/SPAWN_*/RECYCLE; ENGAGE band + speeds
             (CLOSE/STATION/DEPART deltas relative to craft.speed); STRAFE_* (hard-capped <<
             player STEER_OMEGA_MAX = hittability), FIRE_COOLDOWN/CHARGE_TIME/BULLET_SPEED,
+            FIRE_SLOTS + FIRE_SLOT_RETRY (global cap on raiders charging/firing at once),
             RAM_ANGLE/Z; dart geometry + EDGE/FILL/CHARGE colors, SCALE/BANK/POP_*
 - projectile: MAX_PLAYER/MAX_ENEMY (fixed pools), LENGTH/LINE_WIDTH, PLAYER_RGB/ENEMY_RGB
 - input:    INPUT.{left, right} steer; fire = Space; plus start / confirm (Enter: game-over
@@ -163,13 +167,15 @@ and on-aesthetic.
       world/tube.ts        build + scroll the wireframe tube mesh
       world/ship.ts        procedural 3D spacecraft hull (edge-lit); place on wall from theta
       world/field.ts       generic wall-object pool (orbs/gems/mines): spawn/scroll/recycle + angle hit
-                           test; optional spacingScaleAt hook for per-section / per-level density
+                           test; optional spacingScaleAt hook for per-section / per-level density;
+                           cross-field de-confliction (avoid/occupies, SPAWN_CLEAR window)
       world/wallObject.ts  the {object,update,setResolution,setOpacity} contract for field objects
       world/edgeLitSolid.ts shared builder: near-black fill + glowing fat-line edges (gem/mine/cross/raider)
       world/pickup.ts      blue health orb / treasure.ts gold gem / hazard.ts red mine /
                            extraLife.ts green medkit-cross (rare +1 life) (edge-lit WallObjects)
       world/enemy.ts       magenta forward-swept-dart hull (edge-lit; charge tell + death fade)
-      world/enemies.ts     raider pool + 4-state FSM (approach/engage/depart/dead), own worldDistance; NOT a field
+      world/enemies.ts     raider pool + 4-state FSM (approach/engage/depart/dead), own worldDistance;
+                           NOT a field; global fire-slot cap (at most FIRE_SLOTS charging at once)
       world/projectiles.ts one pooled bolt system (player + enemy bolts; camera-facing diamond glyph)
       world/burst.ts       pooled impact burst (white-hot flash + shard starburst); spawned on a kill / damage hit
       game.ts              run state: weapon charge refill/spend, gems-this-level (gate counter),
@@ -184,6 +190,8 @@ and on-aesthetic.
     scripts/combat-sim.ts  headless behavior sim of the combat loop (npm run sim; bundled via esbuild)
     scripts/levels-sim.ts  headless sim of the level math: boundaries, speeds, multiplier,
                            gravity modes, density normalization (npm run sim:levels)
+    scripts/fields-sim.ts  headless sim of cross-field spawn de-confliction: an avoiding
+                           pair never overlaps, a control pair does (npm run sim:fields)
 
 ## Dev commands
 - Install:    `npm install`
@@ -194,6 +202,7 @@ and on-aesthetic.
 - Screenshot: `npm run shoot` (Playwright headless capture for visual self-check)
 - Combat sim: `npm run sim` (headless behavior checks for the gun/enemies/projectiles loop)
 - Levels sim: `npm run sim:levels` (headless checks for the level / difficulty math)
+- Fields sim: `npm run sim:fields` (headless checks for cross-field spawn separation)
 
 ## Coding conventions and performance budget
 - TypeScript strict mode. Small, typed, modular files. No premature abstraction - refactor
@@ -274,6 +283,20 @@ and on-aesthetic.
           DAMPING_C 1.0 -> 1.3 (settles at the bottom a bit faster). BUILT + verified
           (sim:levels 40+ checks incl. speed-decay + bomb-floor; combat sim; build). Deep
           enemy aggression (fire-rate scaling, persistence) deliberately deferred - see Next up.
+- [x] M7  Feel + fairness (playtest: ship felt sluggish; L6-7 deaths read as luck under
+          multi-raider bolt hail; mines could hide inside gems). (a) Snappier steering:
+          STEER_TORQUE 19.5 -> 24, STEER_ATTACK 0.07 -> 0.04 (playtest: "more controllable,
+          keep it"). (b) Gravity floor: FLIGHT.GRAVITY_FLOOR 0.45 + GRAVITY_CURVE - gravity
+          fades slow->fast to a floor, not zero, so fast sections keep a light pendulum pull
+          (normal ~0.73 of full, was ~0.51; fast 0.45, was 0 = free rotor). (c) Enemy
+          fire-slot cap: ENEMY.FIRE_SLOTS 2 (Galaga-style attack slots) - any number of
+          raiders can engage but at most 2 charge/fire at once, so deep-level incoming fire
+          stays a readable rhythm instead of scaling with the raider count. (d) Cross-field
+          spawn de-confliction: a field (re)spawn avoids the OTHER fields inside the
+          SPAWN_CLEAR window (resample angle, then nudge forward), so kinds never stack at
+          one (z, theta). BUILT + verified (combat sim: bolt count hard-bounded by the slots;
+          NEW fields sim: avoiding pair 0 overlaps vs control pair >0; sim:levels: floor
+          gravity; typecheck; 5x repeat runs for the randomized checks).
 
 ### Next up (start here)
 1. Enemy persistence + fire-rate scaling (the deep-difficulty lever, deferred from M6):
@@ -281,8 +304,9 @@ and on-aesthetic.
    scales. Goal: on engage-timeout, hold and slowly close the band instead of departing,
    with fire rate rising as they get nearer / per level. M6 raised the raw count cap to 10;
    this is where "never plateau" difficulty comes from once the count cap is reached. Add
-   only if playtest shows deep levels still feel thin - watch out that 10 telegraphed
-   shooters do not become bullet-hell (floor the cooldown so each shot stays dodgeable).
+   only if playtest shows deep levels still feel thin. The M7 fire-slot cap
+   (ENEMY.FIRE_SLOTS) already hard-bounds simultaneous fire, so persistence can raise
+   pressure without turning into a bolt hail - keep the cap in place when scaling fire rate.
 2. High-level combat scaling: bolts are SHIP-RELATIVE (projectiles.ts), so the dodge/aim
    geometry is already speed-invariant - an enemy bolt always gives ~0.45s tell + ~0.33s
    travel regardless of craft speed, so deep levels are not unfair on this axis. Open only:
@@ -291,9 +315,11 @@ and on-aesthetic.
 3. Combat polish deferred from M3: a muzzle flash on fire and a richer head-on raider
    silhouette. Playtest the near-edge enemy-bolt dodge window (ENGAGE_Z_NEAR) and only
    widen it if it reads as unfair.
-4. Watch: enemies + the three fields are independent streams, so objects can overlap at
-   nearly the same (z, theta). Mitigated by staggered spawns + color/shape dominance; add
-   cross-stream de-collision ONLY if playtesting shows it is unfair - do not build it preemptively.
+4. Cross-FIELD spawn de-confliction is BUILT (M7; playtest confirmed unfair stacks). The
+   four fields never spawn inside one SPAWN_CLEAR window of each other. Enemies stay
+   excluded by design - they fly and strafe, so a static spawn check cannot hold for them;
+   staggered spawns + color/shape dominance still cover raider-over-field overlaps.
+   Revisit only if playtest flags raider overlaps as unfair.
 
 ### Object types on the tube (color-coded language)
 
