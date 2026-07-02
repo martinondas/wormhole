@@ -117,11 +117,11 @@ function at(distance: number): { level: number; target: number; mult: number; sp
 // ---- E) gravity: tier mode preserves feel; absolute mode does not ----
 ;(() => {
   const modeWas = LEVELS.GRAVITY_MODE
-  // tier mode: full gravity at the LEVEL's own slow speed, zero at its own fast
+  // tier mode: full gravity at the LEVEL's own slow speed, the floor at its own fast
   LEVELS.GRAVITY_MODE = 'tier'
   const f = flyTo(cumStart(1) + 50, ACTIVE) // level 1, slow section
   check('E1 tier: full gravity at L1 slow speed', approx(f.gravityForSpeed(tierSpeed(1, 0)), PHYSICS.GRAVITY_K), `${f.gravityForSpeed(tierSpeed(1, 0))}`)
-  check('E2 tier: zero gravity at L1 fast speed', approx(f.gravityForSpeed(tierSpeed(1, 2)), 0), `${f.gravityForSpeed(tierSpeed(1, 2))}`)
+  check('E2 tier: floor gravity at L1 fast speed', approx(f.gravityForSpeed(tierSpeed(1, 2)), PHYSICS.GRAVITY_K * FLIGHT.GRAVITY_FLOOR), `${f.gravityForSpeed(tierSpeed(1, 2))}`)
   check('E3 tier: gravity monotonic decreasing in speed', f.gravityForSpeed(tierSpeed(1, 0)) > f.gravityForSpeed(tierSpeed(1, 1)) && f.gravityForSpeed(tierSpeed(1, 1)) > f.gravityForSpeed(tierSpeed(1, 2)))
   // absolute mode: at L1 slow speed gravity is already < full (lighter than tier mode)
   LEVELS.GRAVITY_MODE = 'absolute'

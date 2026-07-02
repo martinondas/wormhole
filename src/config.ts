@@ -17,23 +17,23 @@ export const PHYSICS = {
                       // (loop needs omega_bottom > ~2*sqrt(K) = ~6.6 here)
   DAMPING_C: 1.3,     // damping on omega: overshoots then settles. Higher = the
                       // craft stabilizes at the bottom sooner (fewer left-rights)
-  STEER_TORQUE: 19.5, // angular accel added by full steering input (rad/s^2). Higher =
+  STEER_TORQUE: 24,   // angular accel added by full steering input (rad/s^2). Higher =
                       // quicker direction change / less sluggish, especially at high
-                      // speed where gravity is near zero and torque is the only agility.
+                      // speed where gravity is lightest and torque is most of the agility.
   STEER_OMEGA_MAX: 7.0,// soft cap: steering torque fades to zero as |omega| nears
                       // this, so holding a steer does not spin you up forever.
                       // Gravity can still exceed it on a dive (momentum survives).
-  STEER_ATTACK: 0.07, // seconds for steer signal to ramp up (weighty taps)
+  STEER_ATTACK: 0.04, // seconds for steer signal to ramp up (low = crisp direction changes)
   STEER_RELEASE: 0.13,// seconds for steer signal to ramp back to zero
 }
 
 // --- flight mode (experimental: speed tier -> gravity + tube color) ----------
 // Speed is the single driver: the mode (or the current section) picks a target
 // speed tier, the craft eases to it, and gravity is tied to speed (full at SLOW,
-// zero at FAST - see flight.ts). The three fixed tiers map to colors:
-//   slow   = yellow, full gravity (heaviest)
-//   normal = green,  low gravity  (startup)
-//   fast   = blue,   no gravity   (most agile)
+// fading to GRAVITY_FLOOR at FAST - see flight.ts). The three fixed tiers map to colors:
+//   slow   = yellow, full gravity  (heaviest)
+//   normal = green,  mid gravity   (startup)
+//   fast   = blue,   floor gravity (lightest, still a pendulum)
 // 'sections' cycles the tiers along the tube. Cycle live with the mode key (see
 // INPUT.modeCycle) or set WH.flight.mode. The tube color follows speed, so it
 // blends smoothly through the tiers as the craft eases between sections.
@@ -43,8 +43,15 @@ export const FLIGHT = {
   SECTION_SECONDS: 10,          // 'sections' mode: seconds per section (equal in TIME; distance scales with the tier's speed)
   SLOW_RING_RGB: [0.72, 0.54, 0.08] as [number, number, number], // yellow tube (slow / full gravity)
   SLOW_LONG_RGB: [0.42, 0.31, 0.05] as [number, number, number],
-  FAST_RING_RGB: [0.16, 0.34, 0.85] as [number, number, number], // blue tube (fast / no gravity)
+  FAST_RING_RGB: [0.16, 0.34, 0.85] as [number, number, number], // blue tube (fast / floor gravity)
   FAST_LONG_RGB: [0.10, 0.20, 0.52] as [number, number, number], // normal/green reuses RENDER.RING_RGB / LONG_RGB
+  // Gravity across the speed span: scale = FLOOR + (1 - FLOOR) * t^CURVE, where t
+  // runs 1 (slow tier speed) -> 0 (fast tier speed). The FLOOR keeps a real downward
+  // pull even in fast sections (never a free rotor); CURVE shapes the middle tier:
+  // 1 = linear, >1 lighter mid, <1 heavier mid. Applied in flight.ts gravityForSpeed.
+  // With FLOOR 0.45: slow 1.0, normal ~0.73 (was ~0.51), fast 0.45 (was 0).
+  GRAVITY_FLOOR: 0.45, // fraction of GRAVITY_K that remains at the fast tier speed
+  GRAVITY_CURVE: 1.0,  // exponent shaping the fade between the tiers (1 = linear)
 }
 
 // --- speed: forward motion. Set by the flight mode / section, not the player. -
@@ -54,8 +61,8 @@ export const FLIGHT = {
 // craft eases toward the active tier's speed at EASE.
 export const SPEED = {
   SLOW: 30,   // yellow sections: full gravity, heaviest swing (level 1 base)
-  NORMAL: 52, // green sections: low gravity (startup speed; midpoint of slow..fast)
-  FAST: 75,   // blue sections: no gravity, most agile (level 1 base)
+  NORMAL: 52, // green sections: mid gravity (startup speed; midpoint of slow..fast)
+  FAST: 75,   // blue sections: floor gravity, most agile (level 1 base)
   EASE: 28,   // accel/decel toward the active tier's speed (units/s^2)
 }
 
@@ -90,16 +97,17 @@ export const LEVELS = {
   // cycle boundary and the level repeats (same speeds/colors) until you qualify. 0 disables
   // the gate (pure distance progression). Lower it if half forces too many replays in playtest.
   GEM_QUOTA_FRACTION: 0.5,
-  // Gravity across levels:
-  //   'tier'     - full gravity at the level's OWN slow speed, zero at its own
-  //                fast speed: each section keeps its feel as speeds climb (the
+  // Gravity across levels (the slow->fast fade itself is shaped by
+  // FLIGHT.GRAVITY_FLOOR / GRAVITY_CURVE; this picks the reference span):
+  //   'tier'     - full gravity at the level's OWN slow speed, the floor at its
+  //                own fast speed: each section keeps its feel as speeds climb (the
   //                slow section stays heavy at level 10). The agreed default.
-  //   'absolute' - the original model: full at SPEED.SLOW, zero at SPEED.FAST.
+  //   'absolute' - the original model: full at SPEED.SLOW, the floor at SPEED.FAST.
   //                As levels speed up, every section gets lighter, and once a
   //                level's OWN slow speed reaches SPEED.FAST (level 9 with
-  //                SLOW=30, INCREMENT=5) gravity is pinned to ZERO for all tiers -
-  //                a free rotor, no pendulum. Flip here if high-level slow sections
-  //                feel too sluggish; accept that deep levels lose the pendulum.
+  //                SLOW=30, INCREMENT=5) gravity is pinned to the FLOOR for all
+  //                tiers. Flip here if high-level slow sections feel too sluggish;
+  //                accept that deep levels flatten toward one gravity.
   GRAVITY_MODE: 'tier' as 'tier' | 'absolute',
   MAX_ENEMIES_CAP: 10,      // hard ceiling on the enemy pool size (sizes the pool once)
   BEYOND_ENEMY_LEVELS: 2,   // past the table, enemy cap rises by 1 every this many levels

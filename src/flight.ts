@@ -160,15 +160,19 @@ export function createFlight(): Flight {
       return tierSpeed(curLevel, N_TIERS - 1)
     },
 
-    // 'tier': full GRAVITY_K at the current level's slow speed, fading to 0 at its
-    // fast speed - each section keeps its feel as the level speeds up. 'absolute':
-    // the original model referenced to the global SPEED.SLOW..FAST span.
+    // 'tier': full GRAVITY_K at the current level's slow speed, fading to the
+    // GRAVITY_FLOOR at its fast speed - each section keeps its feel as the level
+    // speeds up, and even the fast tier keeps a light pendulum pull (never a free
+    // rotor). GRAVITY_CURVE shapes the fade (1 = linear; see config FLIGHT).
+    // 'absolute': the same mapping referenced to the global SPEED.SLOW..FAST span.
     gravityForSpeed(speed: number): number {
       const lo = LEVELS.GRAVITY_MODE === 'absolute' ? SPEED.SLOW : tierSpeed(curLevel, 0)
       const hi = LEVELS.GRAVITY_MODE === 'absolute' ? SPEED.FAST : tierSpeed(curLevel, N_TIERS - 1)
       const span = hi - lo
       if (span <= 0) return 0
-      return PHYSICS.GRAVITY_K * clamp((hi - speed) / span, 0, 1)
+      const t = clamp((hi - speed) / span, 0, 1) // 1 at the slow tier, 0 at the fast tier
+      const floor = FLIGHT.GRAVITY_FLOOR
+      return PHYSICS.GRAVITY_K * (floor + (1 - floor) * Math.pow(t, FLIGHT.GRAVITY_CURVE))
     },
 
     tierIndexAt(distance: number): number {
