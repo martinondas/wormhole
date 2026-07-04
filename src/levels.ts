@@ -33,22 +33,27 @@ const bombMult = (level: number): number => {
 }
 
 export function createLevelTuning(flight: Flight): LevelTuning {
+  // All lookups run on the difficulty-mapped TUNING level (flight.tuned, see config
+  // DIFFICULTY), rounded because the table and the ramps are integer-keyed. Callers
+  // keep passing the PLAYED level; the mode's slope/offset is applied here.
+  const tunedInt = (level: number): number => Math.round(flight.tuned(level))
   return {
     // table value, then a procedural ramp (+1 every BEYOND_ENEMY_LEVELS) once past
     // the table, capped at MAX_ENEMIES_CAP.
     enemyMax(level: number): number {
+      const tl = tunedInt(level)
       const t = LEVELS.TABLE
-      if (level < t.length) return t[level]!.enemyMax
+      if (tl < t.length) return t[tl]!.enemyMax
       const last = t[t.length - 1]!
-      const extra = Math.floor((level - (t.length - 1)) / LEVELS.BEYOND_ENEMY_LEVELS)
+      const extra = Math.floor((tl - (t.length - 1)) / LEVELS.BEYOND_ENEMY_LEVELS)
       return Math.min(LEVELS.MAX_ENEMIES_CAP, last.enemyMax + extra)
     },
     orbSpacingScale: (wd: number): number =>
-      levelRow(flight.levelAt(wd)).orbSpacingMult * flight.speedRatioAt(wd),
+      levelRow(tunedInt(flight.levelAt(wd))).orbSpacingMult * flight.speedRatioAt(wd),
     // mines are denser still in slow (yellow) sections, scaled by 1 / SLOW_DENSITY.
     mineSpacingScale: (wd: number): number => {
       const slow = flight.tierIndexAt(wd) === 0 ? 1 / HAZARD.SLOW_DENSITY : 1
-      return slow * bombMult(flight.levelAt(wd)) * flight.speedRatioAt(wd)
+      return slow * bombMult(tunedInt(flight.levelAt(wd))) * flight.speedRatioAt(wd)
     },
   }
 }

@@ -38,8 +38,13 @@ Design priorities that drive the code:
     angular), so dodging and aiming are as fair at high levels as at low ones. Deep levels
     should be hard but fair - never a pure reflex wall that raw speed alone would create.
 - Death leads to a score screen (score, level reached, run time), then restart. Local best persists.
+- Title-screen menu: ship selector (three edge-lit hulls with a rotating 3D preview;
+  COSMETIC ONLY - identical hit windows and handling) and a difficulty selector
+  (MILKY WAY 60% ramp / ORION standard / QUASAR starts ~ORION L3.5; one slope/offset
+  mapping of the played level to the tuning level, score multiplier follows it, so
+  harder modes pay more and the single best score stays honest). Both persist locally.
 - HUD is minimal and in-theme (thin green vector text/lines): level, gem-gate pips, score, best,
-  run time, lives, weapon charge, speed.
+  run time, lives, weapon charge, speed, difficulty (name + threat pips in the mode color).
 
 ## Physics model - the damped, driven pendulum (the heart of the game)
 The craft's position is an angle `theta` around the circular cross-section of the tube
@@ -77,8 +82,14 @@ The craft's position is an angle `theta` around the circular cross-section of th
             BEYOND_ENEMY_LEVELS, BOMB_MULT_STEP/BOMB_MULT_FLOOR (mines keep tightening past the
             table to a floor; bombMult in levels.ts), TABLE[] (per-level enemyMax +
             orb/bombSpacingMult - speed-normalized per-second rate multipliers; orb flat, bomb tightens)}
+- difficulty: DIFFICULTY.{MODES (name/slope/offset/color per mode), DEFAULT} - the title
+            selector; flight.tuned() maps the played level to the tuning level everything
+            derives from (see the design-spec bullet); the color + threat pips (hud.ts)
+            are the at-a-glance difficulty signal (green/amber/red, 1-3 filled triangles)
 - tube:     TUBE.{RADIUS, RING_SPACING, RINGS_VISIBLE, SEGMENTS_PER_RING, LONGITUDINAL_LINES}
-- ship:     SHIP.{Z, RADIAL_OFFSET, SCALE, BANK, LINE_WIDTH, FLASH_HOLD, FLASH_TIME}; RIDE_RADIUS derived
+- ship:     SHIP.{Z, RADIAL_OFFSET, SCALE, BANK, LINE_WIDTH, FLASH_HOLD, FLASH_TIME,
+            HULLS (selectable cosmetic hulls: raptor/falcon/delta), PREVIEW_* (title
+            turntable placement)}; RIDE_RADIUS derived
 - camera:   CAMERA.{FOV, HFOV_MAX, BACK, RISE, LOOK_AHEAD, ORBIT_FOLLOW, ROLL_FOLLOW, AIM_FOLLOW, FOLLOW_LAG}
 - render:   RENDER.{BG_COLOR, FOG_NEAR, FOG_FAR, RING_RGB, LONG_RGB, SHIP_RGB, SHIP_FILL_RGB,
             SHIP_FLASH_RGB, SHIP_LIFE_FLASH_RGB, DPR_CAP, RENDER_SCALE(_LOW), MSAA_SAMPLES(_LOW),
@@ -111,7 +122,8 @@ The craft's position is an angle `theta` around the circular cross-section of th
             FIRE_SLOTS + FIRE_SLOT_RETRY (global cap on raiders charging/firing at once),
             RAM_ANGLE/Z; dart geometry + EDGE/FILL/CHARGE colors, SCALE/BANK/POP_*
 - projectile: MAX_PLAYER/MAX_ENEMY (fixed pools), LENGTH/LINE_WIDTH, PLAYER_RGB/ENEMY_RGB
-- input:    INPUT.{left, right} steer; fire = Space; plus start / confirm (Enter: game-over
+- input:    INPUT.{left, right} steer; fire = Space; menuUp/menuDown (title selector rows;
+            left/right cycle the active row); plus start / confirm (Enter: game-over
             -> title, resume-from-pause) / mute / pause / modeCycle (G) / perf (P) bindings
 
 ### Camera feel (decided default, easy to change)
@@ -142,11 +154,15 @@ look) and, for now, fully textured/lit surfaces. The Descent II direction (real 
 is a possible FUTURE step; the early game stays wireframe / edge-lit, not fully rendered surfaces.
 
 ## Ship
-Hand-built procedural low-poly spacecraft - a winged fighter (X-wing-ish): central fuselage,
-cockpit, swept wings, engine pods. Rendered as glowing edge lines (`Line2`) over a near-black
-emissive fill. Banks with the swing. Must already look polished in M1 - this is the hero asset,
-no placeholder arrowhead. Built in code (no external model files) to stay offline, readable,
-and on-aesthetic.
+Hand-built procedural low-poly spacecraft, rendered as glowing edge lines (`Line2`) over a
+near-black emissive fill, banking with the swing. Built in code (no external model files) to
+stay offline, readable, and on-aesthetic. THREE selectable hulls (title menu, cosmetic only,
+same footprint so the shared hit windows look fair): RAPTOR the winged fighter (X-wing-ish:
+fuselage, cockpit, X wings, engine pods), FALCON a saucer (faceted lens, offset cockpit tube,
+front mandibles), DELTA a rebel-style arrowhead (triangular wing plate, spine + canopy, twin
+canted fins, twin engines). All share one fill + one line material, so the pickup flash and
+resolution updates apply to whichever hull is visible. Every hull is a hero asset - polished,
+no placeholder arrowheads. A forward-swept dart silhouette is RESERVED for the enemy.
 
 ## Repo structure
     index.html, package.json, tsconfig.json, vite.config.ts, CLAUDE.md
@@ -158,14 +174,18 @@ and on-aesthetic.
       craft.ts             player state: pendulum + speed + smoothed steer (level-aware speed clamp)
       flight.ts            gem-gated level + section model: per-level tier speeds, score multiplier,
                            tier-relative gravity, speed cap, tier/level lookups, derived gem quota
-                           (a level advances only when its quota is met, else the cycle repeats)
+                           (a level advances only when its quota is met, else the cycle repeats);
+                           difficulty mapping (tuned/setDifficulty, see config DIFFICULTY)
+      menu.ts              title-screen settings model: ship + difficulty selection, row/key
+                           semantics, localStorage persistence (hud renders, main wires)
       levels.ts            per-level difficulty tuning (enemy cap + field density), derived from flight
       audio.ts             Web Audio mixer: streamed music + decoded/synth SFX (wired in main.ts)
       gun.ts               forward-gun trigger: cooldown + charge spend; returns fire/dry intent
       util/math.ts         clamp / approach / lerp / angleDiff (shared signed angle delta)
       physics/pendulum.ts  theta integrator (damped driven pendulum)
       world/tube.ts        build + scroll the wireframe tube mesh
-      world/ship.ts        procedural 3D spacecraft hull (edge-lit); place on wall from theta
+      world/ship.ts        procedural 3D spacecraft hulls (edge-lit; raptor/falcon/delta,
+                           setHull swap, title turntable preview); place on wall from theta
       world/field.ts       generic wall-object pool (orbs/gems/mines): spawn/scroll/recycle + angle hit
                            test; optional spacingScaleAt hook for per-section / per-level density;
                            cross-field de-confliction (avoid/occupies, SPAWN_CLEAR window)
@@ -180,7 +200,8 @@ and on-aesthetic.
       world/burst.ts       pooled impact burst (white-hot flash + shard starburst); spawned on a kill / damage hit
       game.ts              run state: weapon charge refill/spend, gems-this-level (gate counter),
                            run timer, score, lives, game-over, best
-      hud.ts               DOM HUD overlay (level/gem-gate pips/score/best/time/weapon/lives/speed + game-over)
+      hud.ts               DOM HUD overlay (level/gem-gate pips/score/best/time/weapon/lives/
+                           speed/difficulty + title menu rows + game-over)
       render/scene.ts      Three scene/camera/renderer + bloom composer, fog/fade
       render/camera.ts     chase follow + bank from theta (sin-based, smooth loops)
       render/background.ts deep-space gradient backdrop (scene.background)
@@ -297,6 +318,24 @@ and on-aesthetic.
           one (z, theta). BUILT + verified (combat sim: bolt count hard-bounded by the slots;
           NEW fields sim: avoiding pair 0 overlaps vs control pair >0; sim:levels: floor
           gravity; typecheck; 5x repeat runs for the randomized checks).
+- [x] M8  Title menu: ship selector + difficulty modes (the kids' request). (a) Three
+          selectable hulls in world/ship.ts - RAPTOR (the original fighter), FALCON
+          (saucer: faceted lens, offset cockpit, front mandibles), DELTA (rebel-style
+          arrowhead: wing plate, spine, canted twin fins) - cosmetic only, shared
+          materials + footprint, live turntable 3D preview on the title (SHIP.PREVIEW_*;
+          the title panel lost its backdrop blur so the preview stays crisp, game-over
+          keeps it). (b) Difficulty selector (config DIFFICULTY): MILKY WAY (slope 0.6),
+          ORION (identity - the game as tuned), QUASAR (offset 2.5); flight.tuned() maps
+          the played level to the tuning level inside tierSpeed, so speeds, gravity span,
+          speed cap, gem quota, and the score multiplier all follow from one function;
+          levels.ts rounds it for the enemy/density tables; speedRatioAt stays normalized
+          to the UNTUNED base so field densities keep their per-second meaning. (c)
+          menu.ts model (rows/keys/localStorage), hud.ts selector rows + difficulty
+          readout in the mode's threat color with a 3-slot pip meter (title selector,
+          HUD corner above SPD, game-over line). BUILT + verified (sim:levels L1-L6
+          difficulty checks; all sims; typecheck; live Playwright: hull cycling, mode
+          persistence across reload, QUASAR run scoring 2 gems x 563 = 1126 = the 2.25
+          multiplier applied).
 
 ### Next up (start here)
 1. Enemy persistence + fire-rate scaling (the deep-difficulty lever, deferred from M6):
@@ -361,7 +400,7 @@ their ship-relative z is advanced by the bolt's own speed.
 - [ ] CRT scanline toggle (bloom already on)
 - [x] Web Audio synthesis (procedural SFX + streamed music; continuous engine hum not yet done)
 - [x] High-score persistence (localStorage)
-- [x] Title screen (intro + controls; Space to start)
+- [x] Title screen (intro + controls; Space to start; ship + difficulty menu with 3D preview - M8)
 - [ ] Full-loop (360) tube sections
 - [ ] Fully rendered surfaces (Descent II direction)
 - [ ] Gamepad support

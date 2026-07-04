@@ -1,4 +1,4 @@
-import { PHYSICS, SPEED, FLIGHT, LEVELS, TREASURE, type FlightMode } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, TREASURE, DIFFICULTY, type FlightMode } from './config'
 import { clamp } from './util/math'
 
 // Runtime-switchable flight mode + the difficulty-by-level model. Speed is the
@@ -43,6 +43,11 @@ export interface Flight {
   // than drift with the rising per-level speed. 1 at level 1 and in pinned modes.
   speedRatioAt(distance: number): number
   gemQuota(level: number): number // gems needed to clear a level (derived; scales with cycle length)
+  // Difficulty (see config DIFFICULTY): tuned() maps a played 0-based level to the
+  // tuning level every difficulty lookup derives from; setDifficulty picks the mode
+  // (survives reset(), so it holds across runs until re-selected on the title).
+  tuned(level: number): number
+  setDifficulty(index: number): void
   reset(): void // back to level 0 at distance 0 (game-over -> title)
   cycle(): FlightMode // advance to the next mode (returns it), for live testing
 }
@@ -65,8 +70,15 @@ export function createFlight(): Flight {
     return early * EARLY + mid * MID + late * LATE
   }
 
+  // Difficulty mapping (config DIFFICULTY): the played level becomes a (possibly
+  // fractional) tuning level; speedBonus is piecewise-linear, so fractions work.
+  // Applied INSIDE tierSpeed, so every derived quantity (cycle length, gem quota,
+  // gravity span, speed cap, score multiplier) follows the mode automatically.
+  let mode = DIFFICULTY.MODES[DIFFICULTY.DEFAULT] ?? { name: 'ORION', slope: 1, offset: 0 }
+  const tuned = (level: number): number => Math.max(0, mode.offset + mode.slope * level)
+
   // tier speed at a level, and the distance length of one section / a full level.
-  const tierSpeed = (level: number, tier: number): number => (BASE[tier] ?? SPEED.NORMAL) + speedBonus(level)
+  const tierSpeed = (level: number, tier: number): number => (BASE[tier] ?? SPEED.NORMAL) + speedBonus(tuned(level))
   const sectionLen = (level: number, tier: number): number => tierSpeed(level, tier) * secs
   const cycleLen = (level: number): number => {
     let s = 0
@@ -147,7 +159,7 @@ export function createFlight(): Flight {
       curLevel = gatedLevel
       curTargetSpeed = tierSpeed(gatedLevel, sectionTierAt(distance - levelStartDistance, gatedLevel))
       this.level = gatedLevel
-      this.scoreMultiplier = 1 + gatedLevel * step
+      this.scoreMultiplier = 1 + tuned(gatedLevel) * step
     },
 
     targetSpeed(): number {
@@ -188,10 +200,19 @@ export function createFlight(): Flight {
     speedRatioAt(distance: number): number {
       if (this.mode !== 'sections') return 1
       const tier = tierAtGated(distance)
-      return tierSpeed(gatedLevel, tier) / tierSpeed(0, tier) // tierSpeed(0,*) = base, always > 0
+      // vs the UNTUNED base speed: SPAWN_SPACING values are calibrated at the
+      // level-1 ORION speeds, so density normalization must reference those even
+      // when a difficulty offset makes this mode's own level 1 faster.
+      return tierSpeed(gatedLevel, tier) / (BASE[tier] ?? SPEED.NORMAL)
     },
 
     gemQuota,
+
+    tuned,
+
+    setDifficulty(index: number): void {
+      mode = DIFFICULTY.MODES[Math.max(0, Math.min(DIFFICULTY.MODES.length - 1, index))] ?? mode
+    },
 
     reset(): void {
       gatedLevel = 0

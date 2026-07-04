@@ -19,6 +19,7 @@ import { createLevelTuning } from './levels'
 import { createGame } from './game'
 import { createGun } from './gun'
 import { createHud } from './hud'
+import { createMenu } from './menu'
 import { createAudio } from './audio'
 import { createPerfOverlay } from './render/perf'
 import { startLoop } from './loop'
@@ -45,6 +46,13 @@ const craft = createCraft()
 const flight = createFlight()
 const game = createGame()
 const hud = createHud()
+// Title-screen settings (ship hull + difficulty), persisted locally. Applied
+// immediately at boot so the preview, the HUD, and the level math all agree
+// before the first run starts.
+const menu = createMenu()
+ship.setHull(menu.hullId())
+flight.setDifficulty(menu.diffIndex)
+hud.setMenu(menu.shipName(), menu.diffIndex, menu.row)
 const perf = createPerfOverlay() // press P to toggle the FPS / frame-time overlay
 const audio = createAudio()
 let paused = false // Esc pauses a live run to the intro/menu screen; resume with Space or Esc
@@ -312,7 +320,16 @@ window.addEventListener('keydown', (e) => {
     return
   }
   if (!game.started) {
-    // title screen: Space or Enter starts the run; any other key just wakes menu audio.
+    // title screen: arrows drive the ship/difficulty selectors, Space or Enter
+    // starts the run; any other key just wakes menu audio.
+    const changed = menu.handleKey(e.code)
+    if (changed) {
+      e.preventDefault()
+      if (changed === 'ship') ship.setHull(menu.hullId())
+      if (changed === 'difficulty') flight.setDifficulty(menu.diffIndex)
+      hud.setMenu(menu.shipName(), menu.diffIndex, menu.row)
+      return
+    }
     if (INPUT.start.includes(e.code)) {
       e.preventDefault()
       beginRun()
@@ -375,7 +392,11 @@ startLoop(
     game.update(dt)
   },
   (frameDt) => {
-    ship.update(craft, frameDt)
+    // On the real title screen (not pause, not game-over) the ship becomes the
+    // menu's turntable preview in front of the camera; everywhere else it rides
+    // the wall as usual. update() fully re-poses the group, so no cleanup needed.
+    if (!game.started && !game.over) ship.preview(stage.camera, frameDt)
+    else ship.update(craft, frameDt)
     // impact bursts are pure-visual, frame-paced; frozen during a gameplay pause so a
     // burst caught mid-flight resumes on unpause (matches the frozen field pops). NOT
     // gated on game-over (a final death-burst plays through) or debug.paused (the
@@ -413,6 +434,7 @@ startLoop(
       flightMode: flight.mode,
       level: flight.level + 1, // 0-based internally, shown 1-based
       best: game.best,
+      difficultyIndex: menu.diffIndex,
     })
   },
   {
@@ -453,6 +475,7 @@ startLoop(
   gun,
   game,
   flight, // WH.flight.mode = 'slow' | 'normal' | 'fast' | 'sections' (or press G)
+  menu, // title-screen ship + difficulty selection
   audio,
   begin: beginRun, // start the run from the console / screenshot tool (skips the title gate)
   config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO },

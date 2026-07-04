@@ -22,6 +22,7 @@ to ride high up the wall, or all the way over the top.
 |--------|------|
 | Steer / swing up the walls | Left / Right arrows, or A / D |
 | Fire the forward gun | Space |
+| Choose ship + difficulty (title screen) | Up / Down picks the row, Left / Right cycles it |
 | Start the run | Space or Enter |
 | Return to the title screen (after game over) | Enter |
 | Pause / resume | Esc |
@@ -48,6 +49,10 @@ You only steer and shoot. Everything else flows from the swing.
   invulnerability after.
 - Difficulty climbs with each level: the tiers get faster and the fields denser, and a
   score multiplier rises each level.
+- The title screen has a menu: pick one of **three ships** (RAPTOR, FALCON, DELTA - a
+  look, not an advantage; they all fly the same) and a **difficulty**. MILKY WAY ramps
+  gently, ORION is the standard game, QUASAR starts deep and pays a higher score
+  multiplier from the first gem. Both choices are remembered for your next visit.
 - **Magenta raiders** fly in ahead, weave to stay hard to hit, then charge and fire
   back. Shoot them with the forward gun: a dead-centre hit destroys one outright, a
   glancing hit only chips it. A kill scores points and refunds some weapon charge. Taking
@@ -100,7 +105,8 @@ Early but playable.
   weapon-charge orbs, treasure gems, hazard mines, and a rare extra-life cross on a generic
   "wall field" engine; a forward gun with pooled projectiles and magenta raiders that shoot
   back; lives with invulnerability; a run timer; music
-  and procedural sound effects; a title screen and a minimal in-theme HUD, score with a
+  and procedural sound effects; a title screen with a ship selector (three hulls, live
+  3D preview) and three difficulty modes; a minimal in-theme HUD, score with a
   persistent local best, and a deep-space backdrop with stars.
 - **Next**: raiders that hold and close in instead of peeling off, and combat scaling
   (bolt speed / lead) at deep levels.

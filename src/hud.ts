@@ -1,4 +1,4 @@
-import { ENERGY, LIVES, GUN } from './config'
+import { ENERGY, LIVES, GUN, DIFFICULTY } from './config'
 
 // Minimal in-theme HUD as a DOM overlay (crisp text, no bloom interference):
 // level / score / best top-left, run time top-right, ships + weapon charge
@@ -19,11 +19,16 @@ export interface HudState {
   flightMode: string // experimental flight mode readout (testing)
   level: number // current level (1-based for display)
   best: number
+  difficultyIndex: number // selected DIFFICULTY.MODES index (HUD corner + game-over panel)
 }
 
 export interface Hud {
   update(s: HudState): void
   flashGemHint(): void // one-time "collect gems to advance" reminder on the first run
+  // Render the title-screen selector rows. Called on init and on a menu keypress
+  // (not per frame): row 0 = SHIP active, 1 = DIFFICULTY active; the active row
+  // brightens and gets the cycle arrows.
+  setMenu(shipName: string, diffIndex: number, row: number): void
 }
 
 const CSS = `
@@ -59,9 +64,22 @@ const CSS = `
 #hud .over .hint { font-size:12px; opacity:0.5; }
 #hud .over { position:absolute; inset:0; display:none; flex-direction:column;
   align-items:center; justify-content:center; gap:14px; text-align:center;
-  background:radial-gradient(ellipse at center, rgba(0,6,12,0.6), rgba(0,3,8,0.78));
-  backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); }
+  background:radial-gradient(ellipse at center, rgba(0,6,12,0.6), rgba(0,3,8,0.78)); }
+/* blur only the game-over panel: the TITLE panel keeps the scene sharp so the
+   rotating 3D ship preview (drawn by the canvas beneath) reads crisply, with a
+   lighter gradient - darkest behind the centered text, thin at the edges. */
+#hud #wh-over { backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); }
+#hud #wh-title { background:radial-gradient(ellipse at center, rgba(0,6,12,0.62), rgba(0,3,8,0.35)); }
 #hud .over.show { display:flex; }
+#hud .menu { display:flex; flex-direction:column; gap:7px; font-size:15px; }
+#hud .menu .mrow { display:flex; gap:16px; justify-content:center; opacity:0.45; }
+#hud .menu .mrow.on { opacity:1; }
+#hud .menu .cap { min-width:150px; text-align:right; color:#9affc0; letter-spacing:3px; }
+#hud .menu .val { min-width:190px; text-align:left; letter-spacing:3px; }
+#hud .menu .mrow.on .val { color:#f1c34a; text-shadow:0 0 9px rgba(255,200,70,0.55); }
+#hud.paused .menu { display:none; }
+#hud .dpips { font-size:0.75em; letter-spacing:2px; }
+#hud .dpips .rem { opacity:0.3; }
 #hud .over h1 { font-size:34px; margin:0; color:#9affc0; letter-spacing:5px; }
 #hud .over .lvl { font-size:30px; color:#9affc0; letter-spacing:4px; }
 #hud .over .big { font-size:22px; }
@@ -100,6 +118,24 @@ function pad(n: number, width: number): string {
   return Math.max(0, Math.floor(n)).toString().padStart(width, '0')
 }
 
+// Difficulty readout pieces (title selector + HUD corner + game-over panel): the
+// mode's own name/color plus a 3-slot threat meter - filled triangles up to the
+// mode's rank, dim outlines for the rest - so the danger level reads at a glance.
+function diffMode(i: number): (typeof DIFFICULTY.MODES)[number] {
+  return DIFFICULTY.MODES[i] ?? DIFFICULTY.MODES[0]!
+}
+function diffPips(i: number): string {
+  let pips = ''
+  for (let k = 0; k < DIFFICULTY.MODES.length; k++) {
+    pips += k <= i ? '&#9650;' : '<span class="rem">&#9651;</span>'
+  }
+  return `<span class="dpips">${pips}</span>`
+}
+function diffLabel(i: number): string {
+  const m = diffMode(i)
+  return `<span style="color:${m.color}">${m.name} ${diffPips(i)}</span>`
+}
+
 // Run timer as MM:SS.X (tenths). e.g. 127.34s -> "02:07.3".
 function fmtTime(sec: number): string {
   const s = Math.max(0, sec)
@@ -119,7 +155,7 @@ export function createHud(): Hud {
     <div class="corner tr"><div id="wh-time">TIME 00:00.0</div></div>
     <div class="lives" id="wh-lives">SHIPS</div>
     <div class="meter"><div class="lbl" id="wh-weplbl">WEAPON</div><div class="track" id="wh-track"><div class="fill" id="wh-energy"></div></div></div>
-    <div class="corner br"><div id="wh-grav" class="dim">MODE NORMAL</div><div id="wh-spd">SPD 00</div></div>
+    <div class="corner br"><div id="wh-grav" class="dim">MODE NORMAL</div><div id="wh-diff"></div><div id="wh-spd">SPD 00</div></div>
     <div class="mute" id="wh-mute">&#9836; MUSIC OFF</div>
     <div class="gemhint" id="wh-gemhint">COLLECT GEMS TO ADVANCE</div>
     <div class="levelup" id="wh-levelup">LEVEL 2</div>
@@ -136,9 +172,14 @@ export function createHud(): Hud {
       <p class="intro">A wormhole has torn open - a fold in spacetime no craft has crossed and returned from, where relativity bends time and minutes inside are years back home. You are the pilot sent in: ride its gravity deeper and faster into the unknown.</p>
       <p class="mission">MISSION - chart the deepest passage through spacetime, and live to bring it back.</p>
       <p class="legend">Blue orbs recharge your weapon &middot; gold gems score and unlock the next level &middot; red mines and magenta raiders cost a ship - shoot the raiders before they shoot you.</p>
+      <div class="menu">
+        <div class="mrow" id="wh-menu-ship"><span class="cap">SHIP</span><span class="val" id="wh-menu-ship-val"></span></div>
+        <div class="mrow" id="wh-menu-diff"><span class="cap">DIFFICULTY</span><span class="val" id="wh-menu-diff-val"></span></div>
+      </div>
       <div class="keys">
         <span class="k">ARROWS / A D</span><span class="a">STEER UP THE WALLS</span>
         <span class="k">SPACE</span><span class="a">FIRE</span>
+        <span class="k">&#9650; &#9660; &#9664; &#9654;</span><span class="a">CHOOSE SHIP + DIFFICULTY</span>
         <span class="k">M</span><span class="a">MUSIC ON / OFF</span>
         <span class="k">ESC</span><span class="a">PAUSE / MENU</span>
         <span class="k">P</span><span class="a">SHOW FPS / PERFORMANCE METRICS</span>
@@ -169,6 +210,11 @@ export function createHud(): Hud {
   const elOverBest = $('wh-over-best')
   const elLevelUp = $('wh-levelup')
   const elGemHint = $('wh-gemhint')
+  const elDiff = $('wh-diff')
+  const elMenuShip = $('wh-menu-ship')
+  const elMenuDiff = $('wh-menu-diff')
+  const elMenuShipVal = $('wh-menu-ship-val')
+  const elMenuDiffVal = $('wh-menu-diff-val')
 
   // ship glyphs: bright for remaining, dim for spent (shows the max at a glance)
   let lastLives = -1
@@ -229,6 +275,8 @@ export function createHud(): Hud {
   let lastOverLevel = -1
   let lastOverTime = -1
   let lastOverBest = -1
+  let lastDiff = -1
+  let lastPausedCls = false
 
   return {
     update(s: HudState): void {
@@ -256,6 +304,10 @@ export function createHud(): Hud {
       const spd = Math.max(0, Math.floor(s.speed))
       if (spd !== lastSpd) { elSpd.textContent = 'SPD ' + pad(spd, 2); lastSpd = spd }
       if (s.flightMode !== lastMode) { elGrav.textContent = 'MODE ' + s.flightMode.toUpperCase(); lastMode = s.flightMode }
+      if (s.difficultyIndex !== lastDiff) { elDiff.innerHTML = diffLabel(s.difficultyIndex); lastDiff = s.difficultyIndex }
+      // hide the selector rows while PAUSED (same title panel, but mid-run the
+      // ship/difficulty must not change under the frozen game)
+      if (s.paused !== lastPausedCls) { root.classList.toggle('paused', s.paused); lastPausedCls = s.paused }
       renderLives(s.lives)
 
       // weapon charge: blue normally, yellow when low (below LOW), red when empty
@@ -289,7 +341,7 @@ export function createHud(): Hud {
       // game-over, so the time line writes once on the run-ending edge.
       if (s.over) {
         if (score !== lastOverScore) { elOverScore.textContent = 'SCORE ' + pad(score, 7); lastOverScore = score }
-        if (level !== lastOverLevel) { elOverLevel.textContent = 'REACHED LEVEL ' + level; lastOverLevel = level }
+        if (level !== lastOverLevel) { elOverLevel.textContent = 'REACHED LEVEL ' + level + ' - ' + diffMode(s.difficultyIndex).name; lastOverLevel = level }
         if (timeTenths !== lastOverTime) { elOverTime.textContent = 'TIME ' + fmtTime(s.elapsed); lastOverTime = timeTenths }
         if (best !== lastOverBest) { elOverBest.textContent = 'BEST ' + pad(best, 7); lastOverBest = best }
       }
@@ -301,6 +353,16 @@ export function createHud(): Hud {
       elGemHint.classList.remove('show')
       void elGemHint.offsetWidth
       elGemHint.classList.add('show')
+    },
+
+    setMenu(shipName: string, diffIndex: number, row: number): void {
+      elMenuShip.classList.toggle('on', row === 0)
+      elMenuDiff.classList.toggle('on', row === 1)
+      // the difficulty value keeps its threat color even when the row is inactive
+      // (inline style wins over the active-row gold), so the signal never hides
+      elMenuShipVal.innerHTML = row === 0 ? `&#9664; ${shipName} &#9654;` : shipName
+      const label = diffLabel(diffIndex)
+      elMenuDiffVal.innerHTML = row === 1 ? `&#9664; ${label} &#9654;` : label
     },
   }
 }

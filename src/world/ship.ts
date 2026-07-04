@@ -11,6 +11,8 @@ import {
   Color,
   FrontSide,
   AdditiveBlending,
+  Vector3,
+  type PerspectiveCamera,
 } from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
@@ -19,18 +21,31 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { SHIP, RENDER, RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
 
+export type HullId = (typeof SHIP.HULLS)[number]['id']
+
 export interface Ship {
   object: Group
   update(craft: CraftState, dt: number): void
+  // Title-screen turntable: float the hull in front of the camera and spin it
+  // slowly (SHIP.PREVIEW_*). update() fully re-poses the group, so switching back
+  // to a run needs no cleanup.
+  preview(camera: PerspectiveCamera, dt: number): void
+  // Swap the visible hull (title-screen selector). COSMETIC ONLY: every hull
+  // shares the same materials, scale, and (global) hit windows.
+  setHull(id: HullId): void
   // momentary edge-color flash, decays over SHIP.FLASH_TIME. Defaults to the blue
   // orb-pickup tint; pass an RGB (e.g. the green extra-life color) to flash that.
   flash(rgb?: readonly [number, number, number]): void
   setResolution(w: number, h: number): void
 }
 
-// Build the winged-fighter hull (X-wing-ish) from primitives. Nose points -Z
-// (forward). Returned geometry feeds both the dark fill and the glowing edges.
-function buildHull(): BufferGeometry {
+// All hulls are built from primitives, nose pointing -Z (forward), and stay near
+// the raptor's footprint (span ~5, length ~5) so the identical hit windows also
+// LOOK fair between ships. Returned geometry feeds the dark fill and the edges.
+
+// RAPTOR - the original winged fighter (X-wing-ish): hexagonal fuselage, nose
+// cone, canopy, four X-wings with engine pods and tip cannons.
+function buildRaptorHull(): BufferGeometry {
   const parts: BufferGeometry[] = []
 
   // central fuselage: hexagonal prism along Z
@@ -72,24 +87,110 @@ function buildHull(): BufferGeometry {
     parts.push(cannon)
   }
 
+  return mergeHull(parts, 'raptor')
+}
+
+// FALCON - a saucer: faceted lens disc with a rim band, an offset cockpit tube on
+// the starboard side, twin front mandibles, and a rear engine bar.
+function buildFalconHull(): BufferGeometry {
+  const parts: BufferGeometry[] = []
+
+  // lens body: shallow cones up + down joined by a rim band (12 facets)
+  const top = new ConeGeometry(2.2, 0.55, 12)
+  top.translate(0, 0.35, 0)
+  parts.push(top)
+  const bottom = new ConeGeometry(2.2, 0.55, 12)
+  bottom.rotateX(Math.PI)
+  bottom.translate(0, -0.35, 0)
+  parts.push(bottom)
+  const rim = new CylinderGeometry(2.2, 2.2, 0.16, 12)
+  parts.push(rim)
+
+  // offset cockpit tube (starboard, reaching forward) with a rounded tip
+  const cockpit = new CylinderGeometry(0.3, 0.26, 1.5, 8)
+  cockpit.rotateX(Math.PI / 2)
+  cockpit.translate(1.15, 0.14, -1.45)
+  parts.push(cockpit)
+  const canopy = new SphereGeometry(0.26, 8, 5)
+  canopy.scale(1, 0.8, 1.1)
+  canopy.translate(1.15, 0.16, -2.2)
+  parts.push(canopy)
+
+  // twin front mandibles (the forward prongs)
+  for (const x of [-0.62, 0.62]) {
+    const prong = new BoxGeometry(0.5, 0.3, 1.5)
+    prong.translate(x, 0, -2.5)
+    parts.push(prong)
+  }
+
+  // rear engine bar (the glow strip silhouette)
+  const engines = new BoxGeometry(1.7, 0.24, 0.35)
+  engines.translate(0, 0, 2.2)
+  parts.push(engines)
+
+  return mergeHull(parts, 'falcon')
+}
+
+// DELTA - a rebel-style arrowhead: one thin triangular wing plate, a raised
+// spine + canopy, twin canted tail fins and twin underslung engines.
+function buildDeltaHull(): BufferGeometry {
+  const parts: BufferGeometry[] = []
+
+  // main wing: a 3-sided prism (triangle in plan view), nose vertex forward
+  const wing = new CylinderGeometry(2.1, 2.1, 0.24, 3)
+  wing.rotateY(Math.PI) // put the leading vertex on -Z
+  wing.scale(1, 1, 1.6) // stretch nose-to-tail into a slim arrow
+  parts.push(wing)
+
+  // central spine (raised fuselage ridge) + cockpit bubble
+  const spine = new BoxGeometry(0.52, 0.4, 2.8)
+  spine.translate(0, 0.26, 0.1)
+  parts.push(spine)
+  const cockpit = new SphereGeometry(0.4, 8, 5)
+  cockpit.scale(0.75, 0.55, 1.25)
+  cockpit.translate(0, 0.5, -0.65)
+  parts.push(cockpit)
+
+  // twin tail fins, canted slightly outward
+  for (const side of [-1, 1]) {
+    const fin = new BoxGeometry(0.07, 0.9, 1.05)
+    fin.translate(0, 0.5, 0)
+    fin.rotateZ(-side * 0.2)
+    fin.translate(side * 1.15, 0.12, 1.25)
+    parts.push(fin)
+  }
+
+  // twin engines under the trailing edge
+  for (const side of [-1, 1]) {
+    const engine = new CylinderGeometry(0.24, 0.21, 1.4, 8)
+    engine.rotateX(Math.PI / 2)
+    engine.translate(side * 0.85, -0.06, 1.55)
+    parts.push(engine)
+  }
+
+  return mergeHull(parts, 'delta')
+}
+
+function mergeHull(parts: BufferGeometry[], name: string): BufferGeometry {
   const merged = mergeGeometries(parts, false)
-  if (!merged) throw new Error('ship: failed to merge hull geometry')
+  if (!merged) throw new Error(`ship: failed to merge ${name} hull geometry`)
   parts.forEach((p) => p.dispose())
   return merged
 }
 
+const BUILDERS: Record<HullId, () => BufferGeometry> = {
+  raptor: buildRaptorHull,
+  falcon: buildFalconHull,
+  delta: buildDeltaHull,
+}
+
 export function createShip(): Ship {
-  const hull = buildHull()
-
-  // dark, depth-writing fill so the craft reads as a solid edge-lit object
-  const fill = new Mesh(
-    hull,
-    new MeshBasicMaterial({ color: new Color().setRGB(...RENDER.SHIP_FILL_RGB), side: FrontSide }),
-  )
-
-  // glowing edges via fat lines
-  const edgesGeo = new EdgesGeometry(hull, 24)
-  const lineGeo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo)
+  // one fill material + one fat-line material SHARED by all hulls, so the pickup
+  // flash and the resolution updates apply to whichever hull is visible.
+  const fillMat = new MeshBasicMaterial({
+    color: new Color().setRGB(...RENDER.SHIP_FILL_RGB),
+    side: FrontSide,
+  })
   const lineMat = new LineMaterial({
     color: new Color().setRGB(...RENDER.SHIP_RGB).getHex(),
     linewidth: SHIP.LINE_WIDTH,
@@ -100,14 +201,28 @@ export function createShip(): Ship {
   })
   // setRGB above can exceed 1; preserve the HDR values for strong bloom
   lineMat.color.setRGB(...RENDER.SHIP_RGB)
-  const edges = new LineSegments2(lineGeo, lineMat)
-  edges.computeLineDistances()
-  edgesGeo.dispose()
 
   const group = new Group()
-  group.add(fill)
-  group.add(edges)
   group.scale.setScalar(SHIP.SCALE)
+
+  // build every hull once (small geometry); the selector just flips visibility.
+  const hulls = new Map<HullId, Group>()
+  for (const { id } of SHIP.HULLS) {
+    const hull = BUILDERS[id]()
+    const sub = new Group()
+    sub.add(new Mesh(hull, fillMat))
+    const edgesGeo = new EdgesGeometry(hull, 24)
+    const lineGeo = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeo)
+    const edges = new LineSegments2(lineGeo, lineMat)
+    edges.computeLineDistances()
+    edgesGeo.dispose()
+    sub.add(edges)
+    sub.visible = false
+    group.add(sub)
+    hulls.set(id, sub)
+  }
+  const first = hulls.get(SHIP.HULLS[0]!.id)
+  if (first) first.visible = true
 
   const shipRadius = RIDE_RADIUS
 
@@ -117,6 +232,20 @@ export function createShip(): Ship {
   const flashColor = new Color().setRGB(...RENDER.SHIP_FLASH_RGB)
   let flashT = 0 // seconds of flash remaining
 
+  // preview scratch (hoisted: no per-frame allocation)
+  const pDir = new Vector3()
+  const pRight = new Vector3()
+  let pYaw = 0
+
+  function tickFlash(dt: number): void {
+    // hold at full for FLASH_HOLD, then fade over FLASH_TIME back to base
+    if (flashT > 0) {
+      flashT = Math.max(0, flashT - dt)
+      const intensity = flashT >= SHIP.FLASH_TIME ? 1 : flashT / SHIP.FLASH_TIME
+      lineMat.color.lerpColors(baseColor, flashColor, intensity)
+    }
+  }
+
   return {
     object: group,
     update(craft: CraftState, dt: number): void {
@@ -125,15 +254,25 @@ export function createShip(): Ship {
         -Math.cos(craft.theta) * shipRadius,
         SHIP.Z,
       )
-      // sit tangent on the wall (roll with theta), lean into the steer input
-      group.rotation.z = craft.theta - SHIP.BANK * craft.steerSignal
-
-      // hold at full for FLASH_HOLD, then fade over FLASH_TIME back to base
-      if (flashT > 0) {
-        flashT = Math.max(0, flashT - dt)
-        const intensity = flashT >= SHIP.FLASH_TIME ? 1 : flashT / SHIP.FLASH_TIME
-        lineMat.color.lerpColors(baseColor, flashColor, intensity)
-      }
+      // sit tangent on the wall (roll with theta), lean into the steer input.
+      // Full rotation.set (not just z): it also clears a title-preview turntable pose.
+      group.rotation.set(0, 0, craft.theta - SHIP.BANK * craft.steerSignal)
+      tickFlash(dt)
+    },
+    preview(camera: PerspectiveCamera, dt: number): void {
+      pYaw += SHIP.PREVIEW_SPIN * dt
+      camera.getWorldDirection(pDir)
+      pRight.crossVectors(pDir, camera.up).normalize()
+      group.position
+        .copy(camera.position)
+        .addScaledVector(pDir, SHIP.PREVIEW_DIST)
+        .addScaledVector(pRight, SHIP.PREVIEW_RIGHT)
+      group.position.y -= SHIP.PREVIEW_DOWN
+      group.rotation.set(SHIP.PREVIEW_TILT, pYaw, 0)
+      tickFlash(dt)
+    },
+    setHull(id: HullId): void {
+      for (const [hullId, sub] of hulls) sub.visible = hullId === id
     },
     flash(rgb?: readonly [number, number, number]): void {
       flashColor.setRGB(...(rgb ?? RENDER.SHIP_FLASH_RGB))

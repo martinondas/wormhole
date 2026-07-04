@@ -11,7 +11,7 @@
 // exactly the old pure-distance behavior, which the speed/gravity checks rely on);
 // a count of 0 is a "passive" player who never advances.
 import { createFlight, type Flight } from '../src/flight'
-import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, HAZARD, TREASURE } from '../src/config'
+import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, HAZARD, TREASURE, DIFFICULTY } from '../src/config'
 
 let failed = 0
 function check(name: string, cond: boolean, detail = ''): void {
@@ -48,8 +48,9 @@ function cumStart(L: number): number {
 // Fly a fresh flight forward to `distance`, feeding `gems` each step. Small steps
 // keep at most one cycle boundary per update() call (so the per-call gem count is
 // applied to each boundary in turn).
-function flyTo(distance: number, gems: number, stepSize = 20): Flight {
+function flyTo(distance: number, gems: number, stepSize = 20, difficulty?: number): Flight {
   const f = createFlight()
+  if (difficulty !== undefined) f.setDifficulty(difficulty)
   f.update(0, gems)
   let d = 0
   while (d < distance) {
@@ -129,6 +130,38 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   check('E4 absolute: L1 slow gravity < full (lighter)', g.gravityForSpeed(tierSpeed(1, 0)) < PHYSICS.GRAVITY_K - 1e-6, `${g.gravityForSpeed(tierSpeed(1, 0))}`)
   check('E5 gravity clamped to [0, K]', g.gravityForSpeed(0) <= PHYSICS.GRAVITY_K + 1e-9 && g.gravityForSpeed(9999) >= -1e-9)
   LEVELS.GRAVITY_MODE = modeWas
+})()
+
+// ---- L) difficulty modes: one slope/offset mapping drives every lookup ----
+// ORION (the default) is the identity mapping, so every other section already
+// validates it. Here: the mapping itself, the speeds/multiplier it produces, and
+// the density normalization staying referenced to the UNTUNED base speed.
+;(() => {
+  const dflt = DIFFICULTY.MODES[DIFFICULTY.DEFAULT]!
+  check('L1 default mode is the identity (ORION)', dflt.slope === 1 && dflt.offset === 0, dflt.name)
+
+  // MILKY WAY (index 0, slope 0.6): played display L5 (0-based 4) tunes to 2.4,
+  // so its slow speed matches an ORION level ~3.4 - the agreed calibration anchor.
+  const easyMode = DIFFICULTY.MODES[0]!
+  const easy = createFlight()
+  easy.setDifficulty(0)
+  check('L2 milky way tuned(4) = 2.4', approx(easy.tuned(4), easyMode.offset + easyMode.slope * 4) && approx(easy.tuned(4), 2.4), `${easy.tuned(4)}`)
+  // fly to its display L5 under its own (shorter) cycle lengths and check the speed
+  const easyCum = (L: number): number => {
+    let s = 0
+    for (let k = 0; k < L; k++) s += (SPEED.SLOW + SPEED.NORMAL + SPEED.FAST + 3 * speedBonus(easyMode.slope * k)) * secs
+    return s
+  }
+  const easyAtL5 = flyTo(easyCum(4) + 50, ACTIVE, 20, 0)
+  check('L3 milky way L5 slow speed = base + bonus(2.4)', approx(easyAtL5.targetSpeed(), SPEED.SLOW + speedBonus(2.4)), `${easyAtL5.targetSpeed()}`)
+
+  // QUASAR (index 2, offset 2.5): starts around ORION L3.5 - faster, higher
+  // multiplier, and density normalization referenced to the untuned base.
+  const hard = flyTo(100, ACTIVE, 20, 2) // its level 0, slow section
+  const hardSlow = SPEED.SLOW + speedBonus(2.5)
+  check('L4 quasar L1 slow speed = base + bonus(2.5)', approx(hard.targetSpeed(), hardSlow), `${hard.targetSpeed()}`)
+  check('L5 quasar L1 multiplier follows the tuning level', approx(hard.scoreMultiplier, 1 + 2.5 * step), `${hard.scoreMultiplier}`)
+  check('L6 speed ratio normalizes vs the untuned base', approx(hard.speedRatioAt(100), hardSlow / SPEED.SLOW), `${hard.speedRatioAt(100)}`)
 })()
 
 // ---- F) tier/level lookups used by tube coloring + field scaling (GATED) ----

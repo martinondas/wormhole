@@ -132,6 +132,27 @@ export const LEVELS = {
   ],
 }
 
+// --- difficulty (title-screen selector; maps the played level to a tuning level) --
+// One mapping covers everything: tuningLevel = OFFSET + SLOPE * level (0-based),
+// applied inside flight.ts (tierSpeed / score multiplier / gem quota) and levels.ts
+// (enemy cap, mine density) - so a mode never needs its own tables. MILKY WAY ramps
+// at 60% of the normal rate (its display L5 plays like ORION L3.4, its L10 like
+// ORION L6.4); ORION is the unmodified game; QUASAR starts around ORION L3.5 and
+// ramps at the full rate. The score multiplier follows the tuning level, so a
+// harder mode pays more per gem/kill and the single shared best score stays honest.
+// Each mode carries its threat COLOR (the intuitive difficulty signal, reused by
+// the title selector and the HUD readout): the HUD's own green -> the low-ammo
+// amber -> the danger red. The threat pips (filled triangles, index+1 of 3) render
+// in hud.ts from the mode index.
+export const DIFFICULTY = {
+  MODES: [
+    { name: 'MILKY WAY', slope: 0.6, offset: 0, color: '#7dffa6' },
+    { name: 'ORION', slope: 1.0, offset: 0, color: '#ffd24d' },
+    { name: 'QUASAR', slope: 1.0, offset: 2.5, color: '#ff5a5a' },
+  ],
+  DEFAULT: 1, // ORION (the game exactly as tuned so far)
+}
+
 // --- tube geometry ----------------------------------------------------------
 export const TUBE = {
   RADIUS: 6,
@@ -146,6 +167,23 @@ export const SHIP = {
   Z: 0,               // ship sits at world z=0; camera is behind at +Z
   RADIAL_OFFSET: 1.35,// how far the belly floats inside the tube wall
   SCALE: 0.9,         // overall hull scale
+  // Selectable hulls (title-screen menu; world/ship.ts builds the geometry per id).
+  // COSMETIC ONLY: every hull flies identically and shares the exact same hit
+  // windows (those are the global CAPTURE_*/RAM_*/BULLET_* constants), so the
+  // choice is a look, never an advantage. Keep new silhouettes near the same
+  // footprint as the raptor so the identical hitbox also LOOKS believable.
+  HULLS: [
+    { id: 'raptor', name: 'RAPTOR' },   // the original X-wing-ish winged fighter
+    { id: 'falcon', name: 'FALCON' },   // saucer: lens disc, offset cockpit, front mandibles
+    { id: 'delta', name: 'DELTA' },     // rebel-style delta: arrow wing, twin fins + engines
+  ] as { id: 'raptor' | 'falcon' | 'delta'; name: string }[],
+  // Title-screen preview: the selected hull floats in front of the camera and
+  // slowly turns (turntable) so the choice is seen, not read.
+  PREVIEW_DIST: 15,   // world units in front of the camera
+  PREVIEW_RIGHT: 3.6, // shift right of the screen center, clear of the title text
+  PREVIEW_DOWN: 1.2,  // shift below the camera axis
+  PREVIEW_SPIN: 0.6,  // turntable yaw speed (rad/s)
+  PREVIEW_TILT: 0.30, // fixed pitch so the top of the hull is visible (rad)
   BANK: 0.5,          // extra roll (rad) leaned into a full steer input
   LINE_WIDTH: 2.4,    // edge line width in pixels (Line2)
   FLASH_HOLD: 0.5,    // seconds the blue orb-pickup flash stays at full before fading
@@ -558,6 +596,8 @@ export const BURST = {
 export const INPUT = {
   left: ['ArrowLeft', 'KeyA'],
   right: ['ArrowRight', 'KeyD'],
+  menuUp: ['ArrowUp', 'KeyW'],   // title menu: move between the SHIP / DIFFICULTY rows
+  menuDown: ['ArrowDown', 'KeyS'],
   fire: ['Space'],                    // forward gun
   start: ['Space', 'Enter'],          // title screen only: begin the first run
   confirm: ['Enter'],                 // Enter: game-over -> title, and resume-from-pause.
