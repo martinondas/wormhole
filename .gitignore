@@ -5,8 +5,9 @@ node_modules/
 dist/
 dist-ssr/
 
-# vite / vitest cache
+# vite / vitest cache, bundled sim + playtest scripts
 .vite/
+.cache/
 *.local
 
 # playwright

@@ -6,13 +6,17 @@
   "description": "Wormhole - a retro-inspired Tron-style tube flyer",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.playtest.json",
     "shoot": "node scripts/shoot.ts",
-    "sim": "esbuild scripts/combat-sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/combat-sim.mjs && node node_modules/.cache/combat-sim.mjs",
-    "sim:levels": "esbuild scripts/levels-sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/levels-sim.mjs && node node_modules/.cache/levels-sim.mjs",
-    "sim:fields": "esbuild scripts/fields-sim.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/fields-sim.mjs && node node_modules/.cache/fields-sim.mjs"
+    "sim": "esbuild scripts/combat-sim.ts --bundle --platform=node --format=esm --outfile=.cache/combat-sim.mjs && node .cache/combat-sim.mjs",
+    "sim:levels": "esbuild scripts/levels-sim.ts --bundle --platform=node --format=esm --outfile=.cache/levels-sim.mjs && node .cache/levels-sim.mjs",
+    "playtest": "esbuild scripts/playtest.ts --bundle --platform=node --format=esm --log-level=warning --outfile=.cache/playtest.mjs && node .cache/playtest.mjs",
+    "playtest:baseline": "npm run playtest -- --matrix baseline --runs 60 --seed 1 --max-seconds 900 --out playtest/baseline.json",
+    "playtest:compare": "npm run playtest -- --matrix baseline --runs 60 --seed 1 --max-seconds 900 --compare playtest/baseline.json",
+    "playtest:live": "esbuild scripts/playtest/live-agent.ts --bundle --format=iife --log-level=warning --outfile=.cache/live-agent.js && node scripts/playtest-live.ts",
+    "sim:fields": "esbuild scripts/fields-sim.ts --bundle --platform=node --format=esm --outfile=.cache/fields-sim.mjs && node .cache/fields-sim.mjs"
   },
   "dependencies": {
     "three": "^0.184.0"

@@ -31,6 +31,7 @@ export interface Flight {
   mode: FlightMode
   level: number // current level, 0-based (display as level + 1); 0 in pinned modes
   scoreMultiplier: number // 1 + level * SCORE_MULT_STEP (1 in pinned modes)
+  cycles: number // cycle boundaries crossed this run; cycles - level = level repeats (gem-gate misses)
   update(distance: number, gemsThisLevel: number): void // refresh gated level/section state once per frame
   targetSpeed(): number // speed the craft eases toward (cached from update)
   speedMax(): number // upper clamp for craft speed at the current level
@@ -130,6 +131,7 @@ export function createFlight(): Flight {
     mode: FLIGHT.MODE,
     level: 0,
     scoreMultiplier: 1,
+    cycles: 0,
 
     update(distance: number, gemsThisLevel: number): void {
       if (this.mode !== 'sections') {
@@ -149,6 +151,7 @@ export function createFlight(): Flight {
       let len = cycleLen(gatedLevel)
       while (len > 0 && distance - levelStartDistance >= len) {
         levelStartDistance += len
+        this.cycles++
         if (gems >= gemQuota(gatedLevel)) {
           gatedLevel++
           gems = 0
@@ -221,6 +224,7 @@ export function createFlight(): Flight {
       curTargetSpeed = SPEED.NORMAL
       this.level = 0
       this.scoreMultiplier = 1
+      this.cycles = 0
     },
 
     cycle(): FlightMode {

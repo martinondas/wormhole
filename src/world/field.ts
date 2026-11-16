@@ -2,6 +2,7 @@ import { Group } from 'three'
 import { RIDE_RADIUS, SPAWN_CLEAR } from '../config'
 import { type CraftState } from '../craft'
 import { angleDiff } from '../util/math'
+import { rand } from '../util/rng'
 import { type WallObject } from './wallObject'
 
 // A generic "wall field": a pool of WallObjects fixed to the tube wall at
@@ -57,9 +58,9 @@ const DEG = Math.PI / 180
 
 export function biasedAngle(b: AngleBias): () => number {
   return () => {
-    const [lo, hi] = Math.random() < b.bias ? b.band : b.rest
-    const phi = (lo + Math.random() * (hi - lo)) * DEG
-    return (Math.random() < 0.5 ? 1 : -1) * phi
+    const [lo, hi] = rand() < b.bias ? b.band : b.rest
+    const phi = (lo + rand() * (hi - lo)) * DEG
+    return (rand() < 0.5 ? 1 : -1) * phi
   }
 }
 
@@ -71,6 +72,10 @@ export interface Field {
   // True when one of this field's objects sits within the SPAWN_CLEAR window of
   // (worldDistance, theta) - the query side of cross-field de-confliction.
   occupies(worldDistance: number, theta: number): boolean
+  // Read-only view of every LIVE object (armed, not yet triggered or popping), for
+  // the playtest bots and metrics. No allocation; the callback gets the object's
+  // angle and its absolute distance along the tube.
+  visit(fn: (theta: number, worldDistance: number) => void): void
   readonly consumed: number // items consumed this run (debug / feel only)
 }
 
@@ -95,7 +100,7 @@ export function createField(cfg: FieldConfig): Field {
   let consumed = 0
   let farthest = cfg.spawnStart // last placed slot's base distance (pre-jitter)
 
-  const sampleTheta = cfg.sampleTheta ?? ((): number => Math.random() * Math.PI * 2)
+  const sampleTheta = cfg.sampleTheta ?? ((): number => rand() * Math.PI * 2)
   // Per-section spacing scale (default 1): the gap before each object is
   // spawnSpacing * scaleAt(farthest). Applied identically in the initial layout,
   // recycle, and reset so density is consistent across the run.
@@ -132,7 +137,7 @@ export function createField(cfg: FieldConfig): Field {
   function layout(base: number): void {
     slots.forEach((slot, i) => {
       farthest = i === 0 ? base + cfg.spawnStart : farthest + cfg.spawnSpacing * scaleAt(farthest)
-      arm(slot, farthest + Math.random() * cfg.spawnJitter)
+      arm(slot, farthest + rand() * cfg.spawnJitter)
       // place at its resting z now (base = the craft distance at layout time) so a
       // freshly laid-out field renders down the tube, not clumped at the origin,
       // before the first (gated) update runs - e.g. on the title screen.
@@ -149,7 +154,7 @@ export function createField(cfg: FieldConfig): Field {
 
   function recycle(slot: Slot): void {
     farthest += cfg.spawnSpacing * scaleAt(farthest)
-    arm(slot, farthest + Math.random() * cfg.spawnJitter)
+    arm(slot, farthest + rand() * cfg.spawnJitter)
   }
 
   function place(slot: Slot, z: number): void {
@@ -222,6 +227,11 @@ export function createField(cfg: FieldConfig): Field {
         }
       }
       return false
+    },
+    visit(fn: (theta: number, worldDistance: number) => void): void {
+      for (const slot of slots) {
+        if (slot.state === 'idle' && !slot.triggered) fn(slot.theta, slot.worldDistance)
+      }
     },
     get consumed(): number {
       return consumed

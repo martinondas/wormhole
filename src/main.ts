@@ -3,27 +3,16 @@ import { createCameraRig } from './render/camera'
 import { createStarfield } from './render/stars'
 import { createTube } from './world/tube'
 import { createShip } from './world/ship'
-import { createField, biasedAngle, type Field } from './world/field'
-import { type WallObject } from './world/wallObject'
-import { createPickup } from './world/pickup'
-import { createTreasure } from './world/treasure'
-import { createHazard } from './world/hazard'
-import { createExtraLife } from './world/extraLife'
-import { createProjectiles } from './world/projectiles'
 import { createBurst } from './world/burst'
-import { createEnemies } from './world/enemies'
 import { Input } from './input'
-import { createCraft, updateCraft, resetCraft } from './craft'
-import { createFlight } from './flight'
-import { createLevelTuning } from './levels'
-import { createGame } from './game'
-import { createGun } from './gun'
+import { createSession, type SessionFx } from './session'
+import { seedRng } from './util/rng'
 import { createHud } from './hud'
 import { createMenu } from './menu'
 import { createAudio } from './audio'
 import { createPerfOverlay } from './render/perf'
 import { startLoop } from './loop'
-import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -42,10 +31,52 @@ stage.onResize((w, h) => ship.setResolution(w, h))
 
 const rig = createCameraRig(stage.camera)
 const input = new Input()
-const craft = createCraft()
-const flight = createFlight()
-const game = createGame()
 const hud = createHud()
+// Impact bursts (white-hot flash + shards): a shared pooled effect played on a real
+// hit so the player SEES it. A damaging hit (mine / ram / enemy bolt) flashes the hull
+// red AND spawns a big, short, world-anchored red burst at the impact point; a kill
+// spawns a magenta burst at the raider (see config BURST for the two kinds).
+const burst = createBurst()
+stage.scene.add(burst.object)
+stage.onResize((w, h) => burst.setResolution(w, h))
+
+// The gameplay itself (craft, levels, fields, gun, raiders, bolts, run state and
+// the fixed-step order) lives in session.ts, shared with the headless playtest
+// harness. Here we only attach what the player sees and hears to its events.
+const fx: SessionFx = {
+  orbCollected: () => {
+    audio.play('orb')
+    ship.flash()
+  },
+  gemCollected: () => audio.play('gem'),
+  lifeCollected: () => {
+    audio.play('life')
+    ship.flash(RENDER.SHIP_LIFE_FLASH_RGB)
+  },
+  // a life was lost (never fires during i-frames, so a graze stays silent): the
+  // explosion cue, a red hull flash, and a red burst at the impact point (the mine's
+  // own position, or the ship for a ram / enemy bolt).
+  damaged: (_cause, theta, z) => {
+    audio.play('hit')
+    ship.flash(RENDER.SHIP_HIT_FLASH_RGB)
+    burst.spawn('damage', theta, z, craft.distance)
+  },
+  enemyFired: () => audio.play('enemyFire'),
+  enemyKilled: (theta, z) => {
+    audio.play('kill')
+    burst.spawn('kill', theta, z, craft.distance) // magenta detonation where the raider died
+  },
+  playerFired: () => audio.play('shoot'),
+  dryFired: () => audio.play('empty'), // dull click: no charge to fire
+  tierUp: () => audio.playAccel(),
+}
+const session = createSession(fx)
+const { craft, flight, game, fields, enemies, projectiles, gun } = session
+for (const sys of [...fields, enemies, projectiles]) {
+  stage.scene.add(sys.object)
+  stage.onResize((w, h) => sys.setResolution(w, h))
+}
+
 // Title-screen settings (ship hull + difficulty), persisted locally. Applied
 // immediately at boot so the preview, the HUD, and the level math all agree
 // before the first run starts.
@@ -59,200 +90,12 @@ let paused = false // Esc pauses a live run to the intro/menu screen; resume wit
 audio.arm() // a click/tap to focus the canvas wakes the menu track (autoplay policy)
 audio.playMusic(musicTrack()) // 'menu' on the title; queued until the first gesture unlocks audio
 
-// Sound a hazard/ram/bolt hit only when a life was actually lost. hitHazard()
-// returns false during i-frames (or once the run is over), so a graze is silent.
-const playedHit = (lostLife: boolean): boolean => {
-  if (lostLife) audio.play('hit')
-  return lostLife
-}
-
-// Impact bursts (white-hot flash + shards): a shared pooled effect played on a real
-// hit so the player SEES it. Created before the fields/enemies so their onHit/onKill
-// closures can spawn into it. A damaging hit (mine / ram / enemy bolt) flashes the hull
-// red AND spawns a big, short, world-anchored red burst at the impact point; a kill
-// spawns a magenta burst at the raider (see config BURST for the two kinds).
-const burst = createBurst()
-stage.scene.add(burst.object)
-stage.onResize((w, h) => burst.setResolution(w, h))
-const damageFx = (theta: number, z: number): void => {
-  ship.flash(RENDER.SHIP_HIT_FLASH_RGB) // red hull flash on the same hit
-  burst.spawn('damage', theta, z, craft.distance)
-}
-// ram / enemy-bolt hits land on the ship; composes with playedHit (returns lostLife).
-const damageBurst = (lostLife: boolean): boolean => {
-  if (lostLife) damageFx(craft.theta, SHIP.Z)
-  return lostLife
-}
-
-// --- wall objects: orbs (energy), gems (score), mines (a hit costs a life) --
-// All three are pools of WallObjects on the tube wall, driven by one generic
-// field; only the onHit effect differs. The per-kind config blocks share these
-// field-constant names, so one mapping builds all three.
-interface FieldConsts {
-  COUNT: number
-  SPAWN_START: number
-  SPAWN_SPACING: number
-  SPAWN_JITTER: number
-  RECYCLE_BEHIND: number
-  CAPTURE_Z: number
-  CAPTURE_ANGLE: number
-  POP_TIME: number
-  POP_SCALE: number
-}
-interface FieldOpts {
-  sampleTheta?: () => number
-  spacingScaleAt?: (worldDistance: number) => number
-  avoid?: (worldDistance: number, theta: number) => boolean
-}
-function makeField(
-  create: () => WallObject,
-  c: FieldConsts,
-  onHit: (theta: number, z: number) => boolean,
-  opts: FieldOpts = {},
-): Field {
-  return createField({
-    create,
-    onHit,
-    ...opts,
-    count: c.COUNT,
-    spawnStart: c.SPAWN_START,
-    spawnSpacing: c.SPAWN_SPACING,
-    spawnJitter: c.SPAWN_JITTER,
-    recycleBehind: c.RECYCLE_BEHIND,
-    captureZ: c.CAPTURE_Z,
-    captureAngle: c.CAPTURE_ANGLE,
-    popTime: c.POP_TIME,
-    popScale: c.POP_SCALE,
-  })
-}
-
-// Per-level difficulty tuning (enemy cap + field density) lives in levels.ts.
-const levels = createLevelTuning(flight)
-
-// Cross-field spawn de-confliction: every (re)spawn asks the OTHER fields whether
-// the spot is taken (see config SPAWN_CLEAR), so kinds cannot stack at nearly the
-// same (z, theta) - a mine hiding inside a gem read as a luck death in playtest.
-// nextAvoid() captures the index its field is about to occupy, so the fields must
-// be pushed ONE AT A TIME (a single multi-arg push would evaluate every closure at
-// length 0). While the array is still filling, each initial layout de-conflicts
-// against the kinds created before it; every later recycle checks all of them.
-const fields: Field[] = []
-const nextAvoid = (): ((worldDistance: number, theta: number) => boolean) => {
-  const self = fields.length
-  return (worldDistance, theta) => fields.some((f, i) => i !== self && f.occupies(worldDistance, theta))
-}
-// orbs favor mid-wall (swing up for energy); gems anywhere; mines hug the bottom.
-fields.push(
-  makeField(
-    createPickup,
-    PICKUP,
-    () => {
-      if (!game.addEnergy(ENERGY.PER_ORB)) return false // full charge: orb sails past, no pop/sound
-      audio.play('orb')
-      ship.flash()
-      return true
-    },
-    { sampleTheta: biasedAngle(PICKUP.SPAWN_ANGLE), spacingScaleAt: levels.orbSpacingScale, avoid: nextAvoid() },
-  ),
-)
-// gems: the level multiplier scales the points at award time (frequency is constant).
-// addGem() also counts it toward the level gate (collect the quota to advance).
-fields.push(
-  makeField(
-    createTreasure,
-    TREASURE,
-    () => {
-      game.addScore(Math.round(TREASURE.SCORE * flight.scoreMultiplier))
-      game.addGem()
-      audio.play('gem')
-      return true
-    },
-    { avoid: nextAvoid() },
-  ),
-)
-// play the hit sfx only when a life is actually lost (hitHazard returns false
-// during i-frames), so an invuln graze stays silent. A real hit also bursts at
-// the mine's own (theta, z) - the detonation blooms where the mine was.
-fields.push(
-  makeField(
-    createHazard,
-    HAZARD,
-    (theta, z) => {
-      const lost = playedHit(game.hitHazard())
-      if (lost) damageFx(theta, z) // red hull flash + red burst at the mine
-      return lost
-    },
-    { sampleTheta: biasedAngle(HAZARD.SPAWN_ANGLE), spacingScaleAt: levels.mineSpacingScale, avoid: nextAvoid() },
-  ),
-)
-// extra life: a rare bright-green cross. game.addLife() caps at LIVES.START, so
-// at full lives it returns false and the cross passes through (no pop / no sound);
-// when it grants a life, play the 1-up cue and flash the hull green.
-fields.push(
-  makeField(
-    createExtraLife,
-    EXTRA_LIFE,
-    () => {
-      if (!game.addLife()) return false
-      audio.play('life')
-      ship.flash(RENDER.SHIP_LIFE_FLASH_RGB)
-      return true
-    },
-    { sampleTheta: biasedAngle(EXTRA_LIFE.SPAWN_ANGLE), avoid: nextAvoid() },
-  ),
-)
-for (const f of fields) {
-  stage.scene.add(f.object)
-  stage.onResize((w, h) => f.setResolution(w, h))
-}
-
-// --- combat: forward gun + pooled bolts + magenta raiders -------------------
-// projectiles is one shared pool (player + enemy bolts). enemies is a sibling of
-// the fields - NOT a Field, because raiders fly in / hold station / peel off (own
-// worldDistance). Both are dependency-injected here (the single wiring point), so
-// they import neither game nor each other: enemy fire, rams, kills, and bolt hits
-// all call back through these closures, exactly like field onHit effects do.
-const projectiles = createProjectiles()
-const gun = createGun()
-const enemies = createEnemies({
-  spawnEnemyBolt: (theta, z, vz) => {
-    audio.play('enemyFire')
-    projectiles.spawn('enemy', theta, z, vz)
-  },
-  onRam: () => damageBurst(playedHit(game.hitHazard())), // lethal hull contact (enemy survives); burst at the ship
-  onKill: (theta, z) => {
-    game.addScore(Math.round(ENEMY.SCORE * flight.scoreMultiplier))
-    game.addEnergy(ENEMY.ENERGY_REFUND) // energy refund is NOT score-multiplied
-    audio.play('kill')
-    burst.spawn('kill', theta, z, craft.distance) // magenta detonation where the raider died
-  },
-})
-for (const sys of [enemies, projectiles]) {
-  stage.scene.add(sys.object)
-  stage.onResize((w, h) => sys.setResolution(w, h))
-}
-
-// Hoisted projectile-update context (mutated each step, not re-allocated) so the
-// fixed update does no per-frame allocation; the two callbacks are stable.
-const projCtx = {
-  tryKillEnemy: (theta: number, z: number): boolean => enemies.tryKill(theta, z),
-  shipTheta: 0,
-  onShipHit: (): boolean => damageBurst(playedHit(game.hitHazard())),
-}
-
 // Run-flow gate: the sim is frozen on the title screen (game.started=false) and
 // on the game-over screen (game.over). menu.mp3 plays on both; music.mp3 during
 // a run. The first run starts on Space from the title; after a game over, Enter
 // returns to the title (intro + instructions) and the next run starts from there.
 let wasOver = false // detects the run-ending edge once in render (sting)
-let lastTargetSpeed = SPEED.NORMAL // detects flight-tier step-ups -> accelerate layer
-let lastFlightLevel = 0 // detects the gem-gated level-up edge -> reset the per-level gem counter
 let gemHintShown = false // the one-time gem-gate reminder fires on the first run of the session
-// Flight inputs are stable within a frame, so preUpdate computes them once per
-// frame and the fixed substeps reuse these.
-let frameTargetSpeed = SPEED.NORMAL
-let frameGravity = flight.gravityForSpeed(SPEED.NORMAL)
-let frameSpeedMax = SPEED.FAST // upper speed clamp for the current level (grows with the level)
 let lastMusic: 'menu' | 'play' = musicTrack() // cache: switch tracks only on change
 
 // Which music track the current state wants: menu on the title / game-over, the
@@ -263,11 +106,8 @@ function musicTrack(): 'menu' | 'play' {
 }
 
 function beginRun(): void {
-  game.start()
+  session.begin()
   paused = false
-  flight.update(craft.distance, game.gemsThisLevel)
-  lastTargetSpeed = flight.targetSpeed() // no accel sting on the first step
-  lastFlightLevel = flight.level // start tracking the gem-gate level edge from level 0
   // queue the run track before unlocking so audio releases straight to it - the
   // menu track never sounds when Space is the very first (unlocking) keypress.
   audio.playMusic(musicTrack())
@@ -280,19 +120,8 @@ function beginRun(): void {
 // rather than dropping straight into a new run. The next run starts from the title
 // on Space/Enter (beginRun), exactly like the first run on load.
 function returnToTitle(): void {
-  resetCraft(craft)
-  // flight.reset() MUST run before the field reset: field layout() calls the
-  // spacingScaleAt hooks, which read flight's now-stateful level / speed-ratio.
-  // Reset flight first so the title-screen and next-run fields lay out at level-0
-  // density, not the stale density of whatever level the run ended on.
-  flight.reset() // back to level 0 at distance 0 so the HUD reads LEVEL 1
-  lastFlightLevel = 0
-  for (const f of fields) f.reset(craft.distance)
-  projectiles.reset()
+  session.reset()
   burst.reset()
-  gun.reset()
-  enemies.reset(craft.distance)
-  game.toTitle()
 }
 
 window.addEventListener('keydown', (e) => {
@@ -369,27 +198,7 @@ startLoop(
   fixedDt,
   (dt) => {
     if (!game.started || debug.paused || game.over || paused) return
-    // targetSpeed + speed-tied gravity + the level's speed cap are computed once
-    // per frame (preUpdate) and reused across this frame's substeps.
-    updateCraft(craft, input.state, frameTargetSpeed, frameGravity, frameSpeedMax, dt)
-    // collection / hits live in the fixed step so a fast pass never skips the
-    // window; game.update runs LAST so a hazard / enemy hit this step ends the
-    // run this step (lives <= 0 -> over), with no one-frame lag.
-    for (const f of fields) f.update(craft, dt)
-    // gun: spend energy + emit a forward bolt at the craft's current theta.
-    const shot = gun.tryFire(craft, game, dt, input.state.fire)
-    if (shot.fire) {
-      projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)
-      audio.play('shoot')
-    } else if (shot.dry) {
-      audio.play('empty') // trigger pulled with no charge: dull click (throttled in gun.ts)
-    }
-    // enemies move + fire + ram BEFORE projectiles, so a bolt fired/spawned this
-    // step and a raider's new position are both resolved in projectiles.update.
-    enemies.update(craft, dt)
-    projCtx.shipTheta = craft.theta
-    projectiles.update(dt, projCtx)
-    game.update(dt)
+    session.step(input.state, dt)
   },
   (frameDt) => {
     // On the real title screen (not pause, not game-over) the ship becomes the
@@ -438,23 +247,10 @@ startLoop(
     })
   },
   {
-    // once per frame, before the fixed substeps: refresh the flight/level state,
-    // then cache the target speed, speed-tied gravity, and level speed cap (all
-    // stable across a frame, so we avoid recomputing them every substep). The
-    // enemy cap follows the level here too (level changes slowly, once per frame is fine).
+    // once per frame, before the fixed substeps (see session.preUpdate)
     preUpdate: () => {
       if (!game.started || debug.paused || game.over || paused) return
-      // flight gates the level-up on the gem quota, so it needs the live count; on a
-      // level-up edge reset the counter so the next level starts its quota from zero.
-      flight.update(craft.distance, game.gemsThisLevel)
-      if (flight.level > lastFlightLevel) game.gemsThisLevel = 0
-      lastFlightLevel = flight.level
-      frameTargetSpeed = flight.targetSpeed()
-      if (frameTargetSpeed > lastTargetSpeed) audio.playAccel() // tier stepped up
-      lastTargetSpeed = frameTargetSpeed
-      frameGravity = flight.gravityForSpeed(craft.speed)
-      frameSpeedMax = flight.speedMax()
-      enemies.setMaxActive(levels.enemyMax(flight.level))
+      session.preUpdate()
     },
     onStats: (s) => perf.sample(s), // feed the FPS / frame-time overlay (toggle: P)
   },
@@ -466,6 +262,8 @@ startLoop(
 //   WH.game.lives             // inspect run state
 //   WH.fields[1].object       // the treasure field's group
 ;(window as unknown as { WH: unknown }).WH = {
+  session, // the whole gameplay session (what the playtest bots drive)
+  fx, // the session's event hooks; the live playtest harness wraps these to count events
   craft,
   debug,
   fields,
@@ -478,5 +276,11 @@ startLoop(
   menu, // title-screen ship + difficulty selection
   audio,
   begin: beginRun, // start the run from the console / screenshot tool (skips the title gate)
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO },
+  // Reproducible run: seed the gameplay randomness, then re-lay the fields from it.
+  // Call on the title screen, before starting (the live playtest harness does).
+  reseed: (seed: number): void => {
+    seedRng(seed)
+    returnToTitle()
+  },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY },
 }

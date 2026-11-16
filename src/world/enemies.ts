@@ -2,6 +2,7 @@ import { Group } from 'three'
 import { ENEMY, GUN, LEVELS, RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
 import { angleDiff, clamp } from '../util/math'
+import { rand as rand01, randRange as rand } from '../util/rng'
 import { createEnemy, type Enemy } from './enemy'
 
 // The enemy pool + per-enemy state machine. NOT a Field: a Field scrolls objects
@@ -29,10 +30,16 @@ export interface Enemies {
   setResolution(w: number, h: number): void
   reset(atDistance: number): void
   debugStage(theta: number, z: number, slotIndex?: number): void // harness: stage an engaged enemy at a fixed pose
+  // Read-only view of every live raider (the death pop is skipped), for the playtest
+  // bots and metrics. No allocation. z is ship-relative (negative = ahead); charge01
+  // is the visible firing tell (0 = idle, 1 = about to fire); id is stable for the
+  // raider's lifetime (its pool slot), so an observer can track one across steps.
+  visit(fn: (theta: number, z: number, phase: EnemyPhase, charge01: number, id: number) => void): void
   readonly killed: number
 }
 
-type Phase = 'approach' | 'engage' | 'depart' | 'dead'
+export type EnemyPhase = 'approach' | 'engage' | 'depart' | 'dead'
+type Phase = EnemyPhase
 
 interface Slot {
   enemy: Enemy
@@ -57,7 +64,6 @@ interface Slot {
 
 const BAND_CENTER = (ENEMY.ENGAGE_Z_FAR + ENEMY.ENGAGE_Z_NEAR) / 2
 const FLASH_TIME = 0.12
-const rand = (a: number, b: number): number => a + Math.random() * (b - a)
 
 export function createEnemies(deps: EnemyDeps): Enemies {
   const group = new Group()
@@ -106,14 +112,14 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     slot.active = true
     slot.phase = 'approach'
     slot.theta = craftTheta + rand(-ENEMY.SPAWN_THETA_SPREAD, ENEMY.SPAWN_THETA_SPREAD)
-    slot.worldDistance = craftDistance + ENEMY.SPAWN_AHEAD + Math.random() * ENEMY.SPAWN_JITTER
+    slot.worldDistance = craftDistance + ENEMY.SPAWN_AHEAD + rand01() * ENEMY.SPAWN_JITTER
     slot.hp = ENEMY.HP
     slot.charging = false
     slot.chargeT = 0
     slot.flashT = 0
     slot.popT = 0
     slot.thetaCenter = slot.theta // weave around the spawn angle from the moment it appears
-    slot.strafePhase = Math.random() * Math.PI * 2 // desync raiders so they do not weave in lockstep
+    slot.strafePhase = rand01() * Math.PI * 2 // desync raiders so they do not weave in lockstep
     slot.enemy.object.visible = true
     slot.enemy.object.scale.setScalar(1)
     slot.enemy.setOpacity(1)
@@ -373,6 +379,15 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       slot.enemy.setCharge(0)
       place(slot, z, 0)
       slot.enemy.update(0)
+    },
+
+    visit(fn: (theta: number, z: number, phase: EnemyPhase, charge01: number, id: number) => void): void {
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i]!
+        if (!slot.active || slot.phase === 'dead') continue
+        const charge01 = slot.charging ? Math.min(slot.chargeT / ENEMY.CHARGE_TIME, 1) : 0
+        fn(slot.theta, craftDistance - slot.worldDistance, slot.phase, charge01, i)
+      }
     },
 
     get killed(): number {

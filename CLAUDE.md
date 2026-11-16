@@ -167,7 +167,11 @@ no placeholder arrowheads. A forward-swept dart silhouette is RESERVED for the e
 ## Repo structure
     index.html, package.json, tsconfig.json, vite.config.ts, CLAUDE.md
     src/
-      main.ts              bootstrap, canvas, resize, start loop, WH debug handle
+      main.ts              bootstrap, canvas, resize, start loop, WH debug handle; attaches
+                           audio / flashes / bursts / HUD to the session's events
+      session.ts           the gameplay wiring (craft, flight, fields, gun, raiders, bolts, run
+                           state, fixed-step order), free of rendering / audio / DOM; shared by
+                           main.ts and the headless playtest harness (SessionFx event hooks)
       config.ts            ALL tunable constants, grouped (see above)
       loop.ts              fixed-timestep accumulator; update vs render split
       input.ts             keyboard -> steer (left/right) / fire (Space)
@@ -182,6 +186,8 @@ no placeholder arrowheads. A forward-swept dart silhouette is RESERVED for the e
       audio.ts             Web Audio mixer: streamed music + decoded/synth SFX (wired in main.ts)
       gun.ts               forward-gun trigger: cooldown + charge spend; returns fire/dry intent
       util/math.ts         clamp / approach / lerp / angleDiff (shared signed angle delta)
+      util/rng.ts          the one seedable source of GAMEPLAY randomness (spawns, raider timers);
+                           never use Math.random in gameplay code (cosmetic effects may)
       physics/pendulum.ts  theta integrator (damped driven pendulum)
       world/tube.ts        build + scroll the wireframe tube mesh
       world/ship.ts        procedural 3D spacecraft hulls (edge-lit; raptor/falcon/delta,
@@ -213,6 +219,11 @@ no placeholder arrowheads. A forward-swept dart silhouette is RESERVED for the e
                            gravity modes, density normalization (npm run sim:levels)
     scripts/fields-sim.ts  headless sim of cross-field spawn de-confliction: an avoiding
                            pair never overlaps, a control pair does (npm run sim:fields)
+    scripts/playtest.ts    headless bot playtests of the real session (npm run playtest);
+                           bots, perception, metrics, report live in scripts/playtest/
+    scripts/playtest-live.ts  one bot plays the real browser build via Playwright
+                           (npm run playtest:live; screenshots + frame times)
+    playtest/              README.md (how to run, metrics) + baseline.json (the reference run)
 
 ## Dev commands
 - Install:    `npm install`
@@ -224,6 +235,9 @@ no placeholder arrowheads. A forward-swept dart silhouette is RESERVED for the e
 - Combat sim: `npm run sim` (headless behavior checks for the gun/enemies/projectiles loop)
 - Levels sim: `npm run sim:levels` (headless checks for the level / difficulty math)
 - Fields sim: `npm run sim:fields` (headless checks for cross-field spawn separation)
+- Playtest:   `npm run playtest -- --bot all --runs 40` (seeded bot players on the real game;
+              `npm run playtest:compare` prints deltas against playtest/baseline.json;
+              `npm run playtest:live` plays the browser build; see playtest/README.md)
 
 ## Coding conventions and performance budget
 - TypeScript strict mode. Small, typed, modular files. No premature abstraction - refactor

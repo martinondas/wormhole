@@ -32,6 +32,9 @@ export interface Projectiles {
   update(dt: number, ctx: ProjectileCtx): void
   setResolution(w: number, h: number): void
   reset(): void
+  // Read-only view of every live bolt, for the playtest bots and metrics. No
+  // allocation. z and vz are ship-relative (an enemy bolt has vz > 0).
+  visit(fn: (side: BoltSide, theta: number, z: number, vz: number) => void): void
 }
 
 interface Bolt {
@@ -170,6 +173,10 @@ export function createProjectiles(): Projectiles {
 
     reset(): void {
       for (const b of all) deactivate(b)
+    },
+
+    visit(fn: (side: BoltSide, theta: number, z: number, vz: number) => void): void {
+      for (const b of all) if (b.active) fn(b.side, b.theta, b.z, b.vz)
     },
   }
 }
