@@ -142,9 +142,18 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - Camping: a player who never shoots earns no lives and little score, but is hit no more often
   than a fighter.
 - Far raiders are small at deep-level speeds.
-- Not judged by a person yet: the halo ring and the arrival cue of the large cross, and the
-  cue for a cross caught at full lives. Not tested since the latest work: Safari, and the 5K
-  iMac target.
+- Next, agreed with the owner but not built: mines that explode when shot. A shot destroys a
+  mine, and the blast destroys raiders and mines near it and hurts the player who is too
+  close. It will make the game easier, so measure it with a bot that shoots every mine on its
+  line, and tighten raider fire at deep levels in the same pass.
+- The perfect bot is hit a little more often on the middle mode since the level gate, though
+  it never dies. The hits are not near a gate. The cause is not found.
+- A beginner loses more ships to mines since the slalom mines sit near the floor. If it is too
+  hard, hold the second slalom mine back until a later level.
+- The three hulls have the same width, and the hit areas are smaller than every hull as drawn.
+  The owner accepted this.
+- Not judged by a person yet: the cue for a cross caught at full lives. Not tested since the
+  latest work: Safari, and the 5K iMac target.
 - `@types/node` is not installed, because this worktree shares `node_modules` with the main
   checkout. `scripts/node-shim.d.ts` stands in for it.
 - Backlog ideas, none decided: a CRT scanline toggle, a continuous engine hum, full-loop tube
