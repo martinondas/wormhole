@@ -40,6 +40,7 @@ export interface FieldConfig {
   popTime: number
   popScale?: number // peak scale of the expand-and-fade pop (default 1.8)
   growTime?: number // feed mode: a spawned object grows in over this long (s); unset = it appears at full size
+  throwTime?: number // s a spawn with `fromZ` is drawn thrown (see Field.spawn); unset = no throw
   sampleTheta?: () => number // spawn-angle distribution (default: uniform 0..2pi)
   // Optional per-section spacing multiplier keyed by world distance: the gap
   // BEFORE an object becomes spawnSpacing * spacingScaleAt(distance). A value < 1
@@ -103,7 +104,12 @@ export interface Field {
   visit(fn: (theta: number, worldDistance: number) => void): void
   // Feed mode: arm a parked object at exactly (worldDistance, theta). Returns false
   // when the pool has no parked object left (counted in failedSpawns).
-  spawn(worldDistance: number, theta: number): boolean
+  // Drawing only: with `fromZ` (ship-relative, nearer the ship than the place) it is
+  // drawn thrown from there to its place over cfg.throwTime, keeping pace with the
+  // ship at first and easing onto the wall. The throw ends early once the place has
+  // come as near as fromZ. Every test (hit, visit, occupies) uses the place from the
+  // first step.
+  spawn(worldDistance: number, theta: number, fromZ?: number): boolean
   // Feed mode: move every waiting object beyond `boundary` to
   // boundary + (worldDistance - boundary) * ratio (the tube beyond it changed speed). An
   // object whose new spot `drop` rejects is taken off the wall.
@@ -132,6 +138,9 @@ interface Slot {
   popT: number // 0..1 pop progress
   popZ: number // z (frozen at collection) the pop plays at, so it stays in view
   growT: number // 0..1 grow-in progress after a feed spawn (1 = full size)
+  // drawing only: the throw from where it first appeared to its place
+  throwZ: number // ship-relative z it was first drawn at
+  throwT: number // 0..1 progress of the throw (1 = drawn at its place)
 }
 
 // Grow-in scale for progress t in 0..1: rises from GROW_FROM past full size and
@@ -151,6 +160,7 @@ export function createField(cfg: FieldConfig): Field {
   const radius = RIDE_RADIUS
   const popScale = cfg.popScale ?? 1.8
   const growTime = cfg.growTime ?? 0
+  const throwTime = cfg.throwTime ?? 0
   const slots: Slot[] = []
   let consumed = 0
   let failedSpawns = 0
@@ -190,6 +200,7 @@ export function createField(cfg: FieldConfig): Field {
     slot.popT = 0
     slot.popZ = 0
     slot.growT = 1
+    slot.throwT = 1
     slot.obj.object.visible = true
     slot.obj.object.scale.setScalar(1)
     slot.obj.setOpacity(1)
@@ -222,7 +233,7 @@ export function createField(cfg: FieldConfig): Field {
   for (let i = 0; i < cfg.count; i++) {
     const obj = cfg.create()
     group.add(obj.object)
-    slots.push({ obj, theta: 0, worldDistance: 0, triggered: false, near: false, passed: false, state: 'idle', popT: 0, popZ: 0, growT: 1 })
+    slots.push({ obj, theta: 0, worldDistance: 0, triggered: false, near: false, passed: false, state: 'idle', popT: 0, popZ: 0, growT: 1, throwZ: 0, throwT: 1 })
   }
   layout(0)
 
@@ -284,8 +295,13 @@ export function createField(cfg: FieldConfig): Field {
           continue
         }
 
-        // (3) place on the wall + idle spin/bob/pulse
-        place(slot, z)
+        // (3) place on the wall (a thrown object on its way, see spawn) + idle
+        //     spin/bob/pulse
+        if (slot.throwT < 1) {
+          slot.throwT = z >= slot.throwZ ? 1 : Math.min(1, slot.throwT + dt / throwTime)
+          const left = (1 - slot.throwT) * (1 - slot.throwT)
+          place(slot, z + (slot.throwZ - z) * left)
+        } else place(slot, z)
         if (slot.growT < 1) {
           slot.growT = Math.min(1, slot.growT + dt / growTime)
           slot.obj.object.scale.multiplyScalar(growScale(slot.growT))
@@ -348,11 +364,16 @@ export function createField(cfg: FieldConfig): Field {
         if (live(slot)) fn(slot.theta, slot.worldDistance)
       }
     },
-    spawn(worldDistance: number, theta: number): boolean {
+    spawn(worldDistance: number, theta: number, fromZ?: number): boolean {
       for (const slot of slots) {
         if (slot.state !== 'parked') continue
         arm(slot, worldDistance, theta)
-        place(slot, lastCraftDistance - worldDistance)
+        const z = lastCraftDistance - worldDistance
+        if (throwTime > 0 && fromZ !== undefined && fromZ > z) {
+          slot.throwZ = fromZ
+          slot.throwT = 0
+          place(slot, fromZ)
+        } else place(slot, z)
         if (growTime > 0) {
           slot.growT = 0
           slot.obj.object.scale.multiplyScalar(growScale(0))

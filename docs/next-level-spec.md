@@ -269,8 +269,12 @@ aims less well than a bot with an empty gun.
   through uncollected was rejected by reasoning (visible but useless) and never built.
 - 2026-11 - The owner caught only a small share of the crosses while dodging, and the weakest
   bot caught a similar share. Chosen: a wider catch window and more lead time for close
-  kills. Consequence: after a close kill the cross appears farther down the line than the
+  kills. Consequence: after a close kill the cross sits farther down the line than the
   explosion.
+- 2026-11 - The owner found it odd that the cross appeared well beyond the destroyed raider.
+  Placing it at the kill was measured: the weakest and the average bot then caught clearly
+  fewer crosses and won back about half as many ships. Chosen: the place stays, and the cross
+  is drawn thrown forward from the explosion to its place. This is drawing only.
 - 2026-11 - Bonus cross. The owner's original idea was an unexpected bonus that restores a
   whole life, not tied to a kill. The first build tied the large cross only to destroyed
   squads. Now both exist. The bonus cross is the rare form of the timed life above, too rare to

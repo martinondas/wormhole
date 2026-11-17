@@ -113,7 +113,7 @@ interface FieldConsts {
   POP_SCALE: number
 }
 type FieldOpts = Partial<
-  Pick<FieldConfig, 'growTime' | 'count' | 'feed' | 'sampleTheta' | 'spacingScaleAt' | 'avoid' | 'onMiss' | 'nearAngle' | 'onNear' | 'onDetonate'>
+  Pick<FieldConfig, 'growTime' | 'throwTime' | 'count' | 'feed' | 'sampleTheta' | 'spacingScaleAt' | 'avoid' | 'onMiss' | 'nearAngle' | 'onNear' | 'onDetonate'>
 >
 function makeField(
   create: () => WallObject,
@@ -258,7 +258,7 @@ export function createSession(fx: SessionFx = {}): Session {
       }
       return true
     },
-    { feed: true, growTime: EXTRA_LIFE.GROW_TIME },
+    { feed: true, growTime: EXTRA_LIFE.GROW_TIME, throwTime: LIFE_SHARD.THROW_TIME },
   )
   fields.push(crosses)
   // life shards: a feed field filled by raider kills (dropShard below). A caught
@@ -281,7 +281,7 @@ export function createSession(fx: SessionFx = {}): Session {
       if (restored) fx.lifeCollected?.()
       return true
     },
-    { feed: true, growTime: LIFE_SHARD.GROW_TIME },
+    { feed: true, growTime: LIFE_SHARD.GROW_TIME, throwTime: LIFE_SHARD.THROW_TIME },
   )
   fields.push(shards)
   const fieldKinds: readonly FieldKind[] = ['orb', 'gem', 'mine', 'life', 'shard']
@@ -316,12 +316,12 @@ export function createSession(fx: SessionFx = {}): Session {
     let wd = craft.distance + Math.max(-z, craft.speed * LIFE_SHARD.LEAD_SECONDS)
     for (let i = 0; i < SPAWN_CLEAR.TRIES && mines.occupies(wd, theta); i++) wd += SPAWN_CLEAR.NUDGE
     // the last raider of every Nth destroyed squad leaves a whole-life cross
-    if (last && ++squadsCleared >= squadEvery(levels.tuningLevel(flight.level)) && crosses.spawn(wd, theta)) {
+    if (last && ++squadsCleared >= squadEvery(levels.tuningLevel(flight.level)) && crosses.spawn(wd, theta, z)) {
       squadsCleared = 0
       fx.crossDropped?.(theta, craft.distance - wd, false)
       return
     }
-    if (shards.spawn(wd, theta)) fx.shardDropped?.(theta, craft.distance - wd)
+    if (shards.spawn(wd, theta, z)) fx.shardDropped?.(theta, craft.distance - wd)
   }
 
   // The bonus cross: now and then a whole-life cross appears on the wall on its own,

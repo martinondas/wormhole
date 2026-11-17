@@ -484,6 +484,9 @@ export const LIFE_SHARD = {
   POP_TIME: 0.22,
   POP_SCALE: 2.2,
   GROW_TIME: 0.35,    // a dropped shard grows in over this long (with a small overshoot), so it is seen leaving the kill burst
+  // Drawing only: a shard (and a squad's cross) is shown thrown from the kill to its
+  // place over this long. Far shorter than LEAD_SECONDS, so it lands before the ship does.
+  THROW_TIME: 0.45,
 }
 
 // --- field spawn de-confliction (cross-kind minimum separation) --------------
