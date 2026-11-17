@@ -4,8 +4,8 @@
 // without knowing how its spawning or raider AI works.
 import { type Session, type SessionFx, type DamageCause } from '../../src/session'
 import { angleDiff } from '../../src/util/math'
-import { ENERGY, GUN, LIVES } from '../../src/config'
-import { createPerception, createSnapshot, KIND_GEM, KIND_LIFE, KIND_MINE, KIND_ORB, PHASE_DEPART, MAX_ENEMIES } from './perception'
+import { ENEMY, ENERGY, GUN, LIVES } from '../../src/config'
+import { createPerception, createSnapshot, KIND_GEM, KIND_LIFE, KIND_MINE, KIND_ORB, KIND_SHARD, PHASE_DEPART, PHASE_EXIT, MAX_ENEMIES } from './perception'
 
 export const BUCKET_SECONDS = 5 // intensity timeline resolution
 const MAX_LEVELS = 60
@@ -16,6 +16,11 @@ const BUSY_SECONDS = 1.5 // a wall object arriving within this is "something to 
 const PASS_MARGIN = 3 // units past the ship plane before a wall object counts as passed
 const MINE_NEAR = 1.2 // rad: a mine farther than this from the craft's line needs no attention
 const CLOSE_CALL = 0.3 // rad beyond the capture cone that still counts as a close call
+const CLUMP_ANGLE = 0.4 // rad: two raiders closer than this in angle ...
+const CLUMP_DZ = 10 // ... and this in depth read as one clump
+const FAR_KILL = 60 // units: a kill farther ahead than this was made at long range
+const CHAIN_HIT_GAP = 1.0 // s after the i-frames end: a second life lost inside this is a chain hit
+const CHARGE_RING = 16 // recent charge starts kept to pair each enemy bolt with its tell
 
 export interface LevelStats {
   level: number // 1-based, as displayed
@@ -29,6 +34,10 @@ export interface LevelStats {
   repeats: number // cycles of this level that ended short of the gem quota
   raiderTime: number // raiders in play, summed over time (divide by time for the mean)
   raider4Time: number // seconds with 4 or more raiders in play
+  cyclesEnded: number // cycles of this level that ended (advance or repeat)
+  firstTryMet: number // 1 if the first cycle of this level ended with the quota met
+  bolts: number // enemy bolts fired in this level
+  tellsAimed: number // ... of which had their tell start on the player's line
 }
 
 export interface RunResult {
@@ -53,7 +62,13 @@ export interface RunResult {
   gemShare: number // collected / offered
   orbs: number
   orbsOffered: number
-  extraLives: number
+  extraLives: number // lives regained (shard sets completed, plus extra-life crosses when that field is on)
+  shardsDropped: number // life shards left by kills
+  shardsCaught: number
+  shardCatchShare: number // caught / dropped (NaN with none dropped)
+  livesFromShards: number // lives restored by a completed shard set
+  crossesDropped: number // whole-life crosses left by destroyed squads
+  crossesCaught: number
   // --- gun
   emptyGunShare: number // share of time with less than one shot of charge
   meanCharge: number // mean weapon charge 0..1
@@ -64,6 +79,7 @@ export interface RunResult {
   // --- raiders
   boltsAtPlayer: number // enemy bolts fired
   boltsAimedShare: number // share fired on the player's line (would hit if the player did not move)
+  tellsAimedShare: number // share of bolts whose firing tell STARTED on the player's line (aimed at the player, dodged or not)
   boltsHitShare: number // share that cost a life
   boltsDodgedShare: number // 1 - (hit or absorbed by i-frames) / fired
   raidersMean: number // mean raiders in play
@@ -85,6 +101,21 @@ export interface RunResult {
   pressesPerMin: number // steer key presses
   steerDuty: number // share of time a steer key is held
   mineCloseCalls: number // mines that passed just outside the hit cone
+  // --- feedback events and fairness probes
+  killDistanceMedian: number // median distance ahead of the ship at which raiders died
+  killsBeyond60Share: number // share of kills farther than 60 units ahead
+  clumpShare: number // share of time with two live raiders within 0.4 rad and 10 units
+  tellToArrivalMin: number // shortest time from a charge start to its bolt reaching the ship plane (Infinity if none)
+  lifeBalance: number // lives regained / lives lost (lives lost floored at 1)
+  chainHits: number // lives lost within 1 s after the i-frames of the previous hit ended
+  gateFirstTry: number // share of levels whose first cycle ended with the quota met (NaN if no cycle ended)
+  gemChainMedian: number // median length of a run of consecutive gems without a miss
+  gemChainMax: number
+  nearMissPerMin: number // mine near-miss events (session's mineNearMiss)
+  loopsPerMin: number // loopCompleted events per minute
+  wavesClearedPerMin: number // raider waves destroyed to the last member, per minute
+  raiderFreeShare: number // share of time with no raider in play and no enemy bolt in flight (breathers)
+  boltMinePerMin: number // seconds per minute with an enemy bolt in flight and a mine less than 1 s ahead
   // --- distributions (not aggregated as scalars)
   raiderHist: number[] // time share by raiders in play (index = count)
   thetaHist: number[] // time share by 30-degree wall bin (index 0 = bottom, 6 = top)
@@ -116,6 +147,7 @@ export function createRecorder(session: Session): Recorder {
   let chargeSum = 0
   let shotHits = 0
   let boltsAimed = 0
+  let tellsAimed = 0
   let boltsHit = 0
   let boltsBlocked = 0
   let raiderSum = 0
@@ -133,14 +165,30 @@ export function createRecorder(session: Session): Recorder {
   let lastCycles = 0
   let timeline: number[]
   let timelineLevel: number[]
+  let killDist: number[]
+  let clumpT = 0
+  let lastHitT = -1
+  let chain = 0
+  let chains: number[]
+  let nearMisses = 0
+  let loopEvents = 0
+  let wavesCleared = 0
+  let raiderFreeT = 0
+  let boltMineT = 0
+  const chargeTheta = new Float64Array(CHARGE_RING)
+  const chargeAt = new Float64Array(CHARGE_RING)
+  const chargeAimed = new Uint8Array(CHARGE_RING) // 1 if the craft was on that line when the tell started
+  let chargeHead = 0
+  let shardLife = false // the life cue that follows was earned by a completed shard set
 
-  const lvl = (): LevelStats => {
-    const i = Math.min(session.flight.level, MAX_LEVELS - 1)
+  const lvlAt = (level: number): LevelStats => {
+    const i = Math.max(0, Math.min(level, MAX_LEVELS - 1))
     while (levels.length <= i) {
-      levels.push({ level: levels.length + 1, time: 0, livesLost: 0, gems: 0, gemsOffered: 0, kills: 0, threats: 0, pickups: 0, repeats: 0, raiderTime: 0, raider4Time: 0 })
+      levels.push({ level: levels.length + 1, time: 0, livesLost: 0, gems: 0, gemsOffered: 0, kills: 0, threats: 0, pickups: 0, repeats: 0, raiderTime: 0, raider4Time: 0, cyclesEnded: 0, firstTryMet: 0, bolts: 0, tellsAimed: 0 })
     }
     return levels[i]!
   }
+  const lvl = (): LevelStats => lvlAt(session.flight.level)
   const threat = (): void => {
     threats++
     lvl().threats++
@@ -158,7 +206,9 @@ export function createRecorder(session: Session): Recorder {
       r.orbsOffered++
       lvl().pickups++
     },
-    gemCollected: () => {
+    gemCollected: (_points, c) => {
+      chain = c
+      if (c > r.gemChainMax) r.gemChainMax = c
       r.gems++
       r.gemsOffered++
       const l = lvl()
@@ -168,7 +218,28 @@ export function createRecorder(session: Session): Recorder {
     },
     lifeCollected: () => {
       r.extraLives++
+      if (shardLife) shardLife = false
+      else r.crossesCaught++ // a whole-life cross (the restoring shard announces itself first)
       lvl().pickups++
+    },
+    shardDropped: () => {
+      r.shardsDropped++
+    },
+    crossDropped: () => {
+      r.crossesDropped++
+    },
+    bonusCollected: (big) => {
+      if (big) r.crossesCaught++
+      else r.shardsCaught++
+      lvl().pickups++
+    },
+    shardCollected: (_count, restored) => {
+      r.shardsCaught++
+      if (restored) {
+        r.livesFromShards++
+        shardLife = true
+      }
+      else lvl().pickups++ // the restoring shard is counted by lifeCollected
     },
     damaged: (cause) => {
       r.livesLost++
@@ -180,16 +251,62 @@ export function createRecorder(session: Session): Recorder {
       lvl().livesLost++
       if (firstHit < 0) firstHit = t
       lastCause = cause
+      const now = session.game.elapsed
+      if (lastHitT >= 0 && now - (lastHitT + LIVES.INVULN_TIME) <= CHAIN_HIT_GAP) r.chainHits++
+      lastHitT = now
+    },
+    gemMissed: () => {
+      if (chain > 0) chains.push(chain)
+      chain = 0
+    },
+    cycleEnded: (advanced) => {
+      // the level that just ended: one below the current one after an advance
+      const l = lvlAt(session.flight.level - (advanced ? 1 : 0))
+      if (l.cyclesEnded === 0 && advanced) l.firstTryMet = 1
+      l.cyclesEnded++
+    },
+    mineNearMiss: () => {
+      nearMisses++
+    },
+    loopCompleted: () => {
+      loopEvents++
+    },
+    waveCleared: () => {
+      wavesCleared++
+    },
+    enemyChargeStarted: (theta) => {
+      chargeTheta[chargeHead] = theta
+      chargeAt[chargeHead] = session.game.elapsed
+      chargeAimed[chargeHead] = Math.abs(angleDiff(session.craft.theta, theta)) < GUN.BULLET_HIT_ANGLE ? 1 : 0
+      chargeHead = (chargeHead + 1) % CHARGE_RING
     },
     hitBlocked: (cause) => {
       if (cause === 'bolt') boltsBlocked++
     },
-    enemyFired: (theta) => {
+    enemyFired: (theta, z) => {
+      // pair the bolt with its tell: a charging raider holds its theta, so the
+      // newest charge start on exactly this line is this bolt's. Enemy bolts are
+      // ship-relative and fly at ENEMY.BULLET_SPEED, so the arrival is exact.
+      for (let k = 1; k <= CHARGE_RING; k++) {
+        const i = (chargeHead - k + CHARGE_RING) % CHARGE_RING
+        if (chargeTheta[i] === theta) {
+          const tell = session.game.elapsed - chargeAt[i]! + -z / ENEMY.BULLET_SPEED
+          if (tell < r.tellToArrivalMin) r.tellToArrivalMin = tell
+          if (chargeAimed[i]) {
+            tellsAimed++
+            lvl().tellsAimed++
+          }
+          chargeTheta[i] = NaN
+          break
+        }
+      }
       r.boltsAtPlayer++
+      lvl().bolts++
       if (Math.abs(angleDiff(session.craft.theta, theta)) < GUN.BULLET_HIT_ANGLE) boltsAimed++
       threat()
     },
-    enemyKilled: () => {
+    enemyKilled: (_theta, z) => {
+      killDist.push(-z)
       r.kills++
       lvl().kills++
     },
@@ -214,6 +331,7 @@ export function createRecorder(session: Session): Recorder {
       chargeSum = 0
       shotHits = 0
       boltsAimed = 0
+      tellsAimed = 0
       boltsHit = 0
       boltsBlocked = 0
       raiderSum = 0
@@ -232,18 +350,33 @@ export function createRecorder(session: Session): Recorder {
       levels = []
       timeline = []
       timelineLevel = []
+      killDist = []
+      clumpT = 0
+      lastHitT = -1
+      chain = 0
+      chains = []
+      nearMisses = 0
+      loopEvents = 0
+      wavesCleared = 0
+      raiderFreeT = 0
+      boltMineT = 0
+      chargeTheta.fill(NaN)
+      chargeHead = 0
       prevEnemyZ.fill(NaN)
       r = {
         seed,
         time: 0, capped: 0, level: 1, score: 0, deathCause: 'none',
         livesLost: 0, livesLostMine: 0, livesLostBolt: 0, livesLostRam: 0, hitsPerMin: 0, timeToFirstHit: 0,
-        levelRepeats: 0, gems: 0, gemsOffered: 0, gemShare: 0, orbs: 0, orbsOffered: 0, extraLives: 0,
+        levelRepeats: 0, gems: 0, gemsOffered: 0, gemShare: 0, orbs: 0, orbsOffered: 0, extraLives: 0, shardsDropped: 0, shardsCaught: 0, shardCatchShare: NaN, livesFromShards: 0, crossesDropped: 0, crossesCaught: 0,
         emptyGunShare: 0, meanCharge: 0, shots: 0, accuracy: 0, kills: 0, killsPerMin: 0,
-        boltsAtPlayer: 0, boltsAimedShare: 0, boltsHitShare: 0, boltsDodgedShare: 0,
+        boltsAtPlayer: 0, boltsAimedShare: 0, tellsAimedShare: 0, boltsHitShare: 0, boltsDodgedShare: 0,
         raidersMean: 0, raidersMax: 0, raiders4PlusShare: 0,
         deadAirLongest: 0, deadAirShare: 0, threatsPerMin: 0, intensityCV: 0, quietShare: 0,
         bottomShare: 0, upperShare: 0, wallBinsUsed: 0, loops: 0,
         reversalsPerMin: 0, pressesPerMin: 0, steerDuty: 0, mineCloseCalls: 0,
+        killDistanceMedian: 0, killsBeyond60Share: 0, clumpShare: 0, tellToArrivalMin: Infinity,
+        lifeBalance: 0, chainHits: 0, gateFirstTry: NaN, gemChainMedian: 0, gemChainMax: 0,
+        nearMissPerMin: 0, loopsPerMin: 0, wavesClearedPerMin: 0, raiderFreeShare: 0, boltMinePerMin: 0,
         raiderHist: [], thetaHist: [], perLevel: [], timeline: [], timelineLevel: [],
       }
     },
@@ -276,6 +409,7 @@ export function createRecorder(session: Session): Recorder {
 
       // wall objects that passed the ship plane uncollected since the last tick
       let busy = false
+      let mineSoon = false // a mine less than 1 s ahead
       for (let i = 0; i < snap.nObj; i++) {
         const wd = snap.objWd[i]!
         const kind = snap.objKind[i]!
@@ -288,7 +422,7 @@ export function createRecorder(session: Session): Recorder {
           } else if (kind === KIND_ORB) {
             r.orbsOffered++
             l.pickups++
-          } else if (kind === KIND_LIFE) l.pickups++
+          } else if (kind === KIND_LIFE || kind === KIND_SHARD) l.pickups++
           else {
             threat()
             const gap = Math.abs(angleDiff(craft.theta, snap.objTheta[i]!))
@@ -296,9 +430,10 @@ export function createRecorder(session: Session): Recorder {
           }
         }
         const eta = (wd - craft.distance) / Math.max(craft.speed, 1)
+        if (kind === KIND_MINE && eta > 0 && eta < 1) mineSoon = true
         if (eta > 0 && eta < BUSY_SECONDS) {
           if (kind === KIND_ORB) busy ||= game.energy < ENERGY.MAX
-          else if (kind === KIND_LIFE) busy ||= game.lives < LIVES.START
+          else if (kind === KIND_LIFE || kind === KIND_SHARD) busy ||= game.lives < LIVES.START
           else if (kind === KIND_MINE) busy ||= Math.abs(angleDiff(craft.theta, snap.objTheta[i]!)) < MINE_NEAR
           else busy = true
         }
@@ -310,18 +445,30 @@ export function createRecorder(session: Session): Recorder {
       for (let i = 0; i < snap.nEn; i++) {
         const z = snap.enZ[i]!
         const id = snap.enId[i]!
-        if (z > IN_PLAY_Z && z < 10 && snap.enPhase[i] !== PHASE_DEPART) inPlay++
+        if (z > IN_PLAY_Z && z < 10 && snap.enPhase[i] !== PHASE_DEPART && snap.enPhase[i] !== PHASE_EXIT) inPlay++
         const pz = prevEnemyZ[id]!
         if (pz < 0 && z >= 0) threat()
       }
       prevEnemyZ.fill(NaN)
       for (let i = 0; i < snap.nEn; i++) prevEnemyZ[snap.enId[i]!] = snap.enZ[i]!
+      let clump = false
+      for (let i = 0; i < snap.nEn && !clump; i++) {
+        for (let j = i + 1; j < snap.nEn; j++) {
+          if (Math.abs(angleDiff(snap.enTheta[i]!, snap.enTheta[j]!)) < CLUMP_ANGLE && Math.abs(snap.enZ[i]! - snap.enZ[j]!) < CLUMP_DZ) {
+            clump = true
+            break
+          }
+        }
+      }
+      if (clump) clumpT += dt
       raiderSum += inPlay * dt
       l.raiderTime += inPlay * dt
       if (inPlay >= 4) l.raider4Time += dt
       raiderHist[Math.min(inPlay, RAIDER_BINS - 1)]! += dt
       if (inPlay > r.raidersMax) r.raidersMax = inPlay
       if (inPlay > 0 || snap.nBolt > 0) busy = true
+      else raiderFreeT += dt
+      if (mineSoon && snap.nBolt > 0) boltMineT += dt
 
       // dead air: nothing to collect, dodge or fight right now
       if (busy) deadRun = 0
@@ -370,6 +517,7 @@ export function createRecorder(session: Session): Recorder {
       r.accuracy = r.shots > 0 ? shotHits / r.shots : 0
       r.killsPerMin = r.kills / min
       r.boltsAimedShare = r.boltsAtPlayer > 0 ? boltsAimed / r.boltsAtPlayer : 0
+      r.tellsAimedShare = r.boltsAtPlayer > 0 ? tellsAimed / r.boltsAtPlayer : 0
       r.boltsHitShare = r.boltsAtPlayer > 0 ? boltsHit / r.boltsAtPlayer : 0
       r.boltsDodgedShare = r.boltsAtPlayer > 0 ? 1 - (boltsHit + boltsBlocked) / r.boltsAtPlayer : 1
       r.raidersMean = raiderSum / time
@@ -389,6 +537,25 @@ export function createRecorder(session: Session): Recorder {
       r.reversalsPerMin = reversals / min
       r.pressesPerMin = presses / min
       r.steerDuty = dutyT / time
+      const median = (xs: number[]): number => {
+        if (xs.length === 0) return 0
+        const v = [...xs].sort((a, b) => a - b)
+        const m = v.length >> 1
+        return v.length % 2 ? v[m]! : (v[m - 1]! + v[m]!) / 2
+      }
+      r.killDistanceMedian = median(killDist)
+      r.killsBeyond60Share = killDist.length ? killDist.filter((d) => d > FAR_KILL).length / killDist.length : 0
+      r.clumpShare = clumpT / time
+      r.lifeBalance = r.extraLives / Math.max(1, r.livesLost)
+      r.shardCatchShare = r.shardsDropped ? r.shardsCaught / r.shardsDropped : NaN
+      const firsts = levels.filter((l) => l.cyclesEnded > 0)
+      r.gateFirstTry = firsts.length ? firsts.filter((l) => l.firstTryMet).length / firsts.length : NaN
+      r.gemChainMedian = median(chain > 0 ? [...chains, chain] : chains)
+      r.nearMissPerMin = nearMisses / min
+      r.loopsPerMin = loopEvents / min
+      r.wavesClearedPerMin = wavesCleared / min
+      r.raiderFreeShare = raiderFreeT / time
+      r.boltMinePerMin = boltMineT / min
       r.perLevel = levels
       r.timeline = timeline
       r.timelineLevel = timelineLevel
@@ -406,6 +573,9 @@ export interface Stat {
   p10: number
   p90: number
   sd: number // standard deviation over the runs (for judging a delta against noise)
+  min: number
+  max: number
+  n: number // runs with a value (a run without the event, e.g. no enemy bolt, has none)
 }
 
 export interface LevelAggregate {
@@ -421,6 +591,8 @@ export interface LevelAggregate {
   raidersMean: number // mean raiders in play
   raiders4PlusShare: number // share of the level's time with 4 or more in play
   endedHereShare: number // share of ALL runs that ended in this level
+  gateFirstTry: number // share of first cycles of this level that ended with the quota met (NaN if none ended)
+  tellsAimedShare: number // share of the level's enemy bolts whose tell started on the player's line (NaN if none)
 }
 
 export interface Aggregate {
@@ -439,17 +611,20 @@ export interface Aggregate {
 const SCALARS: (keyof RunResult)[] = [
   'time', 'capped', 'level', 'score',
   'livesLost', 'livesLostMine', 'livesLostBolt', 'livesLostRam', 'hitsPerMin', 'timeToFirstHit',
-  'levelRepeats', 'gems', 'gemsOffered', 'gemShare', 'orbs', 'orbsOffered', 'extraLives',
+  'levelRepeats', 'gems', 'gemsOffered', 'gemShare', 'orbs', 'orbsOffered', 'extraLives', 'shardsDropped', 'shardsCaught', 'shardCatchShare', 'livesFromShards', 'crossesDropped', 'crossesCaught',
   'emptyGunShare', 'meanCharge', 'shots', 'accuracy', 'kills', 'killsPerMin',
-  'boltsAtPlayer', 'boltsAimedShare', 'boltsHitShare', 'boltsDodgedShare',
+  'boltsAtPlayer', 'boltsAimedShare', 'tellsAimedShare', 'boltsHitShare', 'boltsDodgedShare',
   'raidersMean', 'raidersMax', 'raiders4PlusShare',
   'deadAirLongest', 'deadAirShare', 'threatsPerMin', 'intensityCV', 'quietShare',
   'bottomShare', 'upperShare', 'wallBinsUsed', 'loops',
   'reversalsPerMin', 'pressesPerMin', 'steerDuty', 'mineCloseCalls',
+  'killDistanceMedian', 'killsBeyond60Share', 'clumpShare', 'tellToArrivalMin',
+  'lifeBalance', 'chainHits', 'gateFirstTry', 'gemChainMedian', 'gemChainMax',
+  'nearMissPerMin', 'loopsPerMin', 'wavesClearedPerMin', 'raiderFreeShare', 'boltMinePerMin',
 ]
 
 function stat(values: number[]): Stat {
-  const v = [...values].sort((a, b) => a - b)
+  const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b)
   const q = (p: number): number => {
     if (v.length === 0) return 0
     const x = p * (v.length - 1)
@@ -459,7 +634,7 @@ function stat(values: number[]): Stat {
   }
   const mean = v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0
   const sd = v.length > 1 ? Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / (v.length - 1)) : 0
-  return { mean, median: q(0.5), p10: q(0.1), p90: q(0.9), sd }
+  return { mean, median: q(0.5), p10: q(0.1), p90: q(0.9), sd, min: v[0] ?? 0, max: v[v.length - 1] ?? 0, n: v.length }
 }
 
 export function aggregate(bot: string, difficulty: string, maxSeconds: number, runs: RunResult[]): Aggregate {
@@ -497,6 +672,10 @@ export function aggregate(bot: string, difficulty: string, maxSeconds: number, r
       raidersMean: sum((l) => l.raiderTime) / time,
       raiders4PlusShare: sum((l) => l.raider4Time) / time,
       endedHereShare: runs.filter((r) => !r.capped && r.level === i + 1).length / n,
+      gateFirstTry: rows.some((l) => l.cyclesEnded > 0)
+        ? rows.filter((l) => l.cyclesEnded > 0 && l.firstTryMet).length / rows.filter((l) => l.cyclesEnded > 0).length
+        : NaN,
+      tellsAimedShare: sum((l) => l.bolts) > 0 ? sum((l) => l.tellsAimed) / sum((l) => l.bolts) : NaN,
     })
   }
 

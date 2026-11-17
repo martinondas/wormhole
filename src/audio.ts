@@ -1,4 +1,4 @@
-import { AUDIO } from './config'
+import { AUDIO, ENEMY, FEEL } from './config'
 
 // Web Audio mixer for the game. Architecture mirrors the rest of the codebase:
 // createAudio() owns all state and exposes a tiny API; main.ts is the single
@@ -22,7 +22,10 @@ export type MusicName = keyof typeof AUDIO.MUSIC
 export interface Audio {
   arm(): void // unlock the context on the first pointer gesture (click-to-focus)
   unlock(): void // resume the context now (call from a user-gesture handler)
-  play(name: SfxName): void
+  // pan -1 (left) .. 1 (right); gain multiplies the cue's volume; step picks the
+  // pitch of a laddered cue (the gem chime climbs with the gem chain; for the
+  // shard tone it is the progress through the set, 0..1).
+  play(name: SfxName, pan?: number, gain?: number, step?: number): void
   playMusic(name: MusicName): void // switch the looping music track
   playAccel(): void // one-shot accelerate layer over the music (speed step-up)
   toggleMusic(): void // mute / unmute MUSIC only (menu + play tracks); SFX unaffected
@@ -60,6 +63,9 @@ function silentAudio(): Audio {
   }
 }
 
+// Gem chime ladder: a major pentatonic from C6, one step per gem in a chain.
+const GEM_LADDER = [1047, 1175, 1319, 1568, 1760, 2093, 2349, 2637].slice(0, FEEL.CHAIN_STEPS)
+
 export function createAudio(): Audio {
   const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   if (!Ctor) {
@@ -89,7 +95,7 @@ export function createAudio(): Audio {
   // (no asset files). Each generator schedules throwaway nodes into the per-sfx
   // gain `out` at time `now` and disconnects them on end, so nothing accumulates
   // (same fire-and-forget contract as a decoded BufferSource in play()).
-  type Synth = (out: AudioNode, now: number) => void
+  type Synth = (out: AudioNode, now: number, step: number) => void
 
   const noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 3.0), ctx.sampleRate)
   const noise = noiseBuf.getChannelData(0)
@@ -112,8 +118,84 @@ export function createAudio(): Audio {
     osc.onended = (): void => { osc.disconnect(); g.disconnect() }
   }
 
+  // filtered noise: a white-noise burst through one sweeping filter, with a swell
+  // envelope (attack to peak, then decay). Used for whooshes and swooshes.
+  function sweep(out: AudioNode, now: number, type: BiquadFilterType, f0: number, f1: number, q: number, attack: number, dur: number, peak: number): void {
+    const src = ctx.createBufferSource()
+    src.buffer = noiseBuf
+    const filt = ctx.createBiquadFilter()
+    filt.type = type
+    filt.Q.value = q
+    filt.frequency.setValueAtTime(f0, now)
+    filt.frequency.exponentialRampToValueAtTime(f1, now + dur)
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, now)
+    g.gain.exponentialRampToValueAtTime(peak, now + attack)
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur)
+    src.connect(filt); filt.connect(g); g.connect(out)
+    src.start(now, Math.random() * 2) // a random offset so repeats do not sound identical
+    src.stop(now + dur + 0.02)
+    src.onended = (): void => { src.disconnect(); filt.disconnect(); g.disconnect() }
+  }
+
   const SYNTHS: Record<string, Synth> = {
-    gem(out, now) { blip(out, now, 'triangle', 880, 880, 0.09, 0.7); blip(out, now + 0.07, 'triangle', 1320, 1320, 0.14, 0.7) },
+    // two-note chime; the upper note climbs the gem ladder with the chain
+    gem(out, now, step) {
+      const top = GEM_LADDER[Math.max(0, Math.min(step, GEM_LADDER.length - 1))]!
+      blip(out, now, 'triangle', top / 1.5, top / 1.5, 0.09, 0.7)
+      blip(out, now + 0.07, 'triangle', top, top, 0.14, 0.7)
+    },
+    // quota met: three quick rising blips that end above the gem ladder
+    ready(out, now) {
+      const notes = [1568, 2093, 3136] // G6 C7 G7
+      for (let i = 0; i < notes.length; i++) blip(out, now + i * 0.075, 'triangle', notes[i]!, notes[i]!, i === 2 ? 0.3 : 0.1, 0.65)
+    },
+    // level up: a fanfare in square + triangle, the last note held - fuller and
+    // slower than the extra-life arpeggio, which is plain triangle and quick
+    levelup(out, now) {
+      const notes = [523, 659, 784, 1047] // C5 E5 G5 C6
+      const step = 0.11
+      for (let i = 0; i < notes.length; i++) {
+        const last = i === notes.length - 1
+        const dur = last ? 0.75 : 0.13
+        blip(out, now + i * step, 'triangle', notes[i]!, notes[i]!, dur, 0.55)
+        blip(out, now + i * step, 'square', notes[i]! / 2, notes[i]! / 2, dur, 0.16)
+      }
+      blip(out, now + 3 * step, 'triangle', 784, 784, 0.75, 0.3) // G5 under the held C6
+    },
+    // quota missed: two soft falling notes - informs, does not punish
+    repeat(out, now) {
+      blip(out, now, 'sine', 659, 659, 0.2, 0.45)
+      blip(out, now + 0.17, 'sine', 494, 494, 0.32, 0.45)
+    },
+    // a raider's firing tell: a saw whine rising over the charge, cut when it fires.
+    // It is audible from the first 30 ms (a tell that swells only at the end warns too late).
+    charge(out, now) {
+      const dur = ENEMY.CHARGE_TIME
+      const osc = ctx.createOscillator()
+      osc.type = 'sawtooth'
+      osc.frequency.setValueAtTime(300, now)
+      osc.frequency.exponentialRampToValueAtTime(900, now + dur)
+      const lp = ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.value = 2200
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0.0001, now)
+      g.gain.linearRampToValueAtTime(0.12, now + 0.03)
+      g.gain.exponentialRampToValueAtTime(0.5, now + dur * 0.92)
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur + 0.04)
+      osc.connect(lp); lp.connect(g); g.connect(out)
+      osc.start(now)
+      osc.stop(now + dur + 0.06)
+      osc.onended = (): void => { osc.disconnect(); lp.disconnect(); g.disconnect() }
+    },
+    chip(out, now) { blip(out, now, 'square', 2600, 1900, 0.035, 0.45) },
+    loop(out, now) { sweep(out, now, 'bandpass', 350, 3200, 1.6, 0.12, 0.55, 0.9) },
+    whoosh(out, now) { sweep(out, now, 'bandpass', 2200, 500, 1.2, 0.03, 0.24, 0.9) },
+    waveClear(out, now) {
+      blip(out, now, 'sine', 1047, 1047, 0.22, 0.5)
+      blip(out, now + 0.14, 'sine', 1568, 1568, 0.38, 0.5)
+    },
     enemyFire(out, now) { blip(out, now, 'sawtooth', 620, 180, 0.13, 0.6) },
     kill(out, now) { blip(out, now, 'square', 720, 110, 0.22, 0.7) },
     // dull dry-fire "tock": a short low square drop, no pitch reward - reads as an
@@ -127,6 +209,14 @@ export function createAudio(): Audio {
       const step = 0.085
       for (let i = 0; i < notes.length; i++) blip(out, now + i * step, 'triangle', notes[i]!, notes[i]!, 0.13, 0.6)
       blip(out, now + notes.length * step, 'triangle', 1568, 1568, 0.22, 0.5) // G6 sparkle tail
+    },
+    // a caught life shard: one rising pair. `step` is the progress through the set
+    // (0..1, caught / set size), so the pitch climbs across the whole set, from C5
+    // to just under C6, where the 1-up cue of the completing shard ends
+    shard(out, now, step) {
+      const n = 523 * Math.pow(2, (11 / 12) * Math.max(0, Math.min(step, 1))) // C5 .. B5
+      blip(out, now, 'triangle', n, n, 0.1, 0.6)
+      blip(out, now + 0.075, 'triangle', n * 1.5, n * 1.5, 0.16, 0.5)
     },
     gameover(out, now) { blip(out, now, 'triangle', 440, 90, 0.9, 0.7) },
     hit(out, now) {
@@ -253,21 +343,34 @@ export function createAudio(): Audio {
 
     unlock,
 
-    play(name: SfxName): void {
+    play(name: SfxName, pan = 0, gain = 1, step = 0): void {
       // SFX are never silenced by M (that mutes music only) - always play.
-      const gain = sfxGains.get(name)
-      if (!gain) return
+      const bus = sfxGains.get(name)
+      if (!bus) return
+      // a panned or scaled cue gets its own short-lived gain + panner in front of
+      // the cue's bus, released after the longest cue has ended
+      let out: AudioNode = bus
+      if (pan !== 0 || gain !== 1) {
+        const g = ctx.createGain()
+        g.gain.value = gain
+        const p = ctx.createStereoPanner()
+        p.pan.value = Math.max(-1, Math.min(1, pan))
+        g.connect(p)
+        p.connect(bus)
+        out = g
+        setTimeout(() => { g.disconnect(); p.disconnect() }, 3500)
+      }
       const buf = buffers.get(name)
       if (buf) {
         const src = ctx.createBufferSource()
         src.buffer = buf
-        src.connect(gain)
+        src.connect(out)
         src.start()
         return
       }
       // no decoded buffer: a synth cue (or a file still loading / failed)
       const synth = synthByName.get(name)
-      if (synth) synth(gain, ctx.currentTime)
+      if (synth) synth(out, ctx.currentTime, step)
     },
 
     playMusic(name: MusicName): void {

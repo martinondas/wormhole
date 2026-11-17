@@ -1,4 +1,4 @@
-import { ENERGY, LIVES, GUN, DIFFICULTY } from './config'
+import { ENERGY, LIVES, GUN, DIFFICULTY, HUD } from './config'
 
 // Minimal in-theme HUD as a DOM overlay (crisp text, no bloom interference):
 // level / score / best top-left, run time top-right, ships + weapon charge
@@ -9,6 +9,8 @@ export interface HudState {
   speed: number
   energy01: number // 0..1 (weapon charge)
   lives: number
+  shards: number // life shards caught toward the next life
+  shardsPerLife: number // shards that restore one life at the current level
   gemsThisLevel: number // gems collected toward the current level's gate
   gemQuota: number // gems needed to clear the current level
   elapsed: number // seconds of active play this run (run timer)
@@ -20,11 +22,15 @@ export interface HudState {
   level: number // current level (1-based for display)
   best: number
   difficultyIndex: number // selected DIFFICULTY.MODES index (HUD corner + game-over panel)
+  deathCause: string // what cost the last life ('mine' | 'bolt' | 'ram'), named on the game-over panel; '' if none
 }
 
 export interface Hud {
   update(s: HudState): void
   flashGemHint(): void // one-time "collect gems to advance" reminder on the first run
+  showLevel(level: number, multiplier: number): void // big LEVEL N banner with the score multiplier (1-based level)
+  showRepeat(got: number, quota: number): void // amber banner: the cycle ended short of the quota, the level repeats
+  pulseGems(): void // the gem row pulses once (quota met)
   // Render the title-screen selector rows. Called on init and on a menu keypress
   // (not per frame): row 0 = SHIP active, 1 = DIFFICULTY active; the active row
   // brightens and gets the cycle arrows.
@@ -50,6 +56,14 @@ const CSS = `
 #hud .gems .ready { color:#9affc0; letter-spacing:2px; }
 #hud .lives { position:absolute; left:20px; bottom:78px; font-size:21px; letter-spacing:6px; }
 #hud .lives .lost { opacity:0.22; }
+#hud .lives .filling { color:#5dff7a; text-shadow:0 0 8px rgba(70,255,110,0.9); }
+#hud .lives .shardbar { display:inline-block; vertical-align:middle; margin-left:10px; letter-spacing:0; color:#5dff7a;
+  text-shadow:0 0 8px rgba(70,255,110,0.9); font-size:19px; }
+#hud .lives .shardbar .trk { display:inline-block; vertical-align:middle; margin-left:7px; width:156px; height:11px;
+  border:1px solid rgba(93,255,122,0.6); box-shadow:0 0 7px rgba(70,255,110,0.35); position:relative; overflow:hidden; }
+#hud .lives .shardbar .fill { position:absolute; left:0; top:0; bottom:0; background:#5dff7a; box-shadow:0 0 8px rgba(70,255,110,0.9); }
+#hud .lives .shardbar .ticks { position:absolute; inset:0;
+  background-image:linear-gradient(90deg, transparent calc(100% - 1.5px), rgba(2,10,5,0.95) calc(100% - 1.5px)); }
 #hud .meter { position:absolute; left:20px; bottom:20px; width:390px; }
 #hud .meter .lbl { font-size:18px; opacity:0.8; margin-bottom:6px; }
 #hud .track { height:14px; border:1px solid rgba(125,255,166,0.5); border-radius:1px;
@@ -84,6 +98,9 @@ const CSS = `
 #hud .over .lvl { font-size:30px; color:#9affc0; letter-spacing:4px; }
 #hud .over .big { font-size:22px; }
 #hud .over .blink { font-size:15px; opacity:0.85; animation:wh-blink 1.1s steps(2,end) infinite; }
+/* the only way on from the game-over panel: larger, brighter, and never dimmer than half */
+#hud #wh-over .blink { font-size:18px; color:#9affc0; opacity:1; animation-name:wh-blink-soft; }
+@keyframes wh-blink-soft { 50% { opacity:0.5; } }
 #hud .over .intro { max-width:560px; margin:0; font-size:14px; line-height:1.6;
   letter-spacing:1px; opacity:0.88; text-transform:none; }
 #hud .over .mission { max-width:560px; margin:0; font-size:13px; letter-spacing:2px;
@@ -100,11 +117,37 @@ const CSS = `
   opacity:0; pointer-events:none; }
 #hud .gemhint.show { animation:wh-gemhint 4.5s ease-out forwards; }
 @keyframes wh-gemhint { 0%{opacity:0;} 12%{opacity:0.95;} 75%{opacity:0.95;} 100%{opacity:0;} }
-#hud .levelup { position:absolute; top:30%; left:0; right:0; text-align:center;
+/* The level and repeat banners sit in the upper part of the view, above the tube's
+   vanishing point: raiders and their firing tells appear there at a level change. */
+#hud .levelup { position:absolute; top:11%; left:0; right:0; text-align:center;
   font-size:77px; letter-spacing:12px; font-weight:bold; color:#9affc0;
   text-shadow:0 0 18px rgba(80,255,150,0.85), 0 0 44px rgba(80,255,150,0.5);
   opacity:0; will-change:opacity,transform; }
 #hud .levelup.show { animation:wh-levelup 2.2s ease-out forwards; }
+#hud .levelup .sub { font-size:28px; letter-spacing:8px; color:#ffe2a0;
+  text-shadow:0 0 3px #000, 0 0 8px rgba(0,0,0,0.9), 0 0 16px rgba(255,200,70,0.7); margin-top:6px; }
+#hud .repeat { position:absolute; top:15%; left:0; right:0; text-align:center;
+  font-size:34px; letter-spacing:7px; font-weight:bold; color:#ffd08a;
+  text-shadow:0 0 3px #000, 0 0 8px rgba(0,0,0,0.9), 0 0 16px rgba(255,150,40,0.7);
+  opacity:0; will-change:opacity,transform; }
+#hud .repeat .sub { font-size:15px; letter-spacing:4px; opacity:0.8; margin-top:8px; }
+#hud .repeat.show { animation:wh-repeat 1.6s ease-out forwards; }
+#hud.paused .levelup, #hud.paused .repeat { animation-play-state:paused; }
+@keyframes wh-repeat {
+  0%   { opacity:0; transform:translateY(-8px); }
+  12%  { opacity:1; transform:translateY(0); }
+  78%  { opacity:1; }
+  100% { opacity:0; transform:translateY(0); }
+}
+#hud .gems { transform-origin:left center; will-change:transform; }
+#hud .gems.pulse { animation:wh-gempulse 0.7s ease-out; }
+@keyframes wh-gempulse {
+  0%   { transform:scale(1); }
+  30%  { transform:scale(1.35); }
+  100% { transform:scale(1); }
+}
+#hud .over .cause { font-size:20px; letter-spacing:4px; color:#ff6a5a;
+  text-shadow:0 0 8px rgba(255,90,70,0.6); }
 @keyframes wh-levelup {
   0%   { opacity:0; transform:scale(0.7); }
   14%  { opacity:1; transform:scale(1.06); }
@@ -113,6 +156,21 @@ const CSS = `
   100% { opacity:0; transform:scale(1.0); }
 }
 `
+
+// Game-over cause line, by the DamageCause of the last life lost.
+const CAUSE_TEXT: Record<string, string> = { mine: 'HIT BY MINE', bolt: 'RAIDER BOLT', ram: 'RAIDER RAM' }
+
+// Score multiplier as shown on the level banner: 1.5 -> "1.5", 2 -> "2", 2.25 -> "2.25".
+function fmtMult(m: number): string {
+  return String(Math.round(m * 100) / 100)
+}
+
+// Restart a one-shot CSS animation: drop the class, force a reflow, add it back.
+function replay(el: HTMLElement, cls: string): void {
+  el.classList.remove(cls)
+  void el.offsetWidth
+  el.classList.add(cls)
+}
 
 function pad(n: number, width: number): string {
   return Math.max(0, Math.floor(n)).toString().padStart(width, '0')
@@ -159,8 +217,10 @@ export function createHud(): Hud {
     <div class="mute" id="wh-mute">&#9836; MUSIC OFF</div>
     <div class="gemhint" id="wh-gemhint">COLLECT GEMS TO ADVANCE</div>
     <div class="levelup" id="wh-levelup">LEVEL 2</div>
+    <div class="repeat" id="wh-repeat">REPEAT</div>
     <div class="over" id="wh-over">
       <h1 id="wh-over-title">SHIP DESTROYED</h1>
+      <div class="cause" id="wh-over-cause"></div>
       <div class="lvl" id="wh-over-level">REACHED LEVEL 1</div>
       <div class="big" id="wh-over-score">SCORE 0000000</div>
       <div id="wh-over-time">TIME 00:00.0</div>
@@ -171,7 +231,7 @@ export function createHud(): Hud {
       <h1>WORMHOLE</h1>
       <p class="intro">A wormhole has torn open - a fold in spacetime no craft has crossed and returned from, where relativity bends time and minutes inside are years back home. You are the pilot sent in: ride its gravity deeper and faster into the unknown.</p>
       <p class="mission">MISSION - chart the deepest passage through spacetime, and live to bring it back.</p>
-      <p class="legend">Blue orbs recharge your weapon &middot; gold gems score and unlock the next level &middot; red mines and magenta raiders cost a ship - shoot the raiders before they shoot you.</p>
+      <p class="legend">Blue orbs recharge your weapon &middot; gold gems score and unlock the next level &middot; red mines and magenta raiders cost a ship - shoot the raiders before they shoot you &middot; downed raiders drop green crosses: small ones rebuild a lost ship piece by piece, a large one from the last raider of a squad is a whole ship, and each tops up the weapon.</p>
       <div class="menu">
         <div class="mrow" id="wh-menu-ship"><span class="cap">SHIP</span><span class="val" id="wh-menu-ship-val"></span></div>
         <div class="mrow" id="wh-menu-diff"><span class="cap">DIFFICULTY</span><span class="val" id="wh-menu-diff-val"></span></div>
@@ -182,7 +242,6 @@ export function createHud(): Hud {
         <span class="k">&#9650; &#9660; &#9664; &#9654;</span><span class="a">CHOOSE SHIP + DIFFICULTY</span>
         <span class="k">M</span><span class="a">MUSIC ON / OFF</span>
         <span class="k">ESC</span><span class="a">PAUSE / MENU</span>
-        <span class="k">P</span><span class="a">SHOW FPS / PERFORMANCE METRICS</span>
       </div>
       <div class="blink" id="wh-title-prompt">PRESS SPACE TO START</div>
     </div>`
@@ -209,6 +268,8 @@ export function createHud(): Hud {
   const elOverTime = $('wh-over-time')
   const elOverBest = $('wh-over-best')
   const elLevelUp = $('wh-levelup')
+  const elRepeat = $('wh-repeat')
+  const elOverCause = $('wh-over-cause')
   const elGemHint = $('wh-gemhint')
   const elDiff = $('wh-diff')
   const elMenuShip = $('wh-menu-ship')
@@ -217,13 +278,31 @@ export function createHud(): Hud {
   const elMenuDiffVal = $('wh-menu-diff-val')
 
   // ship glyphs: bright for remaining, dim for spent (shows the max at a glance)
+  // While a life is missing, a green cross (the life shard's shape) and a segmented
+  // bar follow the ships: one segment fills per shard caught toward the next ship,
+  // and that ship's glyph brightens in the shard green as the set fills. The bar
+  // and the brightened glyph are not shown on the game-over screen.
   let lastLives = -1
-  function renderLives(lives: number): void {
-    if (lives === lastLives) return
+  let lastShards = -1
+  let lastPerLife = -1
+  let lastBarHidden = false
+  function renderLives(lives: number, shards: number, perLife: number, over: boolean): void {
+    if (lives === lastLives && shards === lastShards && perLife === lastPerLife && over === lastBarHidden) return
     lastLives = lives
+    lastShards = shards
+    lastPerLife = perLife
+    lastBarHidden = over
+    const fill = Math.min(1, shards / perLife)
     let glyphs = ''
     for (let i = 0; i < LIVES.START; i++) {
-      glyphs += `<span class="${i < lives ? '' : 'lost'}">&#9650;</span>`
+      if (i === lives && shards > 0 && !over) {
+        glyphs += `<span class="filling" style="opacity:${(0.25 + 0.6 * fill).toFixed(2)}">&#9650;</span>`
+      } else glyphs += `<span class="${i < lives ? '' : 'lost'}">&#9650;</span>`
+    }
+    if (lives < LIVES.START && !over) {
+      glyphs +=
+        `<span class="shardbar">&#10010;<span class="trk"><span class="fill" style="width:${(fill * 100).toFixed(1)}%"></span>` +
+        `<span class="ticks" style="background-size:${(100 / perLife).toFixed(3)}% 100%"></span></span></span>`
     }
     elLives.innerHTML = 'SHIPS ' + glyphs
   }
@@ -246,8 +325,13 @@ export function createHud(): Hud {
       elGems.innerHTML = ''
       return
     }
+    // at most GEM_PIPS_MAX pips: a larger quota fills them in proportion (the first
+    // gem lights a pip, the last pip waits for the last gem), and the got/quota text
+    // stays exact
+    const shown = Math.min(quota, HUD.GEM_PIPS_MAX)
+    const filled = got >= quota ? shown : Math.min(shown - 1, Math.ceil((got * shown) / quota))
     let pips = ''
-    for (let i = 0; i < quota; i++) pips += i < got ? '&#9670;' : '<span class="rem">&#9671;</span>'
+    for (let i = 0; i < shown; i++) pips += i < filled ? '&#9670;' : '<span class="rem">&#9671;</span>'
     const tail = got >= quota ? ' <span class="ready">READY &#9656;</span>' : ` ${got}/${quota}`
     elGems.innerHTML = 'GEMS ' + pips + tail
   }
@@ -259,7 +343,7 @@ export function createHud(): Hud {
   // and the string allocations that went with it.
   let lastScore = -1
   let lastLevel = -1
-  let lastBannerLevel = 1 // last level a "LEVEL N" banner fired for (1 = no banner for the start level)
+  let lastCause = '-'
   let lastBest = -1
   let lastTimeTenths = -1
   let lastSpd = -1
@@ -285,17 +369,11 @@ export function createHud(): Hud {
       const level = Math.max(1, Math.floor(s.level))
       if (level !== lastLevel) { elLevel.textContent = 'LEVEL ' + level; lastLevel = level }
       renderGems(s.gemsThisLevel, s.gemQuota)
-      // Big "LEVEL N" banner for ~2s when a new level is reached during a live run
-      // (not level 1, the start). Fires once per level-up; the reflow restarts the
-      // CSS animation, and lastBannerLevel tracks the level so a restart re-arms it.
-      if (s.level > lastBannerLevel && s.level >= 2 && s.started && !s.over) {
-        elLevelUp.textContent = 'LEVEL ' + Math.floor(s.level)
+      if (s.over !== lastOver && s.over) {
+        // banners do not linger over the game-over panel
         elLevelUp.classList.remove('show')
-        void elLevelUp.offsetWidth // force reflow so the animation replays each level-up
-        elLevelUp.classList.add('show')
+        elRepeat.classList.remove('show')
       }
-      lastBannerLevel = s.level
-      if (s.over) elLevelUp.classList.remove('show') // don't linger over the game-over panel
       const best = Math.max(0, Math.floor(s.best))
       if (best !== lastBest) { elBest.textContent = 'BEST ' + pad(best, 7); lastBest = best }
       // run timer (MM:SS.X): write only when the displayed tenth changes (~10/s)
@@ -303,12 +381,17 @@ export function createHud(): Hud {
       if (timeTenths !== lastTimeTenths) { elTime.textContent = 'TIME ' + fmtTime(s.elapsed); lastTimeTenths = timeTenths }
       const spd = Math.max(0, Math.floor(s.speed))
       if (spd !== lastSpd) { elSpd.textContent = 'SPD ' + pad(spd, 2); lastSpd = spd }
-      if (s.flightMode !== lastMode) { elGrav.textContent = 'MODE ' + s.flightMode.toUpperCase(); lastMode = s.flightMode }
+      if (s.flightMode !== lastMode) {
+        // the readout matters only in the pinned test modes (G key), not in the game
+        elGrav.textContent = 'MODE ' + s.flightMode.toUpperCase()
+        elGrav.style.display = s.flightMode === 'sections' ? 'none' : ''
+        lastMode = s.flightMode
+      }
       if (s.difficultyIndex !== lastDiff) { elDiff.innerHTML = diffLabel(s.difficultyIndex); lastDiff = s.difficultyIndex }
       // hide the selector rows while PAUSED (same title panel, but mid-run the
       // ship/difficulty must not change under the frozen game)
       if (s.paused !== lastPausedCls) { root.classList.toggle('paused', s.paused); lastPausedCls = s.paused }
-      renderLives(s.lives)
+      renderLives(s.lives, s.shards, s.shardsPerLife, s.over)
 
       // weapon charge: blue normally, yellow when low (below LOW), red when empty
       // (less than one shot's worth, so the gun is inert). Empty also flips the
@@ -340,6 +423,7 @@ export function createHud(): Hud {
       // only fail condition now, so it is not computed here. elapsed is frozen at
       // game-over, so the time line writes once on the run-ending edge.
       if (s.over) {
+        if (s.deathCause !== lastCause) { elOverCause.textContent = CAUSE_TEXT[s.deathCause] ?? ''; lastCause = s.deathCause }
         if (score !== lastOverScore) { elOverScore.textContent = 'SCORE ' + pad(score, 7); lastOverScore = score }
         if (level !== lastOverLevel) { elOverLevel.textContent = 'REACHED LEVEL ' + level + ' - ' + diffMode(s.difficultyIndex).name; lastOverLevel = level }
         if (timeTenths !== lastOverTime) { elOverTime.textContent = 'TIME ' + fmtTime(s.elapsed); lastOverTime = timeTenths }
@@ -350,9 +434,24 @@ export function createHud(): Hud {
     // Play the one-time gem-gate reminder (fades in then out). The reflow restarts
     // the CSS animation; main calls this once, on the first run of the session.
     flashGemHint(): void {
-      elGemHint.classList.remove('show')
-      void elGemHint.offsetWidth
-      elGemHint.classList.add('show')
+      replay(elGemHint, 'show')
+    },
+
+    showLevel(level: number, multiplier: number): void {
+      elRepeat.classList.remove('show')
+      elLevelUp.innerHTML = `LEVEL ${Math.floor(level)}<div class="sub">SCORE x${fmtMult(multiplier)}</div>`
+      replay(elLevelUp, 'show')
+    },
+
+    showRepeat(got: number, quota: number): void {
+      // collected gems carry over into the repeated cycle, so the banner names what is still missing
+      const more = Math.max(1, quota - got)
+      elRepeat.innerHTML = `REPEAT - ${got}/${quota} GEMS<div class="sub">${more} MORE ${more === 1 ? 'GEM' : 'GEMS'} TO ADVANCE</div>`
+      replay(elRepeat, 'show')
+    },
+
+    pulseGems(): void {
+      replay(elGems, 'pulse')
     },
 
     setMenu(shipName: string, diffIndex: number, row: number): void {

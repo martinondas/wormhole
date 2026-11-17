@@ -1,22 +1,34 @@
 import { PerspectiveCamera, Vector3 } from 'three'
 import { CAMERA, TUBE, SHIP } from '../config'
 import { type CraftState } from '../craft'
+import { type Shake } from './shake'
 
 // Mostly-fixed chase cam: the tube (wormhole) stays put while the craft rides
 // the walls across the view. Small ORBIT/ROLL/AIM follows add a little life
 // without rotating the whole world (which would hide incoming objects).
+// On top of that the view widens with speed (speed01: 0 at the level's slow tier,
+// 1 at its fast tier) and takes the shake after lookAt, so neither moves the aim.
 export interface CameraRig {
-  update(craft: CraftState, frameDt: number): void
+  update(craft: CraftState, frameDt: number, speed01: number): void
+  reset(): void // snap the speed FOV to the slow tier (a new run starts slow)
 }
 
-export function createCameraRig(camera: PerspectiveCamera): CameraRig {
+export function createCameraRig(
+  camera: PerspectiveCamera,
+  setFovOffset: (deg: number) => void,
+  shake: Shake,
+): CameraRig {
   let camTheta = 0 // smoothed orbit angle (small fraction of craft.theta)
   const camRadius = TUBE.RADIUS - SHIP.RADIAL_OFFSET - CAMERA.RISE
   const lookRadius = TUBE.RADIUS - SHIP.RADIAL_OFFSET
   const up = new Vector3()
+  const right = new Vector3()
+  const camUp = new Vector3()
+  let fov = 0 // smoothed speed FOV offset (deg)
+  let fovApplied = 0 // last offset handed to the projection
 
   return {
-    update(craft: CraftState, frameDt: number): void {
+    update(craft: CraftState, frameDt: number, speed01: number): void {
       // Drive the small camera follows from sin(theta): a smooth, 2*PI-periodic
       // signal. It is zero at every bottom rest point (theta = k*2*PI), so
       // gravity stays locked to screen-down when settled, AND it is continuous
@@ -45,6 +57,30 @@ export function createCameraRig(camera: PerspectiveCamera): CameraRig {
         -Math.cos(craft.theta) * lookRadius * CAMERA.AIM_FOLLOW,
         SHIP.Z - CAMERA.LOOK_AHEAD,
       )
+
+      // speed FOV: smoothed, and the projection is rebuilt only when it moved
+      const kf = 1 - Math.exp(-frameDt / Math.max(CAMERA.FOV_LAG, 1e-4))
+      fov += (CAMERA.FOV_SPEED * speed01 - fov) * kf
+      if (Math.abs(fov - fovApplied) > 0.05) {
+        fovApplied = fov
+        setFovOffset(fov)
+      }
+
+      // shake: a small sideways / vertical slide of the eye and a roll about the
+      // view axis, after lookAt so the view direction (the aim) is unchanged
+      shake.update(frameDt)
+      if (shake.trauma > 0) {
+        right.set(1, 0, 0).applyQuaternion(camera.quaternion)
+        camUp.set(0, 1, 0).applyQuaternion(camera.quaternion)
+        camera.position.addScaledVector(right, shake.x).addScaledVector(camUp, shake.y)
+        camera.rotateZ(shake.roll)
+      }
+    },
+    reset(): void {
+      fov = 0
+      fovApplied = 0
+      setFovOffset(0)
+      shake.reset()
     },
   }
 }

@@ -11,8 +11,10 @@ import { createHud } from './hud'
 import { createMenu } from './menu'
 import { createAudio } from './audio'
 import { createPerfOverlay } from './render/perf'
-import { startLoop } from './loop'
-import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY } from './config'
+import { startLoop, createHitStop } from './loop'
+import { createShake } from './render/shake'
+import { angleDiff } from './util/math'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -29,7 +31,11 @@ const ship = createShip()
 stage.scene.add(ship.object)
 stage.onResize((w, h) => ship.setResolution(w, h))
 
-const rig = createCameraRig(stage.camera)
+// Physical feel (view only): the camera shake and the hit slow-down. Neither
+// touches the craft state or the aim.
+const shake = createShake()
+const hitStop = createHitStop(FEEL.HITSTOP)
+const rig = createCameraRig(stage.camera, stage.setFovOffset, shake)
 const input = new Input()
 const hud = createHud()
 // Impact bursts (white-hot flash + shards): a shared pooled effect played on a real
@@ -48,28 +54,83 @@ const fx: SessionFx = {
     audio.play('orb')
     ship.flash()
   },
-  gemCollected: () => audio.play('gem'),
+  // the gem chime climbs the ladder with the chain; the gem that meets the quota
+  // plays the READY cue instead
+  gemCollected: (_points, chain) => {
+    if (readyCueThisGem) readyCueThisGem = false
+    else audio.play('gem', 0, 1, chain - 1)
+  },
+  quotaReached: () => {
+    readyCueThisGem = true
+    audio.play('ready')
+    hud.pulseGems()
+  },
+  cycleEnded: (advanced, gems, quota) => {
+    if (advanced) {
+      audio.play('levelup')
+      tube.flash(FEEL.TUBE_FLASH.PEAK)
+      hud.showLevel(flight.level + 1, flight.scoreMultiplier)
+    } else {
+      audio.play('repeat')
+      hud.showRepeat(gems, quota)
+    }
+  },
+  loopCompleted: () => {
+    // a deliberate loop is a moment; an endless spin is not, so the cue rests between loops
+    if (game.elapsed - lastLoopCue < FEEL.LOOP_CUE_GAP) return
+    lastLoopCue = game.elapsed
+    audio.play('loop')
+    tube.flash(FEEL.TUBE_FLASH.PEAK * FEEL.LOOP_FLASH)
+  },
+  mineNearMiss: (theta) => {
+    audio.play('whoosh', sideOf(theta))
+    shake.add(FEEL.SHAKE.NEAR)
+  },
+  // the charge whine comes from the raider's side, louder the closer its line is to yours
+  // (never below 0.45: a tell from across the tube must still be heard over gunfire)
+  enemyChargeStarted: (theta) => {
+    const near = 1 - Math.abs(angleDiff(theta, craft.theta)) / Math.PI
+    audio.play('charge', sideOf(theta), 0.45 + 0.55 * near * near)
+  },
+  enemyChipped: () => audio.play('chip'),
+  waveCleared: () => audio.play('waveClear'), // the squad is destroyed: a soft chime opens the breather
   lifeCollected: () => {
     audio.play('life')
     ship.flash(RENDER.SHIP_LIFE_FLASH_RGB)
   },
+  // a caught shard that does not complete the set: its step of the rising tone
+  // (the completing shard plays the 1-up through lifeCollected instead)
+  shardCollected: (count, restored) => {
+    if (!restored) audio.play('shard', 0, 1, (count - 1) / Math.max(1, game.shardsPerLife - 2))
+  },
+  // a shard or cross caught at full lives paid score: the top step of the shard tone
+  bonusCollected: () => audio.play('shard', 0, 1, 1),
   // a life was lost (never fires during i-frames, so a graze stays silent): the
   // explosion cue, a red hull flash, and a red burst at the impact point (the mine's
   // own position, or the ship for a ram / enemy bolt).
-  damaged: (_cause, theta, z) => {
+  damaged: (cause, theta, z) => {
+    deathCause = cause // the last life lost names the cause on the game-over panel
     audio.play('hit')
     ship.flash(RENDER.SHIP_HIT_FLASH_RGB)
     burst.spawn('damage', theta, z, craft.distance)
+    shake.add(FEEL.SHAKE.DAMAGE)
+    hitStop.trigger()
   },
   enemyFired: () => audio.play('enemyFire'),
   enemyKilled: (theta, z) => {
     audio.play('kill')
     burst.spawn('kill', theta, z, craft.distance) // magenta detonation where the raider died
+    shake.add(FEEL.SHAKE.KILL)
   },
   playerFired: () => audio.play('shoot'),
   dryFired: () => audio.play('empty'), // dull click: no charge to fire
   tierUp: () => audio.playAccel(),
 }
+// Stereo side of something at `theta` relative to the craft: -1 left .. 1 right.
+const sideOf = (theta: number): number => Math.sin(angleDiff(theta, craft.theta))
+let readyCueThisGem = false // the quota-meeting gem plays READY, not its chime
+let lastLoopCue = -Infinity // game time of the last loop cue
+let deathCause = '' // cause of the last life lost this run
 const session = createSession(fx)
 const { craft, flight, game, fields, enemies, projectiles, gun } = session
 for (const sys of [...fields, enemies, projectiles]) {
@@ -83,6 +144,7 @@ for (const sys of [...fields, enemies, projectiles]) {
 const menu = createMenu()
 ship.setHull(menu.hullId())
 flight.setDifficulty(menu.diffIndex)
+session.replan() // the gem lines follow the mode's speeds
 hud.setMenu(menu.shipName(), menu.diffIndex, menu.row)
 const perf = createPerfOverlay() // press P to toggle the FPS / frame-time overlay
 const audio = createAudio()
@@ -120,8 +182,12 @@ function beginRun(): void {
 // rather than dropping straight into a new run. The next run starts from the title
 // on Space/Enter (beginRun), exactly like the first run on load.
 function returnToTitle(): void {
+  deathCause = ''
+  lastLoopCue = -Infinity
   session.reset()
   burst.reset()
+  hitStop.reset()
+  rig.reset()
 }
 
 window.addEventListener('keydown', (e) => {
@@ -155,7 +221,10 @@ window.addEventListener('keydown', (e) => {
     if (changed) {
       e.preventDefault()
       if (changed === 'ship') ship.setHull(menu.hullId())
-      if (changed === 'difficulty') flight.setDifficulty(menu.diffIndex)
+      if (changed === 'difficulty') {
+        flight.setDifficulty(menu.diffIndex)
+        session.replan() // the gem lines follow the mode's speeds
+      }
       hud.setMenu(menu.shipName(), menu.diffIndex, menu.row)
       return
     }
@@ -223,15 +292,18 @@ startLoop(
       audio.playMusic(music) // menu on title/over, play during a run
       lastMusic = music
     }
-    rig.update(craft, frameDt)
+    // the speed FOV follows the run's flight (held while paused); the title keeps the base view
+    rig.update(craft, frameDt, game.started ? flight.speed01(craft.speed) : 0)
     stars.update(stage.camera)
-    tube.update(craft.distance, tierIndexAt, flight.mode)
+    tube.update(craft.distance, tierIndexAt, flight.mode, frameDt)
     stage.render()
     hud.update({
       score: game.score(),
       speed: craft.speed,
       energy01: game.energy / ENERGY.MAX,
       lives: game.lives,
+      shards: game.shards,
+      shardsPerLife: game.shardsPerLife,
       gemsThisLevel: game.gemsThisLevel,
       // pinned G-key modes have no gate, so report quota 0 there (HUD blanks the pip row)
       gemQuota: flight.mode === 'sections' ? flight.gemQuota(flight.level) : 0,
@@ -244,10 +316,12 @@ startLoop(
       level: flight.level + 1, // 0-based internally, shown 1-based
       best: game.best,
       difficultyIndex: menu.diffIndex,
+      deathCause,
     })
   },
   {
     // once per frame, before the fixed substeps (see session.preUpdate)
+    timeScale: (frameDt) => hitStop.scale(frameDt),
     preUpdate: () => {
       if (!game.started || debug.paused || game.over || paused) return
       session.preUpdate()
@@ -270,6 +344,9 @@ startLoop(
   enemies,
   projectiles,
   burst,
+  ship, // the player hull (WH.ship.setHull("delta"))
+  shake, // view shake (WH.shake.add(0.6) previews a hit jolt)
+  hitStop, // hit slow-down (WH.hitStop.trigger())
   gun,
   game,
   flight, // WH.flight.mode = 'slow' | 'normal' | 'fast' | 'sections' (or press G)
@@ -282,5 +359,5 @@ startLoop(
     seedRng(seed)
     returnToTitle()
   },
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE },
 }

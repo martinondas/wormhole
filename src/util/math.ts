@@ -8,6 +8,12 @@ export function approach(cur: number, target: number, maxStep: number): number {
   return target
 }
 
+/** 0 below `lo`, 1 above `hi`, a smooth S-curve between. */
+export function smoothstep(lo: number, hi: number, v: number): number {
+  const t = clamp((v - lo) / (hi - lo), 0, 1)
+  return t * t * (3 - 2 * t)
+}
+
 export const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
 
 /** Smallest signed difference between two angles, wrapped to (-PI, PI]. */

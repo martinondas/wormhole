@@ -13,13 +13,16 @@ export const KIND_ORB = 0
 export const KIND_GEM = 1
 export const KIND_MINE = 2
 export const KIND_LIFE = 3
-const KIND_CODE: Record<FieldKind, number> = { orb: KIND_ORB, gem: KIND_GEM, mine: KIND_MINE, life: KIND_LIFE }
+export const KIND_SHARD = 4 // a life shard left by a killed raider
+const KIND_CODE: Record<FieldKind, number> = { orb: KIND_ORB, gem: KIND_GEM, mine: KIND_MINE, life: KIND_LIFE, shard: KIND_SHARD }
 
 export const PHASE_APPROACH = 0
 export const PHASE_ENGAGE = 1
-export const PHASE_DEPART = 2
+export const PHASE_DEPART = 2 // falling behind, back through the ship plane
+export const PHASE_EXIT = 3 // leaving forward into the fog: fades, never fires
 // An unknown future phase is treated as 'engage' (present and dangerous).
-const phaseCode = (p: EnemyPhase): number => (p === 'approach' ? PHASE_APPROACH : p === 'depart' ? PHASE_DEPART : PHASE_ENGAGE)
+const phaseCode = (p: EnemyPhase): number =>
+  p === 'approach' ? PHASE_APPROACH : p === 'depart' ? PHASE_DEPART : p === 'exit' ? PHASE_EXIT : PHASE_ENGAGE
 
 export interface Snapshot {
   t: number // sim time (s) the snapshot was taken

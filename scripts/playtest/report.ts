@@ -19,7 +19,7 @@ export function summaryTable(results: Aggregate[]): string {
   const head = [
     'bot', 'mode', 'runs', 'time med (p10-p90)', 'level med (p10-p90)', 'score med', 'cap%',
     'hits/min', 'death mine/bolt/ram', 'gem%', 'repeats', 'empty%', 'acc%', 'kills/min',
-    'bolts aimed/hit', 'raiders (4+)', 'dead air', 'flat/quiet', 'lives+', 'bottom/upper', 'loops', 'rev/min',
+    'bolts aimed/tell/hit', 'raiders (4+)', 'dead air', 'flat/quiet', 'lives+', 'bottom/upper', 'loops', 'rev/min',
   ]
   const rows = results.map((a) => {
     const s = a.stats
@@ -39,7 +39,7 @@ export function summaryTable(results: Aggregate[]): string {
       pct(g('emptyGunShare').mean),
       pct(g('accuracy').mean),
       f1(g('killsPerMin').mean),
-      `${pct(g('boltsAimedShare').mean)}/${pct(g('boltsHitShare').mean)}`,
+      `${pct(g('boltsAimedShare').mean)}/${pct(g('tellsAimedShare').mean)}/${pct(g('boltsHitShare').mean)}`,
       `${f1(g('raidersMean').mean)} (${pct(g('raiders4PlusShare').mean)})`,
       `${f1(g('deadAirLongest').mean)}s ${pct(g('deadAirShare').mean)}`,
       `${f2(g('intensityCV').mean)}/${pct(g('quietShare').mean)}`,
@@ -52,8 +52,38 @@ export function summaryTable(results: Aggregate[]): string {
   return table(head, rows)
 }
 
+// Feedback events and fairness probes, one row per bot and mode. "tell min" is the
+// shortest charge-start-to-arrival time over all runs (the fairness floor).
+export function probeTable(results: Aggregate[]): string {
+  const head = [
+    'bot', 'mode', 'kill dist med', 'kills >60', 'clump%', 'tell min', 'life balance', 'chain hits',
+    'gate 1st try', 'gem chain med/max', 'near miss/min', 'loops/min', 'waves cleared/min', 'raider-free', 'bolt+mine s/min',
+  ]
+  const rows = results.map((a) => {
+    const g = (k: string): { mean: number; median: number; min: number; n: number } => a.stats[k] ?? { mean: 0, median: 0, min: 0, n: 0 }
+    return [
+      a.bot,
+      a.difficulty,
+      f1(g('killDistanceMedian').mean),
+      pct(g('killsBeyond60Share').mean),
+      pct(g('clumpShare').mean),
+      g('tellToArrivalMin').n > 0 ? f2(g('tellToArrivalMin').min) + 's' : '-',
+      f2(g('lifeBalance').mean),
+      f2(g('chainHits').mean),
+      g('gateFirstTry').n > 0 ? pct(g('gateFirstTry').mean) : '-',
+      `${f1(g('gemChainMedian').mean)}/${f1(g('gemChainMax').mean)}`,
+      f2(g('nearMissPerMin').mean),
+      f2(g('loopsPerMin').mean),
+      f2(g('wavesClearedPerMin').mean),
+      pct(g('raiderFreeShare').mean),
+      f2(g('boltMinePerMin').mean),
+    ]
+  })
+  return table(head, rows)
+}
+
 export function levelTable(a: Aggregate, maxRows = 20): string {
-  const head = ['level', 'reached', 'ended here', 'time in level', 'hits/min', 'threats/5s', 'pickups/5s', 'gem%', 'kills/min', 'repeats/run', 'raiders (4+)']
+  const head = ['level', 'reached', 'ended here', 'time in level', 'hits/min', 'threats/5s', 'pickups/5s', 'gem%', 'kills/min', 'repeats/run', 'gate 1st try', 'raiders (4+)', 'tells aimed']
   const rows = a.perLevel.slice(0, maxRows).map((l) => [
     String(l.level),
     pct(l.reachedShare),
@@ -65,7 +95,9 @@ export function levelTable(a: Aggregate, maxRows = 20): string {
     pct(l.gemShare),
     f1(l.killsPerMin),
     f2(l.repeatsPerRun),
+    Number.isFinite(l.gateFirstTry) ? pct(l.gateFirstTry) : '-',
     `${f1(l.raidersMean)} (${pct(l.raiders4PlusShare)})`,
+    Number.isFinite(l.tellsAimedShare) ? pct(l.tellsAimedShare) : '-',
   ])
   return `${a.bot} on ${a.difficulty} - pacing per level\n` + table(head, rows)
 }
@@ -76,10 +108,13 @@ const COMPARE: [string, (x: number) => string][] = [
   ['time', f0], ['level', f1], ['score', f0], ['hitsPerMin', f2], ['timeToFirstHit', f0],
   ['livesLostMine', f2], ['livesLostBolt', f2], ['livesLostRam', f2],
   ['levelRepeats', f2], ['gemShare', pct], ['emptyGunShare', pct], ['accuracy', pct], ['killsPerMin', f2],
-  ['boltsAtPlayer', f0], ['boltsAimedShare', pct], ['boltsHitShare', pct],
+  ['boltsAtPlayer', f0], ['boltsAimedShare', pct], ['tellsAimedShare', pct], ['boltsHitShare', pct],
   ['raidersMean', f2], ['raiders4PlusShare', pct], ['deadAirLongest', f1], ['deadAirShare', pct],
   ['threatsPerMin', f1], ['intensityCV', f2], ['quietShare', pct], ['extraLives', f1], ['bottomShare', pct], ['upperShare', pct], ['wallBinsUsed', f1], ['loops', f1],
   ['reversalsPerMin', f0],
+  ['killDistanceMedian', f1], ['killsBeyond60Share', pct], ['clumpShare', pct], ['tellToArrivalMin', f2],
+  ['lifeBalance', f2], ['shardsDropped', f1], ['shardsCaught', f1], ['shardCatchShare', pct], ['livesFromShards', f2], ['crossesDropped', f1], ['crossesCaught', f1], ['chainHits', f2], ['gateFirstTry', pct], ['gemChainMedian', f1], ['gemChainMax', f1],
+  ['nearMissPerMin', f2], ['loopsPerMin', f2], ['wavesClearedPerMin', f2], ['raiderFreeShare', pct], ['boltMinePerMin', f2],
 ]
 
 export function compareTable(baseline: Aggregate[], current: Aggregate[]): string {

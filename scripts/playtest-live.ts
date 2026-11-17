@@ -13,6 +13,10 @@
 //                         default: $PLAYTEST_LIVE_DIR or <os tmp>/wormhole-playtest-live, plus a timestamp
 //   --width / --height    viewport                                           default 1280 x 720
 //   --software            force software WebGL (SwiftShader); default tries the real GPU
+//   --force-repeat        hold the gem count at 0 in the first cycle's fast section, so
+//                         the first cycle repeats (to see the REPEAT banner)
+// Besides the timed shots it saves one shot per feedback event (READY, level up,
+// repeat, loop, hit, near miss; at most three of each), named after the event.
 import { chromium } from 'playwright'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
@@ -116,10 +120,10 @@ try {
   await page.screenshot({ path: join(out, '000-title.png') })
 
   await page.addScriptTag({ path: agentPath })
-  await page.evaluate(([b, s, cap]) => {
-    const pt = (globalThis as Record<string, unknown>).__playtest as { arm(b: string, s: number, cap: number): void }
-    pt.arm(b as string, s as number, cap as number)
-  }, [botName, seed, maxSeconds] as const)
+  await page.evaluate(([b, s, cap, fr]) => {
+    const pt = (globalThis as Record<string, unknown>).__playtest as { arm(b: string, s: number, cap: number, o: { forceRepeat: boolean }): void }
+    pt.arm(b as string, s as number, cap as number, { forceRepeat: fr as boolean })
+  }, [botName, seed, maxSeconds, flag('force-repeat')] as const)
   await page.keyboard.press('Space') // start the run like a player does
 
   const started = Date.now()
@@ -127,17 +131,21 @@ try {
   let right = false
   let fire = false
   let nextShot = shotEvery
+  let bannerShotAt = 0 // wall time for the delayed banner shot (0 = none pending)
+  let tellShotAt = 0 // wall time for the shot of a raider's firing tell near its peak (0 = none pending)
+  let hitShotAt = 0 // wall time for the shot 1 s after a hit, when the jolt and the slow-down are over (0 = none pending)
+  let shardShotAt = 0
   let shots = 0
   let last = { t: 0, level: 1, lives: 0, score: 0 }
   const wallLimitMs = Math.max(120000, maxSeconds * 1000 * 6) // give a slow renderer room, but never hang
   for (;;) {
     const s = await page.evaluate(() => {
       const pt = (globalThis as Record<string, unknown>).__playtest as {
-        poll(): { steer: number; fire: boolean; done: boolean; t: number; level: number; lives: number; score: number }
+        poll(): { steer: number; fire: boolean; done: boolean; t: number; level: number; lives: number; score: number; shot: string }
       }
       return pt.poll()
     })
-    last = s
+    last = { t: s.t, level: s.level, lives: s.lives, score: s.score }
     const wantLeft = !s.done && s.steer < 0
     const wantRight = !s.done && s.steer > 0
     const wantFire = !s.done && s.fire
@@ -147,6 +155,38 @@ try {
     left = wantLeft
     right = wantRight
     fire = wantFire
+    if (s.shot) {
+      shots++
+      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-${s.shot}.png`) })
+      // banners animate in: a second shot once they are fully shown
+      if (s.shot === 'levelup' || s.shot === 'repeat') bannerShotAt = Date.now() + 450
+      // the tell brightens over the charge: a second shot when the nose is white
+      if (s.shot === 'charge') tellShotAt = Date.now() + 180
+      // a hit jolts the view and slows time: a second shot once both are over
+      if (s.shot.startsWith('hit')) hitShotAt = Date.now() + 1000
+      // the kill burst covers a fresh shard: a second shot once it has cleared
+      if (s.shot === 'shard-drop') shardShotAt = Date.now() + 300
+    }
+    if (hitShotAt > 0 && Date.now() >= hitShotAt) {
+      hitShotAt = 0
+      shots++
+      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-hit-after.png`) })
+    }
+    if (shardShotAt > 0 && Date.now() >= shardShotAt) {
+      shardShotAt = 0
+      shots++
+      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-shard-ahead.png`) })
+    }
+    if (tellShotAt > 0 && Date.now() >= tellShotAt) {
+      tellShotAt = 0
+      shots++
+      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-tell.png`) })
+    }
+    if (bannerShotAt > 0 && Date.now() >= bannerShotAt) {
+      bannerShotAt = 0
+      shots++
+      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-banner.png`) })
+    }
     if (s.t >= nextShot || s.done) {
       shots++
       const name = `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}.png`

@@ -33,6 +33,17 @@ let lastTickT = 0
 let maxSeconds = Infinity
 let done = false
 let result: RunResult | undefined
+let forceRepeat = false
+// Feedback events worth a screenshot: the Node side polls, takes one shot per
+// queued event and names the file after it. At most EVENT_SHOTS per kind.
+const EVENT_SHOTS = 3
+const shotQueue: string[] = []
+const shotsTaken: Record<string, number> = {}
+function queueShot(kind: string): void {
+  if (done || (shotsTaken[kind] ?? 0) >= EVENT_SHOTS) return
+  shotsTaken[kind] = (shotsTaken[kind] ?? 0) + 1
+  shotQueue.push(kind)
+}
 const frameMs: number[] = []
 let lastFrame = 0
 
@@ -46,6 +57,10 @@ function frame(now: number): void {
   }
   if (lastFrame > 0) frameMs.push(now - lastFrame)
   lastFrame = now
+  // --force-repeat: hold the gem count at 0 through the fast section of the first
+  // cycle, so it ends short of the quota and the REPEAT banner can be seen
+  const f = wh.session.flight
+  if (forceRepeat && f.cycles === 0 && f.tierIndexAt(wh.session.craft.distance) === 2) game.gemsThisLevel = 0
   const t = game.elapsed
   if (t >= nextTick) {
     bot.tick(t)
@@ -79,7 +94,8 @@ function frameStats(): FrameStats {
 const api = {
   // Call on the title screen: seeds the run, hooks the recorder into the session's
   // events, and arms the bot. The run itself starts when Space is pressed.
-  arm(botName: string, seed: number, capSeconds: number): void {
+  arm(botName: string, seed: number, capSeconds: number, opts: { forceRepeat?: boolean } = {}): void {
+    forceRepeat = opts.forceRepeat ?? false
     const profile = PROFILES[botName]
     if (!profile) throw new Error(`unknown bot ${botName}`)
     wh.reseed(seed)
@@ -99,6 +115,30 @@ const api = {
         if (!done) tap(...a) // the game runs on after the capture ends; the result must not
       }
     }
+    // event screenshots: READY, the level / repeat banners, a loop, a hit, a raider's
+    // firing tell, a cleared wave, a life shard dropped / caught / completing a life,
+    // each kind of gem line in each tier
+    const shotOn: Record<string, (...a: unknown[]) => string> = {
+      quotaReached: () => 'ready',
+      cycleEnded: (advanced) => (advanced ? 'levelup' : 'repeat'),
+      loopCompleted: () => 'loop',
+      damaged: (cause) => `hit-${String(cause)}`,
+      mineNearMiss: () => 'nearmiss',
+      enemyChargeStarted: () => 'charge',
+      waveCleared: () => 'waveclear',
+      shardDropped: () => 'shard-drop', // a killed raider left a life shard
+      shardCollected: (_count, restored) => (restored ? 'shard-life' : 'shard-catch'),
+      phraseAhead: (id, tier) => `phrase-${String(id)}-t${String(tier)}`, // a gem line, half a second before the craft reaches it
+    }
+    for (const key of Object.keys(shotOn)) {
+      const prevFx = fx[key]
+      fx[key] = (...a: unknown[]): void => {
+        prevFx?.(...a)
+        queueShot(shotOn[key]!(...a))
+      }
+    }
+    shotQueue.length = 0
+    for (const k of Object.keys(shotsTaken)) delete shotsTaken[k]
     maxSeconds = capSeconds
     nextTick = 0
     lastTickT = 0
@@ -109,9 +149,10 @@ const api = {
     requestAnimationFrame(frame)
   },
   // Polled by the Node side: which keys should be down right now, and the state.
-  poll(): { steer: number; fire: boolean; done: boolean; t: number; level: number; lives: number; score: number } {
+  poll(): { steer: number; fire: boolean; done: boolean; t: number; level: number; lives: number; score: number; shot: string } {
     const s = wh.session
     return {
+      shot: shotQueue.shift() ?? '',
       steer: bot?.steer ?? 0,
       fire: bot?.fire ?? false,
       done,

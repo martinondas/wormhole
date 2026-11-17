@@ -32,7 +32,7 @@
 import { type Session } from '../../src/session'
 import { updateCraft, type CraftState } from '../../src/craft'
 import { type InputState } from '../../src/input'
-import { ENERGY, ENEMY, EXTRA_LIFE, GUN, HAZARD, LIVES, PICKUP, TREASURE } from '../../src/config'
+import { ENERGY, ENEMY, EXTRA_LIFE, GUN, HAZARD, LIFE_SHARD, LIVES, PICKUP, TREASURE } from '../../src/config'
 import {
   createPerception,
   createSnapshot,
@@ -40,9 +40,12 @@ import {
   type Snapshot,
   KIND_GEM,
   KIND_LIFE,
+  KIND_SHARD,
   KIND_MINE,
   KIND_ORB,
   PHASE_DEPART,
+  PHASE_EXIT,
+  MAX_ENEMIES,
 } from './perception'
 
 // |a - b| wrapped to [0, PI], without trig (this runs millions of times in the
@@ -67,6 +70,9 @@ const ROLL_DT = 1 / 30 // rollout step for the look-ahead search
 export interface BotProfile {
   name: string
   about: string
+  // 'search' plans with the look-ahead search below; 'spinner' and 'tapper' are
+  // scripted probes of one exploit or one failure case (see their profiles).
+  brain: 'search' | 'spinner' | 'tapper'
   steers: boolean
   fires: boolean
   reaction: number // s
@@ -89,14 +95,17 @@ export interface BotProfile {
   topAversion: number // cost per second spent near the top of the tube (upside down)
   wGem: number
   wAim: number
+  nearBias: number // 0..1: how much less a pickup at the end of the look-ahead counts than one right now
 }
 
 const base = {
+  brain: 'search' as BotProfile['brain'],
   steers: true,
   fires: true,
   keepOut: 0,
   wGem: 100,
   wAim: 80,
+  nearBias: 0.15,
 }
 
 export const PROFILES: Record<string, BotProfile> = {
@@ -174,6 +183,11 @@ export const PROFILES: Record<string, BotProfile> = {
     aimError: 0,
     name: 'oracle',
     about: 'no delay, no error, sees everything spawned: its deaths approximate unfair situations',
+    // It sees a whole gem line at once and its key plans are coarse, so with the
+    // default bias it gives up the next gem for a plan that looks richer and is not
+    // (the good bot, which sees less far, collected those gems). A strong bias toward
+    // the next pickup fixes that; dodging is not affected.
+    nearBias: 0.9,
     reaction: 0,
     decisionHz: 30,
     lookAhead: 400,
@@ -212,6 +226,58 @@ export const PROFILES: Record<string, BotProfile> = {
     lapseMax: 0.6,
     keepOut: 1.3,
     wAim: 0,
+  },
+  // Holds one steer key (right or left, by seed) for the whole run and holds fire:
+  // measures what an endless spin earns and costs.
+  spinner: {
+    ...base,
+    brain: 'spinner',
+    motorJitter: 0,
+    modelError: 0,
+    topAversion: 0,
+    aimError: 0,
+    name: 'spinner',
+    about: 'holds one steer key for the whole run and fires constantly (endless-spin exploit)',
+    reaction: 0,
+    decisionHz: 1,
+    lookAhead: 0,
+    horizon: 0,
+    thetaNoise: 0,
+    minHold: 0,
+    attention: 0,
+    planSet: 'simple',
+    lead: 0,
+    fireTol: 0,
+    fireRange: 0,
+    lapsePerSec: 0,
+    lapseMax: 0,
+  },
+  // Rests at the bottom and collects nothing. It shoots a raider on its line, and
+  // when a raider on its line shows the firing tell it waits 250 ms (its reaction),
+  // taps 150 ms away and lets go. Its bolt hits are the "I dodged and it still hit
+  // me" case: the pendulum carries the craft back onto the line before the bolt lands.
+  tapper: {
+    ...base,
+    brain: 'tapper',
+    motorJitter: 0,
+    modelError: 0,
+    topAversion: 0,
+    aimError: 0,
+    name: 'tapper',
+    about: 'rests at the bottom, shoots raiders on its line, answers a tell on its line with one 150 ms tap away',
+    reaction: 0.25,
+    decisionHz: 30,
+    lookAhead: 0,
+    horizon: 0,
+    thetaNoise: 0,
+    minHold: 0,
+    attention: 0,
+    planSet: 'simple',
+    lead: 0,
+    fireTol: GUN.HIT_ANGLE,
+    fireRange: 110,
+    lapsePerSec: 0,
+    lapseMax: 0,
   },
   passive: {
     ...base,
@@ -289,6 +355,7 @@ const MAX_EVENTS = 96
 const MAX_STEPS = 80
 const MAX_TARGETS = 8
 const DEATH = 1000
+const TAP_SECONDS = 0.15 // tapper: length of its dodge tap
 const TOP_ZONE = (120 * Math.PI) / 180 // farther than this from the bottom counts as near the top
 
 export interface Bot {
@@ -339,6 +406,10 @@ export function createBot(profile: BotProfile, session: Session): Bot {
   let aimOffset = 0 // wandering misjudgement of raider angles (rad)
   let torqueFeel = 1 // this run's misjudgement of the steering push (1 = exact)
   let gravityFeel = 1 // ... and of the gravity pull
+  let spinDir = 1 // spinner: the key it holds
+  let tapUntil = -1 // tapper: end of the current dodge tap
+  let tapDir = 0
+  const answered = new Uint8Array(MAX_ENEMIES) // tapper: raider ids whose current tell it already answered
 
   const bot: Bot = {
     profile,
@@ -359,12 +430,21 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       aimOffset = 0
       torqueFeel = 1 + profile.modelError * (rng() * 2 - 1)
       gravityFeel = 1 + profile.modelError * (rng() * 2 - 1)
+      spinDir = seed % 2 === 0 ? -1 : 1 // by seed parity: drawing from rng would shift every bot's noise
+      tapUntil = -1
+      tapDir = 0
+      answered.fill(0)
       bot.steer = 0
       bot.fire = false
     },
 
     tick(t: number): void {
       if (!profile.steers && !profile.fires) return
+      if (profile.brain === 'spinner') {
+        bot.steer = spinDir
+        bot.fire = true
+        return
+      }
       head = (head + 1) % ringSize
       perception.capture(ring[head]!, t)
       if (filled < ringSize) filled++
@@ -372,6 +452,10 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       const back = Math.min(filled - 1, Math.round(profile.reaction * TICK_HZ))
       const seen = ring[(head - back + ringSize * 2) % ringSize]!
       const prev = filled - 1 > back ? ring[(head - back - 1 + ringSize * 2) % ringSize]! : seen
+      if (profile.brain === 'tapper') {
+        tapperTick(t, seen)
+        return
+      }
 
       if (profile.lapsePerSec > 0 && t >= lapseUntil && rng() < profile.lapsePerSec / TICK_HZ) {
         lapseUntil = t + 0.25 + rng() * (profile.lapseMax - 0.25)
@@ -407,6 +491,29 @@ export function createBot(profile: BotProfile, session: Session): Bot {
         }
       }
     },
+  }
+
+  // Tapper: one tap away from each tell it sees on its own line, else rest and
+  // shoot whatever sits on its line.
+  function tapperTick(t: number, seen: Snapshot): void {
+    const craft = session.craft
+    let onLine = false
+    for (let i = 0; i < seen.nEn; i++) {
+      const id = seen.enId[i]!
+      const z = seen.enZ[i]!
+      const d = gap(craft.theta, seen.enTheta[i]!)
+      if (seen.enCharge[i]! <= 0.05) {
+        answered[id] = 0
+      } else if (!answered[id] && d < GUN.BULLET_HIT_ANGLE && t >= tapUntil) {
+        answered[id] = 1
+        const away = signedGap(craft.theta, seen.enTheta[i]!)
+        tapDir = away >= 0 ? 1 : -1
+        tapUntil = t + TAP_SECONDS
+      }
+      if (z < -6 && z > -profile.fireRange && d < profile.fireTol) onLine = true
+    }
+    bot.steer = t < tapUntil ? tapDir : 0
+    bot.fire = onLine && session.game.energy >= GUN.COST
   }
 
   // angular + closing speed of a raider, from the two snapshots (0 if just seen)
@@ -471,7 +578,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       if (wd - seen.dist > profile.lookAhead) continue // was still in the fog
       const ahead = wd - craft.distance
       const kind = seen.objKind[i]!
-      const captureZ = kind === KIND_MINE ? HAZARD.CAPTURE_Z : kind === KIND_LIFE ? EXTRA_LIFE.CAPTURE_Z : PICKUP.CAPTURE_Z
+      const captureZ = kind === KIND_MINE ? HAZARD.CAPTURE_Z : kind === KIND_LIFE ? EXTRA_LIFE.CAPTURE_Z : kind === KIND_SHARD ? LIFE_SHARD.CAPTURE_Z : PICKUP.CAPTURE_Z
       if (ahead < -captureZ) continue
       const tArr = ahead / speed
       const far = Math.min(1, Math.max(0, ahead / Math.max(profile.lookAhead, 1)))
@@ -485,8 +592,14 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       } else if (kind === KIND_ORB) {
         const need = 1 - game.energy / ENERGY.MAX
         if (need > 0.05) addEvent(tArr, theta, PICKUP.CAPTURE_ANGLE * 0.85, win, 150 * need, 0)
-      } else if (game.lives < LIVES.START) {
-        addEvent(tArr, theta, EXTRA_LIFE.CAPTURE_ANGLE * 0.85, win, 300, 0)
+      } else if (kind === KIND_SHARD) {
+        // a piece of a life: wanted whenever a life is missing, more the closer the set is to full
+        // at full lives it pays one gem's worth of score
+        const w = game.lives < LIVES.START ? 200 + (100 * (game.shards + 1)) / game.shardsPerLife : profile.wGem
+        addEvent(tArr, theta, LIFE_SHARD.CAPTURE_ANGLE * 0.85, win, w, 0)
+      } else {
+        // a whole life; at full lives it pays a kill's worth of score
+        addEvent(tArr, theta, EXTRA_LIFE.CAPTURE_ANGLE * 0.85, win, game.lives < LIVES.START ? 300 : profile.wGem * 2, 0)
       }
     }
     // attention limit: drop the farthest wall objects beyond what the bot can track
@@ -531,6 +644,8 @@ export function createBot(profile: BotProfile, session: Session): Bot {
         }
       }
       const range = profile.keepOut > 0 ? 130 : profile.fireRange
+      // a raider leaving forward is harmless and not worth a shot or a detour
+      if (seen.enPhase[i] === PHASE_EXIT) continue
       if (z < -6 && z > -range && nTg < MAX_TARGETS && (profile.keepOut > 0 || seen.enPhase[i] !== PHASE_DEPART)) {
         tgTheta[nTg] = theta + (profile.keepOut > 0 ? 0 : aimOffset)
         tgOm[nTg] = charge > 0.05 ? 0 : estOm * profile.lead
@@ -561,7 +676,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
           const margin = evMargin[i]!
           if (minD < hw) score += w
           else if (minD < hw + margin) score += w * 0.25 * (1 - (minD - hw) / margin)
-        } else if (minD < hw) score += w * (1 - 0.15 * (t / H))
+        } else if (minD < hw) score += w * (1 - profile.nearBias * (t / H))
         else score += w * 0.2 * Math.max(0, 1 - (minD - hw) / 1.2)
       } else if (t < H + 1) {
         // just past the horizon: do not end the swing parked on a threat, and lean

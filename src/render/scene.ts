@@ -14,6 +14,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { RENDER, CAMERA, BACKGROUND } from '../config'
 import { createBackgroundTexture } from './background'
+import { verticalFov } from './fov'
 
 export type ResizeCb = (bufferW: number, bufferH: number) => void
 
@@ -22,6 +23,8 @@ export interface Stage {
   scene: Scene
   camera: PerspectiveCamera
   onResize(cb: ResizeCb): void
+  // Widen the view by `deg` (speed FOV, 0..CAMERA.FOV_SPEED); see render/fov.ts.
+  setFovOffset(deg: number): void
   render(): void
 }
 
@@ -91,6 +94,12 @@ export function createStage(container: HTMLElement): Stage {
   }
   composer.addPass(new OutputPass())
 
+  let fovOffset = 0
+  function applyFov(): void {
+    camera.fov = verticalFov(camera.aspect, fovOffset)
+    camera.updateProjectionMatrix()
+  }
+
   const resizeCbs: ResizeCb[] = []
   let bufW = 1
   let bufH = 1
@@ -105,15 +114,8 @@ export function createStage(container: HTMLElement): Stage {
     composer.setPixelRatio(pr)
     composer.setSize(w, h)
 
-    // Cap the horizontal FOV. Three's camera.fov is vertical, so a wide window
-    // would otherwise balloon the horizontal view and make the side walls race
-    // past. Shrink the vertical FOV on wide aspects so horizontal stays bounded.
-    const aspect = w / h
-    camera.aspect = aspect
-    const vBase = (CAMERA.FOV * Math.PI) / 180
-    const vFromHCap = 2 * Math.atan(Math.tan((CAMERA.HFOV_MAX * Math.PI) / 180 / 2) / aspect)
-    camera.fov = (Math.min(vBase, vFromHCap) * 180) / Math.PI
-    camera.updateProjectionMatrix()
+    camera.aspect = w / h
+    applyFov()
 
     bufW = Math.floor(w * pr)
     bufH = Math.floor(h * pr)
@@ -130,6 +132,10 @@ export function createStage(container: HTMLElement): Stage {
     onResize(cb: ResizeCb): void {
       resizeCbs.push(cb)
       cb(bufW, bufH)
+    },
+    setFovOffset(deg: number): void {
+      fovOffset = deg
+      applyFov()
     },
     render(): void {
       composer.render()

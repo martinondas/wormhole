@@ -8,7 +8,7 @@ import {
   DynamicDrawUsage,
   Group,
 } from 'three'
-import { TUBE, RENDER, CAMERA, FLIGHT } from '../config'
+import { TUBE, RENDER, CAMERA, FLIGHT, FEEL } from '../config'
 
 // A wireframe tube: evenly spaced cross-section rings plus longitudinal lines.
 // The geometry is static; we scroll it toward the camera by ring-spacing and
@@ -24,7 +24,10 @@ export interface Tube {
   // mode is the current flight mode, used only as a cache key: the colors are a
   // pure function of (ring band, mode), so they are recomputed/re-uploaded only
   // when one of those changes - not every frame.
-  update(distance: number, tierIndexAt: (worldDist: number) => number, mode: string): void
+  update(distance: number, tierIndexAt: (worldDist: number) => number, mode: string, dt: number): void
+  // Brighten every tube line by `strength` (1 = double brightness), fading with the
+  // FEEL.TUBE_FLASH.DECAY time constant. A stronger flash replaces a weaker one.
+  flash(strength: number): void
 }
 
 // point on the tube wall at angle a (0 = bottom)
@@ -107,12 +110,29 @@ export function createTube(): Tube {
   const tierByOffset = new Int8Array(behind + ahead + 1)
   let lastN = NaN // ring band of the last color rebuild (cache key with lastMode)
   let lastMode = ''
+  // Flash: a brightness boost on both line materials (their color multiplies the
+  // vertex colors), so no color buffer is rewritten for it.
+  let boost = 0
+  let shownBoost = 0
 
   return {
     object: group,
-    update(distance: number, tierIndexAt: (worldDist: number) => number, mode: string): void {
+    flash(strength: number): void {
+      boost = Math.max(boost, strength)
+    },
+    update(distance: number, tierIndexAt: (worldDist: number) => number, mode: string, dt: number): void {
       // scroll toward camera (+Z) and wrap every ring spacing
       group.position.z = ((distance % spacing) + spacing) % spacing
+
+      if (boost > 0) {
+        boost *= Math.exp(-dt / FEEL.TUBE_FLASH.DECAY)
+        if (boost < 0.002) boost = 0
+      }
+      if (boost !== shownBoost) {
+        ringMat.color.setScalar(1 + boost)
+        longMat.color.setScalar(1 + boost)
+        shownBoost = boost
+      }
 
       // World distance depicted by ring slot i is (i + n) * spacing, where n is
       // the number of whole rings already passed. The colors depend only on

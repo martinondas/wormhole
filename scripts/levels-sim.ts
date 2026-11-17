@@ -11,7 +11,10 @@
 // exactly the old pure-distance behavior, which the speed/gravity checks rely on);
 // a count of 0 is a "passive" player who never advances.
 import { createFlight, type Flight } from '../src/flight'
-import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, HAZARD, TREASURE, DIFFICULTY } from '../src/config'
+import { createSession } from '../src/session'
+import { createLevelTuning, waveRoster, waveAliveCap, waveHunters, aggression, deepPressure, fireCooldown, bombMult } from '../src/levels'
+import { PHRASES } from '../src/world/phrases'
+import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, HAZARD, TREASURE, DIFFICULTY, ENEMY, SEQUENCE } from '../src/config'
 
 let failed = 0
 function check(name: string, cond: boolean, detail = ''): void {
@@ -36,7 +39,11 @@ const speedBonus = (lvl: number): number => {
 }
 const tierSpeed = (lvl: number, t: number): number => base[t]! + speedBonus(lvl)
 const cycleLen = (lvl: number): number => (tierSpeed(lvl, 0) + tierSpeed(lvl, 1) + tierSpeed(lvl, 2)) * secs
-const gemQuota = (lvl: number): number => Math.round((cycleLen(lvl) / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
+// gem quota at a TUNING level with gem lines on (mirror of flight.ts), and with them off
+const quotaAt = (T: number, modeMax = 1): number =>
+  Math.round(SEQUENCE.GEMS_PER_CYCLE * Math.min(LEVELS.QUOTA_FRACTION_MAX, modeMax, LEVELS.GEM_QUOTA_FRACTION + LEVELS.QUOTA_FRACTION_STEP * T))
+const gemQuota = (lvl: number): number => quotaAt(lvl) // ORION: the tuning level is the level
+const randomQuota = (lvl: number): number => Math.round((cycleLen(lvl) / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
 
 // cumulative distance where level L begins, assuming every cycle advanced (active player)
 function cumStart(L: number): number {
@@ -140,12 +147,12 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   const dflt = DIFFICULTY.MODES[DIFFICULTY.DEFAULT]!
   check('L1 default mode is the identity (ORION)', dflt.slope === 1 && dflt.offset === 0, dflt.name)
 
-  // MILKY WAY (index 0, slope 0.6): played display L5 (0-based 4) tunes to 2.4,
-  // so its slow speed matches an ORION level ~3.4 - the agreed calibration anchor.
+  // MILKY WAY (index 0): played display L5 (0-based 4) tunes to slope * 4, so its
+  // slow speed is the one of that (fractional) ORION level.
   const easyMode = DIFFICULTY.MODES[0]!
   const easy = createFlight()
   easy.setDifficulty(0)
-  check('L2 milky way tuned(4) = 2.4', approx(easy.tuned(4), easyMode.offset + easyMode.slope * 4) && approx(easy.tuned(4), 2.4), `${easy.tuned(4)}`)
+  check('L2 milky way tuned(4) = offset + slope * 4, below the ORION level', approx(easy.tuned(4), easyMode.offset + easyMode.slope * 4) && easy.tuned(4) < 4, `${easy.tuned(4)}`)
   // fly to its display L5 under its own (shorter) cycle lengths and check the speed
   const easyCum = (L: number): number => {
     let s = 0
@@ -153,7 +160,7 @@ function at(distance: number): { level: number; target: number; mult: number; sp
     return s
   }
   const easyAtL5 = flyTo(easyCum(4) + 50, ACTIVE, 20, 0)
-  check('L3 milky way L5 slow speed = base + bonus(2.4)', approx(easyAtL5.targetSpeed(), SPEED.SLOW + speedBonus(2.4)), `${easyAtL5.targetSpeed()}`)
+  check('L3 milky way L5 slow speed = base + bonus(tuned(4))', approx(easyAtL5.targetSpeed(), SPEED.SLOW + speedBonus(easy.tuned(4))), `${easyAtL5.targetSpeed()}`)
 
   // QUASAR (index 2, offset 2.5): starts around ORION L3.5 - faster, higher
   // multiplier, and density normalization referenced to the untuned base.
@@ -253,11 +260,33 @@ function at(distance: number): { level: number; target: number; mult: number; sp
 // ---- I) gem gate: quota scaling + advance / replay behavior ----
 ;(() => {
   const f = createFlight()
-  check('I1 gemQuota matches the derived formula (L0)', f.gemQuota(0) === gemQuota(0), `${f.gemQuota(0)} vs ${gemQuota(0)}`)
-  // non-decreasing per level (rounding plateaus, e.g. 7,7,8,8,9,10) and genuinely larger deeper
-  const quotas = [0, 1, 2, 3, 4, 5].map((l) => f.gemQuota(l))
+  // per level and mode: round(GEMS_PER_CYCLE * fraction), the fraction rising with the tuning level
+  let bad = ''
+  let line = ''
+  let highest = 0 // the largest quota of any level in any mode
+  DIFFICULTY.MODES.forEach((m, i) => {
+    const g = createFlight()
+    g.setDifficulty(i)
+    const qs: number[] = []
+    for (let l = 0; l <= 40; l++) {
+      const want = quotaAt(Math.max(0, m.offset + m.slope * l), m.quotaMax)
+      highest = Math.max(highest, g.gemQuota(l))
+      if (g.gemQuota(l) !== want) bad += ` ${m.name} L${l + 1}: ${g.gemQuota(l)} vs ${want}`
+      if (l === 0 || l === 4 || l === 9 || l === 19 || l === 39) qs.push(g.gemQuota(l))
+    }
+    line += ` ${m.name} L1/5/10/20/40: ${qs.join(',')};`
+  })
+  check('I1 gemQuota per level and mode matches round(GEMS_PER_CYCLE * fraction)', bad === '', bad || line)
+  const quotas = [...Array(41).keys()].map((l) => f.gemQuota(l))
   const nonDecreasing = quotas.every((q, i) => i === 0 || q >= quotas[i - 1]!)
-  check('I2 gemQuota rises with level (non-decreasing, larger deeper)', nonDecreasing && f.gemQuota(5) > f.gemQuota(0), quotas.join(','))
+  const cap = Math.round(SEQUENCE.GEMS_PER_CYCLE * LEVELS.QUOTA_FRACTION_MAX)
+  check('I2 gemQuota never falls, starts at half a cycle of gems, ends at the capped fraction', nonDecreasing && f.gemQuota(0) === Math.round(SEQUENCE.GEMS_PER_CYCLE * LEVELS.GEM_QUOTA_FRACTION) && f.gemQuota(40) === cap, `L1 ${quotas[0]} ... L41 ${quotas[40]} (cap ${cap})`)
+  check('I2b every quota stays at least 3 gems under the fewest a cycle offers', highest <= SEQUENCE.GEMS_PER_CYCLE - 3, `${highest} of at least ${SEQUENCE.GEMS_PER_CYCLE}`)
+  // gem lines off: the quota is a fraction of the gems one cycle's length holds
+  SEQUENCE.ENABLED = false
+  const offQuotas = [0, 1, 2, 3, 4, 5].map((l) => f.gemQuota(l))
+  SEQUENCE.ENABLED = true
+  check('I2c gem lines off: gemQuota follows the cycle length', offQuotas.every((q, l) => q === randomQuota(l)) && offQuotas[5]! > offQuotas[0]!, offQuotas.join(','))
 
   // passive player (0 gems) never advances, however far they fly; the cycle still
   // flows (speeds stay level 0, tiers keep cycling) - just no level-up.
@@ -269,6 +298,108 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   const q0 = gemQuota(0)
   check('I5 quota met -> advance to level 1', flyTo(cumStart(1), q0).level === 1, `q0=${q0}`)
   check('I6 one short -> stays level 0 (replays)', flyTo(cumStart(1), q0 - 1).level === 0)
+})()
+
+// ---- M) session cycle events: cycleEnded once per cycle, advanced iff the level rose ----
+// Drives the real session (no renderer) with the craft resting at the bottom and
+// i-frames held on so a mine never ends the run. The gem count is forced each frame
+// from a script: a cycle meets its quota or falls short exactly as scripted.
+;(() => {
+  const plan = [true, false, false, true, false, true, true, false] // quota met per cycle
+  let ended = 0
+  let advancedCount = 0
+  let repeats = 0
+  let levelUps = 0
+  let mismatch = 0
+  let gemsShort = 0
+  const session = createSession({
+    cycleEnded: (advanced, gems, quota) => {
+      if (advanced !== plan[ended]) mismatch++
+      if (advanced !== gems >= quota) mismatch++
+      if (!advanced && gems < quota) gemsShort++
+      ended++
+      if (advanced) advancedCount++
+      else repeats++
+    },
+    levelUp: () => levelUps++,
+  })
+  session.reset()
+  session.begin()
+  const dt = 1 / PHYSICS.HZ
+  const input = { steerTarget: 0, fire: false }
+  let steps = 0
+  while (session.flight.cycles < plan.length && steps < PHYSICS.HZ * 900) {
+    if (steps % 2 === 0) {
+      // the cycle in progress is number `cycles`: force its gem count from the plan
+      session.game.gemsThisLevel = plan[session.flight.cycles] ? session.flight.gemQuota(session.flight.level) : 0
+      session.preUpdate()
+    }
+    session.game.invuln = 1e9
+    session.step(input, dt)
+    steps++
+  }
+  const f = session.flight
+  check('M1 cycleEnded fires once per cycle', ended === f.cycles && ended === plan.length, `events=${ended} cycles=${f.cycles}`)
+  check('M2 advanced is true exactly when the level rose', mismatch === 0 && advancedCount === f.level && levelUps === f.level, `mismatches=${mismatch} advanced=${advancedCount} level=${f.level} levelUps=${levelUps}`)
+  check('M3 repeats = cycles - level in a quota-short run', repeats === f.cycles - f.level && gemsShort === repeats, `repeats=${repeats} cycles-level=${f.cycles - f.level}`)
+})()
+
+// ---- N) raider waves: roster, alive cap, hunters per tuning level and per mode ----
+;(() => {
+  // the wave table by tuning level T: [roster, alive cap, hunters]
+  const want: Record<number, [number, number, number]> = {
+    0: [2, 2, 0], 1: [3, 2, 0], 2: [3, 3, 1], 3: [4, 3, 1], 4: [5, 3, 1], 5: [5, 3, 1], 6: [6, 3, 1],
+    7: [6, 4, 1], 8: [7, 4, 1], 9: [7, 4, 2], 10: [8, 4, 2], 12: [9, 4, 2], 20: [9, 4, 2], 40: [9, 4, 2],
+  }
+  let bad = ''
+  for (const [k, [roster, cap, hunters]] of Object.entries(want)) {
+    const T = Number(k)
+    if (waveRoster(T) !== roster || waveAliveCap(T) !== cap || waveHunters(T) !== hunters) {
+      bad += ` T${T}: ${waveRoster(T)}/${waveAliveCap(T)}/${waveHunters(T)}`
+    }
+  }
+  check('N1 wave table: roster / alive cap / hunters by tuning level', bad === '', bad || 'T0..T40 as specified')
+  let capMax = 0
+  for (let T = 0; T < 60; T++) capMax = Math.max(capMax, waveAliveCap(T))
+  check('N2 alive cap never exceeds MAX_ENEMIES_CAP (4)', capMax === LEVELS.MAX_ENEMIES_CAP && LEVELS.MAX_ENEMIES_CAP === 4, `max=${capMax}`)
+  check('N3 aggression: 0 up to AGGRESSION_FROM, 0.5 halfway, 1 from the end of the span', aggression(0) === 0 && aggression(LEVELS.AGGRESSION_FROM) === 0 && approx(aggression(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN / 2), 0.5) && aggression(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN) === 1 && aggression(30) === 1, `from T${LEVELS.AGGRESSION_FROM} over ${LEVELS.AGGRESSION_SPAN} levels`)
+
+  check('N3b fire cooldown: EARLY at T0, FIRE_COOLDOWN at AGGRESSION_FROM, DEEP x the deep-pressure factor at full aggression, DEEP x DEEP_COOLDOWN_K at full deep pressure, never rising, no deep pressure up to DEEP_FROM', approx(fireCooldown(0), ENEMY.FIRE_COOLDOWN_EARLY) && approx(fireCooldown(LEVELS.AGGRESSION_FROM), ENEMY.FIRE_COOLDOWN) && approx(fireCooldown(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN), ENEMY.FIRE_COOLDOWN_DEEP * (1 + (ENEMY.DEEP_COOLDOWN_K - 1) * deepPressure(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN))) && approx(fireCooldown(30), ENEMY.FIRE_COOLDOWN_DEEP * ENEMY.DEEP_COOLDOWN_K) && deepPressure(LEVELS.DEEP_FROM) === 0 && deepPressure(LEVELS.DEEP_FROM + LEVELS.DEEP_SPAN) === 1 && [...Array(30).keys()].every((T) => fireCooldown(T + 1) <= fireCooldown(T) + 1e-9), `T0 ${fireCooldown(0)} T1 ${fireCooldown(1)} T2 ${fireCooldown(2)} T8 ${fireCooldown(8).toFixed(2)} T14 ${fireCooldown(14)}`)
+
+  // per mode: the played (display) level a wave size is reached at
+  const capAt = (difficulty: number, displayLevel: number): number => {
+    const f = createFlight()
+    f.setDifficulty(difficulty)
+    return createLevelTuning(f).enemyMax(displayLevel - 1)
+  }
+  const tAt = (difficulty: number, displayLevel: number): number => {
+    const f = createFlight()
+    f.setDifficulty(difficulty)
+    return createLevelTuning(f).tuningLevel(displayLevel - 1)
+  }
+  const idx = (name: string): number => DIFFICULTY.MODES.findIndex((m) => m.name === name)
+  const orion = idx('ORION')
+  const milky = idx('MILKY WAY')
+  const quasar = idx('QUASAR')
+  check('N4 ORION: L1-2 two alive, L3 three alive with a hunter, L8 four alive', capAt(orion, 1) === 2 && capAt(orion, 2) === 2 && capAt(orion, 3) === 3 && waveHunters(tAt(orion, 2)) === 0 && waveHunters(tAt(orion, 3)) === 1 && capAt(orion, 7) === 3 && capAt(orion, 8) === 4, `caps L1..L8: ${[1, 2, 3, 4, 5, 6, 7, 8].map((l) => capAt(orion, l)).join(',')}`)
+  check('N5 ORION L1 is two weavers (roster 2, no hunter)', waveRoster(tAt(orion, 1)) === 2 && waveHunters(tAt(orion, 1)) === 0)
+  const firstHunter = (difficulty: number): number => [...Array(40).keys()].map((k) => k + 1).find((l) => waveHunters(tAt(difficulty, l)) > 0) ?? Infinity
+  check('N6 MILKY WAY reaches each wave size later than ORION', tAt(milky, 1) === 0 && [...Array(20).keys()].every((k) => tAt(milky, k + 1) <= tAt(orion, k + 1)) && waveHunters(tAt(milky, 3)) === 0 && firstHunter(milky) > firstHunter(orion) && capAt(milky, 8) <= 3, `T at L1..L8: ${[1, 2, 3, 4, 5, 6, 7, 8].map((l) => tAt(milky, l)).join(',')}`)
+  check('N7 QUASAR starts with a squad of four, three alive, one hunter', waveRoster(tAt(quasar, 1)) === 4 && capAt(quasar, 1) === 3 && waveHunters(tAt(quasar, 1)) === 1, `T at L1 = ${tAt(quasar, 1)}`)
+  const eases = DIFFICULTY.MODES.map((m) => m.ease)
+  check('N8 ease: MILKY WAY above 1, ORION 1, QUASAR 1', eases[milky]! > 1 && eases[orion] === 1 && eases[quasar] === 1, eases.join(','))
+  const f = createFlight()
+  f.setDifficulty(milky)
+  check('N9 flight.ease() follows the selected mode', f.ease() === eases[milky])
+
+  // The three steps in pressure land on three different ORION levels: the hunter at
+  // level 3, the extra mines of the phrases at level 4, the aggression ramp after it.
+  const extraMineT = Math.min(...PHRASES.flatMap((p) => (p.mines ?? []).map((m) => m.minTuned ?? 0)).filter((t) => t > 0))
+  const hunterLevel = firstHunter(orion)
+  const mineLevel = extraMineT + 1
+  const aggressionLevel = [...Array(40).keys()].map((k) => k + 1).find((l) => aggression(tAt(orion, l)) > 0) ?? Infinity
+  check('N10 ORION: hunter at level 3, extra phrase mines at level 4, aggression rises from level 4', hunterLevel === 3 && mineLevel === 4 && aggressionLevel === 4 && SEQUENCE.SCATTER.MINES_3_FROM === extraMineT, `hunter L${hunterLevel}, mines L${mineLevel}, aggression L${aggressionLevel}`)
+  check('N11 levels 1 and 2 are the warm-up: slow fire, no hunter, the lightest mine budgets', fireCooldown(1) > 1.5 * ENEMY.FIRE_COOLDOWN && waveHunters(1) === 0 && bombMult(0) === 1 && bombMult(1) >= 0.9 && bombMult(2) > bombMult(3), `cooldown T0 ${fireCooldown(0)} T1 ${fireCooldown(1).toFixed(2)} T2 ${fireCooldown(2)}; mine mult ${[0, 1, 2, 3, 4].map((T) => bombMult(T)).join(' ')}`)
 })()
 
 if (failed) {

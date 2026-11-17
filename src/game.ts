@@ -1,4 +1,4 @@
-import { ENERGY, LIVES, GUN } from './config'
+import { ENERGY, LIVES, GUN, LIFE_SHARD } from './config'
 
 // Run state. ONE fail condition: lives are spent by hazard / enemy / ram hits;
 // hitting zero ends the run. Weapon charge (`energy`) is the gun's ammo - it is
@@ -7,11 +7,15 @@ import { ENERGY, LIVES, GUN } from './config'
 // kills, each scaled by the level multiplier; there is no passive distance
 // baseline, so a pure dodger scores nothing. `elapsed` is the run timer (HUD +
 // game-over) and the level reached captures how far you got. Best persists locally.
-const BEST_KEY = 'wormhole.best'
+// The best score of the gem-line scoring (TREASURE.SCORE, more gems per cycle).
+// The value an earlier version stored under 'wormhole.best' is left in place.
+const BEST_KEY = 'wormhole.best.v2'
 
 export interface Game {
   energy: number // weapon charge (ammo); player-facing label is WEAPON
   lives: number
+  shards: number // life shards caught toward the next life (below shardsPerLife); kept when a life is lost
+  shardsPerLife: number // shards that restore one life at the current level (the session sets it)
   invuln: number // seconds of invulnerability remaining (0 = vulnerable)
   scoreBonus: number // the run score: gem + kill points (each scaled by level at award time)
   gemsThisLevel: number // gems collected toward the current level's gate quota (reset on level-up)
@@ -26,6 +30,9 @@ export interface Game {
   canFire(): boolean // enough charge (and not over) to fire one shot
   spendEnergy(n: number): void // gun cost; clamps at 0, never ends the run
   addLife(): boolean // extra-life pickup; true if a life was actually added (false at full lives / over)
+  // A caught life shard: 0 = declined (full lives / over), 1 = progress toward the
+  // next life, 2 = that shard completed the set and a life was restored.
+  addShard(): 0 | 1 | 2
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
   start(): void // leave the title screen and begin the first run
   update(dt: number): void
@@ -62,6 +69,8 @@ export function createGame(): Game {
   return {
     energy: ENERGY.START,
     lives: LIVES.START,
+    shards: 0,
+    shardsPerLife: LIFE_SHARD.PER_LIFE,
     invuln: 0,
     scoreBonus: 0,
     gemsThisLevel: 0,
@@ -122,6 +131,20 @@ export function createGame(): Game {
       return true
     },
 
+    // Life shard: counts toward the next missing life only while one is missing, so
+    // progress cannot build up at full lives (the session pays score for the shard
+    // then, like for the cross). The set restores exactly one life and the count starts again. Like
+    // addLife it is not gated on `lives <= 0`: the last shard of a set caught in the
+    // step of a fatal hit saves the run.
+    addShard(): 0 | 1 | 2 {
+      if (this.over || this.lives >= LIVES.START) return 0
+      this.shards += 1
+      if (this.shards < this.shardsPerLife) return 1
+      this.shards = 0
+      this.lives += 1
+      return 2
+    },
+
     // Check invuln FIRST, before spending a life: if two mines overlap the ship
     // in the same fixed step, the first sets invuln and the second is a no-op,
     // so a single encounter can only ever cost one life.
@@ -155,6 +178,8 @@ export function createGame(): Game {
     toTitle(): void {
       this.energy = ENERGY.START
       this.lives = LIVES.START
+      this.shards = 0
+      this.shardsPerLife = LIFE_SHARD.PER_LIFE
       this.invuln = 0
       this.scoreBonus = 0
       this.gemsThisLevel = 0

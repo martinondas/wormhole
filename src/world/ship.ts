@@ -20,6 +20,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { SHIP, RENDER, RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
+import { createAttitude } from './attitude'
 
 export type HullId = (typeof SHIP.HULLS)[number]['id']
 
@@ -202,8 +203,14 @@ export function createShip(): Ship {
   // setRGB above can exceed 1; preserve the HDR values for strong bloom
   lineMat.color.setRGB(...RENDER.SHIP_RGB)
 
+  // The outer group sits on the wall (position + roll with theta); the hull parts
+  // hang in an inner pivot that carries the attitude (yaw into the slide, bank).
   const group = new Group()
   group.scale.setScalar(SHIP.SCALE)
+  const pivot = new Group()
+  pivot.rotation.order = 'YXZ' // heading first, then the bank about the hull's own nose axis
+  group.add(pivot)
+  const attitude = createAttitude()
 
   // build every hull once (small geometry); the selector just flips visibility.
   const hulls = new Map<HullId, Group>()
@@ -218,7 +225,7 @@ export function createShip(): Ship {
     edgesGeo.dispose()
     sub.add(edges)
     sub.visible = false
-    group.add(sub)
+    pivot.add(sub)
     hulls.set(id, sub)
   }
   const first = hulls.get(SHIP.HULLS[0]!.id)
@@ -254,9 +261,13 @@ export function createShip(): Ship {
         -Math.cos(craft.theta) * shipRadius,
         SHIP.Z,
       )
-      // sit tangent on the wall (roll with theta), lean into the steer input.
-      // Full rotation.set (not just z): it also clears a title-preview turntable pose.
-      group.rotation.set(0, 0, craft.theta - SHIP.BANK * craft.steerSignal)
+      // sit tangent on the wall (roll with theta). Full rotation.set (not just z):
+      // it also clears a title-preview turntable pose.
+      group.rotation.set(0, 0, craft.theta)
+      // the nose turns toward the slide (+yaw = increasing theta = local +x; the nose
+      // is -Z, so that is a negative turn about Y) and the hull banks into it
+      attitude.update(craft.omega, craft.speed, craft.steerSignal, dt)
+      pivot.rotation.set(0, -attitude.yaw, attitude.roll)
       tickFlash(dt)
     },
     preview(camera: PerspectiveCamera, dt: number): void {
@@ -269,6 +280,8 @@ export function createShip(): Ship {
         .addScaledVector(pRight, SHIP.PREVIEW_RIGHT)
       group.position.y -= SHIP.PREVIEW_DOWN
       group.rotation.set(SHIP.PREVIEW_TILT, pYaw, 0)
+      pivot.rotation.set(0, 0, 0)
+      attitude.reset()
       tickFlash(dt)
     },
     setHull(id: HullId): void {

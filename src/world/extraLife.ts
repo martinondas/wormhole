@@ -34,21 +34,23 @@ function buildCross(): ExtrudeGeometry {
   return geo
 }
 
-export function createExtraLife(): WallObject {
+// `scale` shrinks the whole cross (the life shard is this same cross, smaller).
+export function createExtraLife(scale = 1): WallObject {
   const solid = createEdgeLitSolid(buildCross(), EXTRA_LIFE.EDGE_RGB, EXTRA_LIFE.FILL_RGB, EXTRA_LIFE.LINE_WIDTH, EXTRA_LIFE.EDGE_THRESHOLD)
   const inner = solid.inner // spins + bobs + pulses; the outer group is positioned by the pool
   const object = new Group()
   object.add(inner)
 
+  inner.scale.setScalar(scale)
   let t = 0
   return {
     object,
     update(dt: number): void {
       t += dt
       inner.rotation.y += EXTRA_LIFE.SPIN_SPEED * dt
-      inner.position.y = Math.sin(t * EXTRA_LIFE.BOB_SPEED) * EXTRA_LIFE.BOB_AMP
+      inner.position.y = Math.sin(t * EXTRA_LIFE.BOB_SPEED) * EXTRA_LIFE.BOB_AMP * scale
       // beckoning pulse (scale only: cheap, never leaves the ride radius)
-      const s = 1 + Math.sin(t * EXTRA_LIFE.PULSE_SPEED) * EXTRA_LIFE.PULSE_AMP
+      const s = scale * (1 + Math.sin(t * EXTRA_LIFE.PULSE_SPEED) * EXTRA_LIFE.PULSE_AMP)
       inner.scale.setScalar(s)
     },
     setResolution: solid.setResolution,

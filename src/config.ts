@@ -27,6 +27,19 @@ export const PHYSICS = {
   STEER_RELEASE: 0.13,// seconds for steer signal to ramp back to zero
 }
 
+// --- climb: steering can weaken high on the wall (switched off) ----------------
+// FADE is the share of the upward steering torque removed above START, complete at END
+// (UP_SOFT blends it out at the top). It is 0: one held key carries the craft over the
+// top in every tier. A fade of 0.9 made every crossing of the top in normal and fast
+// sections two to three times slower (`npm run sim:swing -- --fade 0.9`); revisit only
+// if looping in slow sections proves too easy. Applied in craft.ts stepSwing.
+export const CLIMB = {
+  FADE: 0,       // share of the upward steering torque removed at END and above (0 = off)
+  START: 1.57,   // rad from the bottom where the fade begins (the horizontal)
+  END: 2.3,      // rad from the bottom where the fade is complete
+  UP_SOFT: 0.7,  // |sin(theta)| below which the fade blends out toward the top
+}
+
 // --- flight mode (experimental: speed tier -> gravity + tube color) ----------
 // Speed is the single driver: the mode (or the current section) picks a target
 // speed tier, the craft eases to it, and gravity is tied to speed (full at SLOW,
@@ -91,12 +104,21 @@ export const LEVELS = {
   SPEED_BAND: { EARLY_UNTIL: 10, MID_UNTIL: 15 }, // display level the EARLY / MID band ends at
   SCORE_MULT_STEP: 0.5, // score multiplier = 1 + (level-1) * this (L1 x1.0, L2 x1.5, L3 x2.0 ...)
                         // scales gem + kill points (the whole score; there is no distance term)
-  // Gem gate: a level advances only when you have collected this FRACTION of the gems
-  // that pass in one slow->normal->fast cycle (quota = round(cycleLen / TREASURE.SPAWN_SPACING
-  // * this), derived in flight.ts so it auto-scales as cycles get longer). Fall short at the
-  // cycle boundary and the level repeats (same speeds/colors) until you qualify. 0 disables
-  // the gate (pure distance progression). Lower it if half forces too many replays in playtest.
-  GEM_QUOTA_FRACTION: 0.5,
+  // Gem gate: a level advances only when you have collected the level's gem quota,
+  // quota = round(SEQUENCE.GEMS_PER_CYCLE * fraction), with the fraction starting at
+  // GEM_QUOTA_FRACTION and rising by QUOTA_FRACTION_STEP per tuning level up to
+  // QUOTA_FRACTION_MAX (flight.gemQuota). Fall short at the cycle boundary and the
+  // level repeats (same speeds/colors) until you qualify. On ORION the quota is 15
+  // gems at level 1, 19 at level 2, 23 at level 3 and 27 from level 4, of the 32 to
+  // 40 (about 36) a cycle offers: the first levels pass with half of the gems, from
+  // level 4 on a level asks for three of every four. The quota always stays 5 gems
+  // under the fewest a cycle offers, so a player who collects nearly everything never
+  // repeats a level. A difficulty mode may cap the fraction lower (DIFFICULTY quotaMax).
+  // With random gem fields (SEQUENCE.ENABLED false) the quota is GEM_QUOTA_FRACTION of
+  // the gems one cycle's length holds (cycleLen / TREASURE.SPAWN_SPACING).
+  GEM_QUOTA_FRACTION: 0.48,
+  QUOTA_FRACTION_STEP: 0.12,
+  QUOTA_FRACTION_MAX: 0.85,
   // Gravity across levels (the slow->fast fade itself is shaped by
   // FLIGHT.GRAVITY_FLOOR / GRAVITY_CURVE; this picks the reference span):
   //   'tier'     - full gravity at the level's OWN slow speed, the floor at its
@@ -109,26 +131,55 @@ export const LEVELS = {
   //                tiers. Flip here if high-level slow sections feel too sluggish;
   //                accept that deep levels flatten toward one gravity.
   GRAVITY_MODE: 'tier' as 'tier' | 'absolute',
-  MAX_ENEMIES_CAP: 10,      // hard ceiling on the enemy pool size (sizes the pool once)
-  BEYOND_ENEMY_LEVELS: 2,   // past the table, enemy cap rises by 1 every this many levels
-                            // (from 6 at L9 -> 10 at L17, then held by the cap)
+  MAX_ENEMIES_CAP: 4,       // most raiders ever alive at once (sizes the pool once)
+  // Raider waves by tuning level T (flight.tuned, rounded; ORION display level is T + 1),
+  // read through levels.ts. roster = raiders in one wave, cap = alive at once, hunters =
+  // members that slide to the player's line and fire aimed shots. Past the last row the
+  // roster grows by 1 every WAVE_ROSTER_EVERY levels up to WAVE_ROSTER_MAX, the cap is
+  // MAX_ENEMIES_CAP from WAVE_CAP4_FROM and there are two hunters from WAVE_HUNTERS2_FROM.
+  WAVES: [
+    { roster: 2, cap: 2, hunters: 0 }, // T0
+    { roster: 3, cap: 2, hunters: 0 }, // T1
+    { roster: 3, cap: 3, hunters: 1 }, // T2
+    { roster: 4, cap: 3, hunters: 1 }, // T3
+    { roster: 5, cap: 3, hunters: 1 }, // T4
+    { roster: 5, cap: 3, hunters: 1 }, // T5
+    { roster: 6, cap: 3, hunters: 1 }, // T6
+  ],
+  WAVE_ROSTER_EVERY: 2,
+  WAVE_ROSTER_MAX: 9,
+  WAVE_CAP4_FROM: 7,
+  WAVE_HUNTERS2_FROM: 9,
+  // Raider aggression 0..1 = clamp((T - AGGRESSION_FROM) / AGGRESSION_SPAN, 0, 1): it
+  // shortens the fire cooldown and the breather and speeds up the hunter's slide.
+  AGGRESSION_FROM: 2,
+  AGGRESSION_SPAN: 10,
+  // Deep pressure 0..1 = clamp((T - DEEP_FROM) / DEEP_SPAN, 0, 1): a second ramp that
+  // starts where the wave table ends (ORION level 9) and is full at ORION level 16. It
+  // scales the fire cooldown by up to ENEMY.DEEP_COOLDOWN_K and the fire stagger by up
+  // to ENEMY.DEEP_STAGGER_K, so the levels past 9 keep getting harder for a skilled
+  // player while the levels before stay as they are.
+  DEEP_FROM: 8,
+  DEEP_SPAN: 7,
   // Mines keep getting denser past the table down to a floor (they are the SECONDARY
   // threat, so they level off where enemies carry the deep difficulty). bombMult in
   // levels.ts subtracts BOMB_MULT_STEP per level past the last TABLE row, clamped at
-  // BOMB_MULT_FLOOR (0.65 = ~54% denser/s than L1, reached ~L15).
-  BOMB_MULT_STEP: 0.01,     // mine multiplier tightening per level past the table (gentle)
-  BOMB_MULT_FLOOR: 0.65,    // densest mines ever reach (playability floor)
+  // BOMB_MULT_FLOOR (0.6 = two thirds more mines per second than level 1, reached at
+  // tuning level 8). The gem-line director divides its per-section mine budget by it.
+  BOMB_MULT_STEP: 0.02,     // mine multiplier tightening per level past the table
+  BOMB_MULT_FLOOR: 0.6,     // densest mines ever reach (playability floor)
   // Per-level tuning. orb/bombSpacingMult are ENCOUNTER-RATE multipliers vs level 1
-  // (speed-normalized in main.ts, so they hold their meaning as the tube speeds up):
-  // >1 = rarer per second, <1 = denser per second. enemyMax = max raiders alive at once.
+  // (speed-normalized in levels.ts, so they hold their meaning as the tube speeds up):
+  // >1 = rarer per second, <1 = denser per second.
   // orbSpacingMult is flat 1.0 (rising speed already makes orbs harder to catch);
-  // bombSpacingMult tightens L1->L5 here, then keeps tightening via bombMult past it.
+  // bombSpacingMult barely moves over levels 1 to 3 (the warm-up and the level the
+  // hunter arrives at), steps down at level 4, then keeps tightening via bombMult.
   TABLE: [
-    { enemyMax: 2, orbSpacingMult: 1.0, bombSpacingMult: 1.0 },  // L1 (matches current tuning)
-    { enemyMax: 2, orbSpacingMult: 1.0, bombSpacingMult: 0.92 }, // L2
-    { enemyMax: 3, orbSpacingMult: 1.0, bombSpacingMult: 0.85 }, // L3
-    { enemyMax: 3, orbSpacingMult: 1.0, bombSpacingMult: 0.8 },  // L4
-    { enemyMax: 4, orbSpacingMult: 1.0, bombSpacingMult: 0.75 }, // L5
+    { orbSpacingMult: 1.0, bombSpacingMult: 1.0 },  // L1
+    { orbSpacingMult: 1.0, bombSpacingMult: 0.95 }, // L2
+    { orbSpacingMult: 1.0, bombSpacingMult: 0.85 }, // L3
+    { orbSpacingMult: 1.0, bombSpacingMult: 0.72 }, // L4
+    { orbSpacingMult: 1.0, bombSpacingMult: 0.66 }, // L5
   ],
 }
 
@@ -136,19 +187,25 @@ export const LEVELS = {
 // One mapping covers everything: tuningLevel = OFFSET + SLOPE * level (0-based),
 // applied inside flight.ts (tierSpeed / score multiplier / gem quota) and levels.ts
 // (enemy cap, mine density) - so a mode never needs its own tables. MILKY WAY ramps
-// at 60% of the normal rate (its display L5 plays like ORION L3.4, its L10 like
-// ORION L6.4); ORION is the unmodified game; QUASAR starts around ORION L3.5 and
+// at 40% of the normal rate (its display L5 plays like ORION L2.6, its L10 like
+// ORION L4.6); ORION is the unmodified game; QUASAR starts around ORION L3.5 and
 // ramps at the full rate. The score multiplier follows the tuning level, so a
 // harder mode pays more per gem/kill and the single shared best score stays honest.
 // Each mode carries its threat COLOR (the intuitive difficulty signal, reused by
 // the title selector and the HUD readout): the HUD's own green -> the low-ammo
 // amber -> the danger red. The threat pips (filled triangles, index+1 of 3) render
 // in hud.ts from the mode index.
+// `ease` multiplies the raider fire cooldown and the breather between waves and
+// divides the mine budget of the gem lines, so a mode can be gentler from level 1,
+// where the level mapping alone changes nothing. MILKY WAY is the mode for children:
+// raiders fire less than half as often and a section holds less than half the mines.
+// `quotaMax` caps the gem-quota fraction of the mode (1 = only LEVELS.QUOTA_FRACTION_MAX
+// applies): MILKY WAY never asks for more than 22 of a cycle's gems.
 export const DIFFICULTY = {
   MODES: [
-    { name: 'MILKY WAY', slope: 0.6, offset: 0, color: '#7dffa6' },
-    { name: 'ORION', slope: 1.0, offset: 0, color: '#ffd24d' },
-    { name: 'QUASAR', slope: 1.0, offset: 2.5, color: '#ff5a5a' },
+    { name: 'MILKY WAY', slope: 0.4, offset: 0, ease: 2.2, quotaMax: 0.7, color: '#7dffa6' },
+    { name: 'ORION', slope: 1.0, offset: 0, ease: 1.0, quotaMax: 1, color: '#ffd24d' },
+    { name: 'QUASAR', slope: 1.0, offset: 2.5, ease: 1.0, quotaMax: 1, color: '#ff5a5a' },
   ],
   DEFAULT: 1, // ORION (the game exactly as tuned so far)
 }
@@ -180,11 +237,20 @@ export const SHIP = {
   // Title-screen preview: the selected hull floats in front of the camera and
   // slowly turns (turntable) so the choice is seen, not read.
   PREVIEW_DIST: 15,   // world units in front of the camera
-  PREVIEW_RIGHT: 3.6, // shift right of the screen center, clear of the title text
+  PREVIEW_RIGHT: 7.4, // shift right of the screen center, clear of the title text column
   PREVIEW_DOWN: 1.2,  // shift below the camera axis
   PREVIEW_SPIN: 0.6,  // turntable yaw speed (rad/s)
   PREVIEW_TILT: 0.30, // fixed pitch so the top of the hull is visible (rad)
   BANK: 0.5,          // extra roll (rad) leaned into a full steer input
+  // Hull attitude (visual only; hit windows are unchanged). The nose yaws toward the
+  // direction of travel: slip = atan2(omega * RIDE_RADIUS, speed), yaw = YAW_FOLLOW *
+  // slip clamped to YAW_MAX. The roll adds BANK_OMEGA * omega on top of the steer
+  // bank, so the hull stays slewed while the swing carries after a key is released.
+  YAW_FOLLOW: 0.5,
+  YAW_MAX: 0.3,        // rad
+  BANK_OMEGA: 0.06,    // rad of roll per rad/s of swing
+  ROLL_MAX: 0.8,       // rad, clamp on the total roll
+  ATTITUDE_LAG: 0.08,  // s, smoothing time constant of yaw and roll
   LINE_WIDTH: 2.4,    // edge line width in pixels (Line2)
   FLASH_HOLD: 0.5,    // seconds the blue orb-pickup flash stays at full before fading
   FLASH_TIME: 0.7,    // seconds the flash then fades from full back to normal
@@ -210,6 +276,12 @@ export const CAMERA = {
   ROLL_FOLLOW: 0.12,  // how much the view banks/rolls with the craft
   AIM_FOLLOW: 0.40,   // how much the camera aims toward the craft (keeps it framed)
   FOLLOW_LAG: 0.10,   // smoothing on the orbit follow (weight)
+  // Speed FOV: the view widens by FOV_SPEED degrees (vertical) from the level's slow
+  // tier to its fast tier, smoothed with FOV_LAG. The horizontal cap widens with it
+  // (HFOV_MAX + FOV_SPEED at the fast tier): a wide window already sits on the cap,
+  // so a fixed cap would cancel the effect on every 16:9 screen.
+  FOV_SPEED: 6,
+  FOV_LAG: 0.35,      // s, smoothing time constant
 }
 
 // --- render / look (Tron: green neon on near-black, GPU bloom) --------------
@@ -239,6 +311,17 @@ export const RENDER = {
   // GPU-bound (bloom hides most line shimmer).
   RENDER_SCALE_LOW: 0.72,
   MSAA_SAMPLES_LOW: 2,
+
+  // Far-object readability (visual only): wall objects and raiders are drawn larger
+  // the farther ahead they are, from 1x at NEAR to 1 + gain at FAR and beyond, so a
+  // gem line or a raider reads as a shape well before contact instead of a speck.
+  // GAIN is for wall objects: at 1.5x they stay separate shapes at the far end of the
+  // tube (at 2x mines and gems merged into one blob there). RAIDER_GAIN is larger, so
+  // a raider at its firing lane (32 to 53 units) is drawn 1.2x to 1.4x and its firing
+  // tell stands out from the wall objects. With a gain below (FAR - NEAR) / NEAR the
+  // on-screen size still grows all the way in, so the depth cue never runs backwards.
+  // Hit tests are angle-only and do not change.
+  FAR_SCALE: { NEAR: 15, FAR: 110, GAIN: 0.5, RAIDER_GAIN: 1.0 },
 
   BLOOM_ENABLED: true,
   BLOOM_STRENGTH: 0.45,
@@ -280,7 +363,7 @@ export const PICKUP = {
   // a starting point - tune against how combat-heavy the levels feel in playtest.
   COUNT: 5,           // orbs alive in the pool at once
   SPAWN_START: 50,    // distance ahead of the first orb
-  SPAWN_SPACING: 190, // nominal distance between orbs (encounter rate = speed / spacing)
+  SPAWN_SPACING: 240, // nominal distance between orbs (encounter rate = speed / spacing)
   SPAWN_JITTER: 14,   // random extra distance per orb
   RECYCLE_BEHIND: 22, // recycle once an orb is this far behind the ship
   CAPTURE_Z: 2.4,     // along-tube window (units) for a catch
@@ -313,8 +396,12 @@ export const TREASURE = {
   BOB_AMP: 0.10,
   BOB_SPEED: 2.0,
 
-  // --- field / spawn (rarer than orbs; offset start so kinds don't cluster) ---
-  COUNT: 4,
+  // --- field / spawn ---
+  // With gem lines (SEQUENCE.ENABLED) the pool is fed by the director and COUNT is
+  // sized for its planning horizon; the SPAWN_* values and RANDOM_COUNT describe the
+  // random field used when gem lines are off.
+  COUNT: 24,
+  RANDOM_COUNT: 4,
   SPAWN_START: 85,
   SPAWN_SPACING: 120,
   SPAWN_JITTER: 22,
@@ -323,7 +410,8 @@ export const TREASURE = {
   CAPTURE_ANGLE: 0.40,
   POP_TIME: 0.18,
   POP_SCALE: 1.8,
-  SCORE: 250,          // points per gem -> game.addScore (multiplied by the level multiplier at award time)
+  SCORE: 110,          // points per gem -> game.addScore (multiplied by the level multiplier at award time).
+                       // A cycle offers about 36 gems, so a fully collected cycle pays about 3900.
 }
 
 // --- hazard (red naval contact mine: a big ball with cylindrical Hertz horns;
@@ -347,8 +435,12 @@ export const HAZARD = {
   PULSE_SPEED: 3.4,    // throb rad/s
   PULSE_AMP: 0.05,     // +/- 5% scale breathing
 
-  // --- field / spawn (sparse to start; latest start so it doesn't cluster) ---
-  COUNT: 5,            // mines alive in the pool; enough to keep the field filling cleanly from the fog
+  // --- field / spawn ---
+  // With gem lines (SEQUENCE.ENABLED) the pool is fed by the director and COUNT is
+  // sized for its planning horizon; the SPAWN_* values, SLOW_DENSITY, SPAWN_ANGLE and
+  // RANDOM_COUNT describe the random field used when gem lines are off.
+  COUNT: 12,
+  RANDOM_COUNT: 5,
   SPAWN_START: 120,
   SPAWN_SPACING: 114,  // nominal distance between mines (was 125: ~10% denser overall baseline)
   SPAWN_JITTER: 30,
@@ -378,8 +470,23 @@ export const HAZARD = {
 // the mine (near-black depth-writing fill under glowing green fat-line edges,
 // NORMAL blend - the HDR green core still blooms). Adds a life ONLY when below
 // LIVES.START (game.addLife caps at 100%); at full lives it passes through
-// untouched (no pop, no sound). Very rare: one in flight, far apart.
+// untouched (no pop, no sound). Scarce when on: on ORION the first one comes 1.3 to 2.3
+// minutes into a run, the next ones about every 3 to 4 minutes.
+// ENABLED is off: lives come back only through fighting, so a player who never fights
+// earns none. Killed raiders drop life shards (LIFE_SHARD), and the last raider of a
+// destroyed squad sometimes drops this cross, a whole life (SQUAD_EVERY). Set ENABLED
+// to true for the distance-timed cross field instead of the squad cross.
 export const EXTRA_LIFE = {
+  ENABLED: false,     // the distance-timed cross field (off: crosses come only from destroyed squads, see SQUAD_EVERY)
+  // The last raider of every Nth fully destroyed squad leaves a cross (a whole life) in
+  // place of a shard. N grows with the tuning level T (SQUAD_EVERY + SQUAD_EVERY_STEP * T,
+  // rounded, at most SQUAD_EVERY_MAX): frequent for a beginner, a rare bonus at depth.
+  SQUAD_EVERY: 3,
+  SQUAD_EVERY_STEP: 1,
+  SQUAD_EVERY_MAX: 12,
+  FULL_SCORE: 750,    // points for a cross caught at full lives (x the level multiplier)
+  CHARGE: 20,         // weapon charge a caught cross returns (as much as an orb)
+  GROW_TIME: 0.35,    // a dropped cross grows in over this long, like a shard
   ARM: 0.85,          // half-length of each cross arm (world units; full span = 1.7)
   THICK: 0.30,        // half-thickness of the arm bars (arm width = 0.6)
   DEPTH: 0.30,        // half-depth along z (a chunky 3D cross, not a flat sign)
@@ -393,11 +500,11 @@ export const EXTRA_LIFE = {
   PULSE_SPEED: 4.0,   // throb rad/s (a beckoning pulse)
   PULSE_AMP: 0.10,    // +/- 10% scale breathing (more than the mine: eye-catching)
 
-  // --- field / spawn (VERY rare; one in flight, far apart) ---
+  // --- field / spawn (scarce; one in flight, far apart) ---
   COUNT: 1,           // a single cross exists at a time; it recycles far ahead after each encounter
-  SPAWN_START: 320,   // distance ahead of the first cross
-  SPAWN_SPACING: 1500,// nominal distance between crosses (rare: ~20-50s apart depending on tier)
-  SPAWN_JITTER: 320,  // large random extra distance so it never feels metronomic
+  SPAWN_START: 4500,  // distance ahead of the first cross
+  SPAWN_SPACING: 18000,// nominal distance between crosses (3 to 4 minutes apart, sooner at deep levels)
+  SPAWN_JITTER: 4000, // random extra distance, so it never feels metronomic
   RECYCLE_BEHIND: 22, // recycle once it is this far behind the ship
   CAPTURE_Z: 2.6,     // generous ride-into window (a rare reward should be easy to grab once reached)
   CAPTURE_ANGLE: 0.46,// angular catch window (rad, ~26 deg)
@@ -405,6 +512,36 @@ export const EXTRA_LIFE = {
   POP_SCALE: 2.2,     // collect pop peak scale
   // angle-from-bottom bias (deg). Mid-wall, so you still have to swing up for it.
   SPAWN_ANGLE: { band: [30, 110] as [number, number], bias: 0.75, rest: [0, 180] as [number, number] },
+}
+
+// --- life shard (a small green cross left behind by a killed raider) ---------
+// A killed raider leaves a shard on the wall
+// where it died: the extra-life cross at SCALE, same green, same spin and pulse.
+// It scrolls in like any wall object and is caught by riding into it; a missed
+// shard is gone. A full set of caught shards restores one whole life (lives are
+// never fractional: a hit always costs a whole one). Progress is kept when a life
+// is lost. A caught shard also returns CHARGE to the weapon. At full lives a caught
+// shard pays FULL_SCORE instead of progress.
+// The set grows with the tuning level T (PER_LIFE + PER_LIFE_STEP * max(0, T - PER_LIFE_HOLD), rounded, at
+// most PER_LIFE_MAX; a set already started keeps its size): deeper levels bring more raiders, so more kills per minute,
+// and a fixed set would make a skilled player immortal there while staying out of
+// reach for an ordinary player early on. Calibrated with the playtest bots.
+export const LIFE_SHARD = {
+  PER_LIFE: 4,        // shards per life at level 1 (T = 0)
+  PER_LIFE_HOLD: 2,   // tuning levels that keep the base set before it grows (ORION: 4 shards on levels 1 to 3)
+  PER_LIFE_STEP: 1.5, // extra shards per tuning level past the hold (ORION: 6 at level 4, 10 at level 7, 20 from level 14)
+  PER_LIFE_MAX: 20,   // the set never grows past this, so one catch stays a visible step of the bar
+  SCALE: 0.6,         // size relative to the extra-life cross
+  COUNT: 8,           // pool size; a kill with the pool empty drops nothing
+  LEAD_SECONDS: 1.2,  // a shard never appears closer than this much flight time ahead, so there is time to swing back for it
+  FULL_SCORE: 110,    // points for a shard caught at full lives (one gem's worth, x the level multiplier)
+  CHARGE: 6,          // weapon charge a caught shard returns (two shots; an orb gives ENERGY.PER_ORB)
+  CAPTURE_Z: 2.6,     // ride-into window along the tube (as generous as the extra life)
+  CAPTURE_ANGLE: 0.60,// angular catch window (rad, ~34 deg): wide, because a shard is chased right after a dodge
+  RECYCLE_BEHIND: 22,
+  POP_TIME: 0.22,
+  POP_SCALE: 2.2,
+  GROW_TIME: 0.35,    // a dropped shard grows in over this long (with a small overshoot), so it is seen leaving the kill burst
 }
 
 // --- field spawn de-confliction (cross-kind minimum separation) --------------
@@ -423,6 +560,42 @@ export const SPAWN_CLEAR = {
                // so one nudge fully clears the conflicting object)
 }
 
+// --- gem lines (gems and mines placed as flyable phrases) --------------------
+// A director (world/sequencer.ts) fills the gem and mine pools with short phrases
+// from world/phrases.ts: a gem phrase follows the path a scripted swing takes (the
+// "ghost"), a mine phrase keeps a clear line marked by gems. Orbs and the extra
+// life stay random finds. ENABLED false gives random gem and mine fields instead.
+export const SEQUENCE = {
+  ENABLED: true,
+  HORIZON: 280,                       // units planned ahead of the craft (past the visible rings,
+                                      // and shorter than a slow section)
+  FIRST_AT: 70,                       // distance of the first phrase of a run (an arc)
+  WARMUP_PHRASES: 3,                  // the first phrases of a run carry no mines (about its first 9 s)
+  GAP: [1.1, 0.7] as readonly number[], // least s of rest between phrases at tuning level 0 and at GAP_FULL_T
+  GAP_FULL_T: 12,
+  BOUNDARY_CLEAR: [2.0, 1.0, 1.0] as readonly number[], // s without a phrase after a boundary, per tier entered
+  GEMS_PER_CYCLE: 32,                 // gems every cycle offers at least ...
+  GEMS_EXTRA_MAX: 8,                  // ... and at most this many more
+  // gems scheduled by the end of the slow and of the normal section at most, so each
+  // section keeps a share of the cycle's gems
+  GEMS_CUMULATIVE_MAX: [12, 23] as readonly number[],
+  GEMS_CUMULATIVE_MIN: [8, 16] as readonly number[], // ... and at least, so the last section is never asked for too many
+  MINES_PER_SECTION: [3.6, 2.2, 1.6] as readonly number[], // slow, normal, fast at tuning level 0 (the director
+                                      // lands within one of it, so a fraction shifts which whole counts qualify)
+  MINE_CLEAR: HAZARD.CAPTURE_ANGLE + 0.25, // rad a mine keeps from the ghost line and from gems (the hit window plus a margin)
+  GEM_EVERY_MIN: 0.25,                // s, closest gem spacing on a path
+  SCATTER: {
+    GEM_GAP: [1.2, 1.7] as readonly number[],  // s between two gems
+    MINE_GAP: [1.0, 1.5] as readonly number[], // s between two mines
+    MINE_FIRST: [0.3, 0.8] as readonly number[], // s into the scatter of its first mine
+    MINES_3_FROM: 3,                  // tuning level from which a scatter may hold three mines
+    GEM_DEG: [55, 145] as readonly number[],   // gem angle from the bottom (either side)
+    GEM_REACH: 2.0,                   // rad: most a gem sits from the one before it
+    MINE_DEG: [0, 80] as readonly number[],    // mine angle from the bottom (either side)
+    NEAR: 0.6,                        // s: a mine keeps MINE_CLEAR from every gem this close in time
+  },
+}
+
 // --- weapon charge (HUD bar shown as WEAPON; blue orbs refill it) ------------
 // The gun's ammo. Spent ONLY by firing (GUN.COST/shot), refilled by blue orbs
 // (PER_ORB) and kills (ENEMY.ENERGY_REFUND). It never ends the run: at zero the
@@ -436,6 +609,31 @@ export const ENERGY = {
   PER_ORB: 20,   // charge refilled per collected blue orb
   LOW: 0.28,     // fraction below which the bar turns yellow (low ammo). Below one
                  // shot's worth of charge (GUN.COST/MAX) the bar turns red (empty).
+}
+
+// --- feel (feedback cues: sound, tube flash, near misses) -------------------
+// Presentation only, except NEAR_MINE_EXTRA / NEAR_THROTTLE, which decide when the
+// session reports a mine near miss (an event, never a gameplay effect).
+export const FEEL = {
+  TUBE_FLASH: { PEAK: 1.2, DECAY: 0.25 }, // tube line brightness boost on a level-up; DECAY = time constant (s)
+  LOOP_FLASH: 0.4,     // a loop over the top flashes the tube at this fraction of PEAK
+  LOOP_CUE_GAP: 2.0,   // s: a loop gets its sound + flash only this long after the last loop cue (a held spin stays quiet)
+  CHAIN_STEPS: 8,      // gem chime climbs this many pentatonic steps along a gem chain, then holds
+  NEAR_MINE_EXTRA: 0.45, // rad past HAZARD.CAPTURE_ANGLE that still counts as a near miss
+  NEAR_THROTTLE: 0.4,  // s: at most one near-miss cue per this long
+  // Camera shake (render/shake.ts): one trauma value in 0..1 that decays linearly at
+  // DECAY per second; the offset scales with trauma squared, so small events stay
+  // small. Applied to the view only, never to the craft or the aim.
+  SHAKE: { MAX_ROLL_DEG: 3.0, MAX_OFFSET: 0.8, DECAY: 1.6, DAMAGE: 0.6, KILL: 0.2, NEAR: 0.12 },
+  // Hit slow-down: on a lost life the game runs at SCALE for HOLD seconds, then eases
+  // back to full speed over EASE seconds, so the cause of the hit is visible. Only
+  // the browser loop applies it; the headless harness steps the session directly.
+  HITSTOP: { SCALE: 0.35, HOLD: 0.18, EASE: 0.35 },
+}
+
+// --- HUD ----------------------------------------------------------------------
+export const HUD = {
+  GEM_PIPS_MAX: 12, // most pips the gem-gate row draws; a larger quota fills them in proportion
 }
 
 // --- lives (hazards cost a life; brief i-frames after a hit) ----------------
@@ -460,12 +658,16 @@ export const GUN = {
   COST: 3,            // weapon charge spent per shot (~6-7 shots per orb at PER_ORB 20)
   COOLDOWN: 0.25,     // seconds between shots (tap or hold -> ~4/s)
   BOLT_SPEED: 185,    // player bolt speed down -Z (units/s; >> SPEED.FAST so it leads quickly, less lead error vs strafing enemies)
-  BOLT_TTL: 1.4,      // seconds before a player bolt recycles (~259u reach)
+  BOLT_TTL: 0.7,      // seconds before a player bolt recycles (~130u reach): raiders are
+                      // fought from late approach inward, where their tells are readable
   // Two concentric hit windows (rad): a dead-center shot inside HIT_ANGLE_KILL is
   // an instant kill; a looser hit inside HIT_ANGLE only chips 1 (so it takes the
-  // full ENEMY.HP). Rewards precision without making wing-clips free.
-  HIT_ANGLE_KILL: 0.14, // inner cone (~8 deg): one shot here kills outright
-  HIT_ANGLE: 0.24,    // outer cone (~14 deg): a hit here deals 1 damage
+  // full ENEMY.HP). Rewards precision without making wing-clips free. HIT_ANGLE is
+  // the window at draw scale 1 and grows with the raider's far scale (RENDER.FAR_SCALE
+  // RAIDER_GAIN), so a bolt that crosses the drawn wing always registers; the kill
+  // cone has one size at every distance.
+  HIT_ANGLE_KILL: 0.14, // inner cone (~8 deg): the fuselage; one shot here kills outright
+  HIT_ANGLE: 0.29,    // outer cone (~17 deg): the drawn wing span (half-span 1.33 at RIDE_RADIUS); a hit here deals 1 damage
   HIT_Z: 3.0,         // along-tube window (units) for a player bolt hit. Tunnel-free
                       // at 120Hz: a bolt moves BOLT_SPEED/HZ ~= 1.54u per substep < 3.0.
   BULLET_HIT_ANGLE: 0.30, // player dodge window vs an enemy bolt (wider: the hit is lethal)
@@ -479,41 +681,81 @@ export const GUN = {
 // can fly in -> hold an engagement band ahead of you -> peel off.
 export const ENEMY = {
   HP: 2,              // hits to kill (burst-to-kill: one quick double-tap once aligned)
-  SCORE: 750,         // points per kill (3x a gem; the highest-value event). Multiplied by the level multiplier at award time.
-  ENERGY_REFUND: 2,   // charge returned per kill (clamped at MAX); well under a kill's shot cost, so a
-                      // kill is a net ammo SINK (precision 1-shot ~ -1, sloppy chip-kill ~ -4): you cannot
-                      // hold-and-spray, you must aim deliberately and lean on orbs to stay armed
-  COUNT: 2,           // enemies alive in the pool at once (one engaging, one approaching/departing)
+  SCORE: 750,         // points per kill (about 7x a gem; the highest-value event). Multiplied by the level multiplier at award time.
+  ENERGY_REFUND: 4,   // charge returned per kill (clamped at MAX). A clean one-shot kill pays a little more
+                      // than it cost (GUN.COST 3), a chip-then-kill about breaks even, and every miss is a
+                      // loss - so fighting, the way to earn lives back, does not starve the gun, while
+                      // hold-and-spray still runs it dry and orbs still matter
+
+  // --- waves (the director in world/enemies.ts; sizes come from LEVELS.WAVES) ---
+  WAVE: {
+    FIRST_DELAY: 6,       // s before the first wave of a run starts (it reaches its lanes about 4 s later)
+    REINFORCE_DELAY: 1.2, // s between two members of a wave entering (and after a loss)
+    TIME: 40,             // s a wave may last; then the survivors leave forward
+    FIGHT_MAX: 3,         // raiders in the fight at once; one more (up to the alive cap) enters
+                          // only as a relief for a member about to leave ...
+    RELIEF_LEAD: 1.4,     // ... this many s before that member's time in the lane is up
+    BREATHER: { BASE: 5, MIN: 2.5 }, // quiet s between waves: BASE at no aggression, MIN at full
+  },
 
   // --- spawn / lifecycle ---
-  SPAWN_AHEAD: 220,   // units ahead of the ship an enemy enters APPROACH (fades in from fog)
-  SPAWN_JITTER: 40,   // random extra spawn distance so they do not arrive in lockstep
-  SPAWN_THETA_SPREAD: 0.5, // |rand| angle offset from the player's theta at spawn (rad)
-  SPAWN_COOLDOWN: 3.0,// seconds a dead/recycled slot waits before re-entering APPROACH
-  SPAWN_COOLDOWN_JITTER: 1.5, // +/- on the respawn wait so the two raiders drift apart instead of re-pairing
+  SPAWN_AHEAD: 150,   // units ahead of the ship a raider enters APPROACH (inside the fog)
+  SPAWN_JITTER: 12,   // random extra spawn distance
   RECYCLE_BEHIND: 26, // recycle once the enemy z passes this far behind the ship
 
-  // --- engagement band (z negative = ahead of the ship) ---
-  ENGAGE_Z_FAR: -55,  // far edge: enemy switches APPROACH -> ENGAGE here
-  ENGAGE_Z_NEAR: -25, // near edge: a ~30u band, visible, outside all capture distances
-  ENGAGE_BREAK_Z: 8,  // if the player boosts past so the enemy slips behind (z > this), force DEPART
-  ENGAGE_TIME: 10,    // seconds it holds the band before peeling off if not killed
+  // --- formation (a wave arrives as a shape around an anchor angle) ---
+  FORM_SEP: 1.1,      // rad between neighbours of a spread formation (side by side)
+  PINCER_OFFSET: 1.4, // rad either side of the anchor for the two wings of a pincer
+  PINCER_INNER: 0.45, // rad either side for the third / fourth member of a pincer of four
+  ANCHOR_TRACK: 0.3,  // rad/s the anchor drifts toward the player (the shape follows loosely)
+  ANCHOR_MAX: 1.0,    // rad from the bottom the anchor may sit (no formation on the top wall)
+  LANES: [-32, -42.5, -53] as readonly number[], // depth lanes (ship-relative z): near, middle, far.
+                      // More than 10 units apart, so neighbours read as separate ships at
+                      // separate depths; the near lane sits just outside FIRE_MIN_AHEAD, as close
+                      // (and as large on screen) as a fair tell allows.
+  EARLY_LANES: [0, 1] as readonly number[], // lane indices of a squad without a hunter (the first levels)
+  SEP_MIN: 0.5,       // rad: two engaged raiders closer than this in angle ...
+  SEP_DZ: 12,         // ... and this in depth are pushed apart
+  SEP_PUSH: 0.8,      // rad/s the higher slot's weave center is pushed away
+
+  // --- engagement (z negative = ahead of the ship) ---
+  ENGAGE_Z_FAR: -62,  // APPROACH -> ENGAGE here; the station spring then settles it in its lane
+  ENGAGE_BREAK_Z: 8,  // a raider that slipped behind the ship (z > this) falls behind (DEPART)
+  ENGAGE_TIME: 18,    // seconds it holds its lane before leaving forward if not killed
   ENGAGE_TIME_JITTER: 2,
 
-  // --- closing speeds (all relative to craft.speed, so correct at any cruise/boost) ---
-  CLOSE_SPEED_DELTA: -14, // APPROACH: slower than you, so the gap closes it into the band
-  STATION_SPRING_K: 0.6,  // ENGAGE: speed = craft.speed + k*(z - bandCenter) to hover in the band
-  STATION_SPEED_CLAMP: 18,// ENGAGE: clamp |speed - craft.speed| so a full boost (75 vs 30) always escapes
+  // --- closing speeds (all relative to craft.speed, so correct at any tier speed) ---
+  CLOSE_SPEED_DELTA: -42, // APPROACH: slower than you, so the gap closes it into the band (about 2 s from the fog)
+  STATION_SPRING_K: 1.5,  // ENGAGE: speed = craft.speed + k*(z - laneZ): settles into its lane in about 2 s
+  STATION_SPEED_CLAMP: 18,// ENGAGE: clamp on |speed - craft.speed|
   DEPART_SPEED_DELTA: -22,// DEPART: falls behind and recycles
-  APPROACH_TRACK: 0.7,    // rad/s the raider drifts its strafe CENTER toward yours while approaching (gentle: it trends into play but never locks on)
+  EXIT_SPEED_DELTA: 30,   // EXIT: starts leaving forward this much faster than you ...
+  EXIT_ACCEL: 40,         // ... and keeps accelerating (u/s^2) into the fog
 
   // --- strafe (active from APPROACH on; must stay HITTABLE: peak strafe << player STEER_OMEGA_MAX 7) ---
   STRAFE_AMP: 0.95,   // theta = thetaCenter + AMP*sin(phase); wide weave so it is never a sitting duck
   STRAFE_W: 3.4,      // strafe phase rad/s -> peak |omega| ~3.2 (~46% of the player cap)
   STRAFE_OMEGA_MAX: 3.2, // hard per-step clamp on strafe angular speed (the hittability guarantee)
+  STRAFE_AMP_K: [0.6, 1.0] as readonly number[],   // per-raider multiplier range on STRAFE_AMP ...
+  STRAFE_W_K: [0.75, 1.05] as readonly number[],   // ... and on STRAFE_W, so a squad does not weave as one
+
+  // --- hunter (the squad member that comes for a parked player) ---
+  HUNT_TRACK: [2.0, 3.0] as readonly number[], // rad/s its center slides toward the player's line (by aggression)
+  HUNT_STRAFE_AMP: 0.1,  // it all but stops on that line while it waits to fire
+  HUNT_FIRE_ANGLE: 0.28, // it starts its charge only when this close to the player's line (rad): inside
+                         // GUN.BULLET_HIT_ANGLE, so a hunter's shot always hits a player who stays put
+  HUNT_FLANK: 1.2,       // rad beside the player's line a second hunter takes (it fires when the player comes to it)
+  HUNT_GAP_MIN: 1.1,     // rad: a second hunter never slides closer than this to the first
 
   // --- firing (telegraphed so a lethal shot is always fairly dodgeable) ---
-  FIRE_COOLDOWN: 2.0, // seconds between shots, ENGAGE only
+  FIRE_COOLDOWN: 1.15, // seconds between shots, ENGAGE only (tuning level LEVELS.AGGRESSION_FROM)
+  FIRE_COOLDOWN_EARLY: 3.0, // ... at tuning level 0: the first squads fire slowly (eases to FIRE_COOLDOWN)
+  FIRE_COOLDOWN_DEEP: 0.7, // ... at full aggression (LEVELS.AGGRESSION_*)
+  DEEP_COOLDOWN_K: 0.5, // the cooldown is multiplied by 1 .. this as the deep pressure rises (LEVELS.DEEP_*)
+  DEEP_STAGGER_K: 0.6,  // FIRE_STAGGER is multiplied by 1 .. this the same way (tells arrive closer together)
+  FIRE_STAGGER: 0.35, // minimum s between two charge starts, so tells arrive one at a time
+  FIRE_MIN_AHEAD: 31.5, // a charge starts only this far ahead or more: CHARGE_TIME + travel
+                      // at BULLET_SPEED is then at least 0.80 s from tell to arrival
   FIRE_JITTER: 0.4,   // +/- on the cooldown so volleys are not metronomic
   FIRE_SLOTS: 2,      // global cap on raiders charging/firing AT ONCE (Galaga-style
                       // attack slots): any number can engage, but incoming fire never
@@ -523,6 +765,12 @@ export const ENEMY = {
                       // fire slot re-tries; the jitter keeps a fixed pool order
                       // from always winning the next free slot
   CHARGE_TIME: 0.45,  // nose brightens toward white-hot for this long before each shot (the tell)
+  // No firing tell starts from BEFORE seconds ahead of a cycle boundary until AFTER
+  // seconds past it: the speed and gravity change there and the level banner shows,
+  // so no bolt is in flight through the change (a tell that started earlier still fires).
+  // When the hold ends each waiting raider takes RESUME (a random share) of a fresh fire
+  // cooldown, so the fire returns one tell at a time, not as a volley.
+  BOUNDARY_HOLD: { BEFORE: 1.1, AFTER: 1.5, RESUME: [0.3, 1.0] as readonly number[] },
   BULLET_SPEED: 90,   // enemy bolt speed toward +Z (> player top speed so it leads in)
   RAM_ANGLE: 0.55,    // ram hit window (rad); mirrors HAZARD.CAPTURE_ANGLE (wingspan + body)
   RAM_Z: 2.8,         // ram hit window (units); mirrors HAZARD.CAPTURE_Z
@@ -546,7 +794,7 @@ export const ENEMY = {
 // color differ. Fixed pools -> zero per-frame allocation. They ride at the same
 // RIDE_RADIUS as everything else so the angle-only hit tests are valid.
 export const PROJECTILE = {
-  MAX_PLAYER: 8,      // pooled player bolts (COOLDOWN 0.25 x TTL 1.4 ~ 6 live + margin)
+  MAX_PLAYER: 8,      // pooled player bolts (GUN.COOLDOWN 0.25 x BOLT_TTL 0.7 ~ 3 live + margin)
   MAX_ENEMY: 8,       // pooled enemy bolts
   LENGTH: 1.6,        // streak length along the tube axis (world units)
   LINE_WIDTH: 3.0,    // fat-line width in px (fatter than hulls so bolts pop)
@@ -645,7 +893,16 @@ export const AUDIO = {
     kill:      { synth: 'kill',      volume: 0.8 },  // descending square zap
     empty:     { synth: 'empty',     volume: 0.5 },  // dull dry-fire click (no charge to fire)
     life:      { synth: 'life',      volume: 0.95 }, // ascending 1-up arpeggio (extra life gained)
+    shard:     { synth: 'shard',     volume: 0.85 }, // one rising pair of the 1-up arpeggio per caught life shard
     hit:       { synth: 'hit',       volume: 1.8 },  // explosion (big + loud - a life lost should land like a bomb)
     gameover:  { synth: 'gameover',  volume: 0.85 }, // slow descending tone
+    ready:     { synth: 'ready',     volume: 0.75 }, // gem quota met: three rising blips
+    levelup:   { synth: 'levelup',   volume: 0.9 },  // level up fanfare (square + triangle, held last note)
+    repeat:    { synth: 'repeat',    volume: 0.7 },  // quota missed, the level repeats: two soft falling notes
+    charge:    { synth: 'charge',    volume: 0.5 },  // a raider's firing tell (panned; audible under gunfire, softer than the shot)
+    chip:      { synth: 'chip',      volume: 0.5 },  // a hit that did not kill the raider
+    loop:      { synth: 'loop',      volume: 1.1 },  // a loop over the top
+    whoosh:    { synth: 'whoosh',    volume: 0.6 },  // a mine near miss (panned)
+    waveClear: { synth: 'waveClear', volume: 0.6 },  // a raider wave cleared
   },
 }

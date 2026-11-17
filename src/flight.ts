@@ -1,4 +1,4 @@
-import { PHYSICS, SPEED, FLIGHT, LEVELS, TREASURE, DIFFICULTY, type FlightMode } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, TREASURE, DIFFICULTY, SEQUENCE, type FlightMode } from './config'
 import { clamp } from './util/math'
 
 // Runtime-switchable flight mode + the difficulty-by-level model. Speed is the
@@ -35,6 +35,7 @@ export interface Flight {
   update(distance: number, gemsThisLevel: number): void // refresh gated level/section state once per frame
   targetSpeed(): number // speed the craft eases toward (cached from update)
   speedMax(): number // upper clamp for craft speed at the current level
+  speed01(speed: number): number // 0 at the current level's slow-tier speed, 1 at its fast-tier speed (clamped)
   gravityForSpeed(speed: number): number // pendulum strength for the current level
   tierIndexAt(distance: number): number // 0/1/2 at a world distance (tube coloring)
   levelAt(distance: number): number // level (0-based) at a world distance (field scaling)
@@ -43,11 +44,19 @@ export interface Flight {
   // levers must scale spacing by this to mean a time-rate ("twice as rare") rather
   // than drift with the rising per-level speed. 1 at level 1 and in pinned modes.
   speedRatioAt(distance: number): number
-  gemQuota(level: number): number // gems needed to clear a level (derived; scales with cycle length)
+  gemQuota(level: number): number // gems needed to clear a level (known at the start of the level)
+  // Pure lookups for a given level, independent of where the craft is: what
+  // targetSpeed() returns in that level's tier, and what gravityForSpeed() returns
+  // at that level for a speed. The gem-line director plans the tube ahead with them.
+  tierSpeedOf(level: number, tier: number): number
+  gravityOf(level: number, speed: number): number
+  cycleStart(): number // distance where the current cycle began (the last boundary crossed)
+  cycleEnd(): number // distance of the next cycle boundary (Infinity in pinned modes)
   // Difficulty (see config DIFFICULTY): tuned() maps a played 0-based level to the
   // tuning level every difficulty lookup derives from; setDifficulty picks the mode
   // (survives reset(), so it holds across runs until re-selected on the title).
   tuned(level: number): number
+  ease(): number // the mode's ease factor (1 = as tuned; above 1 = slower raider fire, longer breathers)
   setDifficulty(index: number): void
   reset(): void // back to level 0 at distance 0 (game-over -> title)
   cycle(): FlightMode // advance to the next mode (returns it), for live testing
@@ -75,7 +84,7 @@ export function createFlight(): Flight {
   // fractional) tuning level; speedBonus is piecewise-linear, so fractions work.
   // Applied INSIDE tierSpeed, so every derived quantity (cycle length, gem quota,
   // gravity span, speed cap, score multiplier) follows the mode automatically.
-  let mode = DIFFICULTY.MODES[DIFFICULTY.DEFAULT] ?? { name: 'ORION', slope: 1, offset: 0 }
+  let mode = DIFFICULTY.MODES[DIFFICULTY.DEFAULT] ?? { name: 'ORION', slope: 1, offset: 0, ease: 1, quotaMax: 1 }
   const tuned = (level: number): number => Math.max(0, mode.offset + mode.slope * level)
 
   // tier speed at a level, and the distance length of one section / a full level.
@@ -98,11 +107,26 @@ export function createFlight(): Flight {
     return N_TIERS - 1 // numeric guard (offset should always land above)
   }
 
-  // Gems required to clear a level: a fraction of the gems that pass in one cycle.
-  // Gems have no per-level density scaling, so nominal-per-cycle = cycleLen / spacing;
-  // cycleLen grows as tiers speed up, so the quota rises on its own per level.
-  const gemQuota = (level: number): number =>
-    Math.round((cycleLen(level) / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
+  // Gems required to clear a level. With gem lines every cycle offers at least
+  // SEQUENCE.GEMS_PER_CYCLE gems, so the quota is a fraction of that count, and the
+  // fraction rises with the tuning level up to a cap (the mode may cap it lower). With random gem fields
+  // (SEQUENCE.ENABLED false) it is a fraction of the gems one cycle's length holds.
+  const gemQuota = (level: number): number => {
+    if (!SEQUENCE.ENABLED) return Math.round((cycleLen(level) / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
+    const fraction = Math.min(LEVELS.QUOTA_FRACTION_MAX, mode.quotaMax, LEVELS.GEM_QUOTA_FRACTION + LEVELS.QUOTA_FRACTION_STEP * tuned(level))
+    return Math.round(SEQUENCE.GEMS_PER_CYCLE * fraction)
+  }
+
+  // Pendulum strength at `level` for a forward speed (see gravityForSpeed below).
+  const gravityOf = (level: number, speed: number): number => {
+    const lo = LEVELS.GRAVITY_MODE === 'absolute' ? SPEED.SLOW : tierSpeed(level, 0)
+    const hi = LEVELS.GRAVITY_MODE === 'absolute' ? SPEED.FAST : tierSpeed(level, N_TIERS - 1)
+    const span = hi - lo
+    if (span <= 0) return 0
+    const t = clamp((hi - speed) / span, 0, 1) // 1 at the slow tier, 0 at the fast tier
+    const floor = FLIGHT.GRAVITY_FLOOR
+    return PHYSICS.GRAVITY_K * (floor + (1 - floor) * Math.pow(t, FLIGHT.GRAVITY_CURVE))
+  }
 
   // Pinned-mode tier (slow/normal/fast force one tier; sections cycles them).
   const pinnedTier = (mode: FlightMode): number => (mode === 'slow' ? 0 : mode === 'fast' ? 2 : 1)
@@ -175,19 +199,26 @@ export function createFlight(): Flight {
       return tierSpeed(curLevel, N_TIERS - 1)
     },
 
+    speed01(speed: number): number {
+      const lo = tierSpeed(curLevel, 0)
+      const span = tierSpeed(curLevel, N_TIERS - 1) - lo
+      return span > 0 ? clamp((speed - lo) / span, 0, 1) : 0
+    },
+
     // 'tier': full GRAVITY_K at the current level's slow speed, fading to the
     // GRAVITY_FLOOR at its fast speed - each section keeps its feel as the level
     // speeds up, and even the fast tier keeps a light pendulum pull (never a free
     // rotor). GRAVITY_CURVE shapes the fade (1 = linear; see config FLIGHT).
     // 'absolute': the same mapping referenced to the global SPEED.SLOW..FAST span.
     gravityForSpeed(speed: number): number {
-      const lo = LEVELS.GRAVITY_MODE === 'absolute' ? SPEED.SLOW : tierSpeed(curLevel, 0)
-      const hi = LEVELS.GRAVITY_MODE === 'absolute' ? SPEED.FAST : tierSpeed(curLevel, N_TIERS - 1)
-      const span = hi - lo
-      if (span <= 0) return 0
-      const t = clamp((hi - speed) / span, 0, 1) // 1 at the slow tier, 0 at the fast tier
-      const floor = FLIGHT.GRAVITY_FLOOR
-      return PHYSICS.GRAVITY_K * (floor + (1 - floor) * Math.pow(t, FLIGHT.GRAVITY_CURVE))
+      return gravityOf(curLevel, speed)
+    },
+
+    tierSpeedOf: tierSpeed,
+    gravityOf,
+    cycleStart: (): number => levelStartDistance,
+    cycleEnd(): number {
+      return this.mode === 'sections' ? levelStartDistance + cycleLen(gatedLevel) : Infinity
     },
 
     tierIndexAt(distance: number): number {
@@ -212,6 +243,8 @@ export function createFlight(): Flight {
     gemQuota,
 
     tuned,
+
+    ease: (): number => mode.ease,
 
     setDifficulty(index: number): void {
       mode = DIFFICULTY.MODES[Math.max(0, Math.min(DIFFICULTY.MODES.length - 1, index))] ?? mode
