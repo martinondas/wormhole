@@ -2,10 +2,11 @@
 // Starts its own vite dev server on a free port, opens the game in headless
 // Chromium, lets a bot play through real key presses (Playwright keyboard), and
 // saves screenshots, frame-time stats and the run summary. Stops the dev server
-// when done. See playtest/README.md.
+// when done. Besides the timed shots it saves shots of feedback events, named after
+// the event. See playtest/README.md.
 //
-//   --bot <name>          kid | average | good | oracle | camper | passive   default good
-//   --difficulty <mode>   milkyway | orion | quasar                          default orion
+//   --bot <name>          a bot of scripts/playtest/bot.ts                   default good
+//   --difficulty <mode>   a mode of DIFFICULTY.MODES, for example orion      default orion
 //   --seed <n>            run seed                                           default 1
 //   --max-seconds <n>     stop after this much game time                     default 90
 //   --shot-every <n>      screenshot every n seconds of game time            default 10
@@ -15,8 +16,6 @@
 //   --software            force software WebGL (SwiftShader); default tries the real GPU
 //   --force-repeat        hold the gem count at 0 in the first cycle's fast section, so
 //                         the first cycle repeats (to see the REPEAT banner)
-// Besides the timed shots it saves one shot per feedback event (READY, level up,
-// repeat, loop, hit, near miss; at most three of each), named after the event.
 import { chromium } from 'playwright'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
@@ -24,6 +23,12 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DIFFICULTY } from '../src/config'
+import { DIFF_KEY } from '../src/menu'
+import { type PlaytestApi } from './playtest/live-agent'
+
+// the page's global that live-agent.ts installs
+type Page = { __playtest: PlaytestApi }
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -34,7 +39,7 @@ const opt = (name: string, fallback: string): string => {
 }
 
 const botName = opt('bot', 'good')
-const modes = ['milkyway', 'orion', 'quasar']
+const modes = DIFFICULTY.MODES.map((m) => m.name.toLowerCase().replace(/[^a-z]/g, ''))
 const difficulty = modes.indexOf(opt('difficulty', 'orion').toLowerCase().replace(/[^a-z]/g, ''))
 if (difficulty < 0) throw new Error(`unknown difficulty (have: ${modes.join(', ')})`)
 const seed = Number(opt('seed', '1'))
@@ -101,14 +106,14 @@ try {
   page.on('pageerror', (e) => {
     if (!isAudioNoise(String(e))) errors.push(String(e))
   })
-  // the difficulty is chosen the way the game stores it (the title menu's own key)
-  await page.addInitScript((d) => {
+  // the difficulty is chosen the way the game stores it: under the key of the title menu
+  await page.addInitScript(([key, d]) => {
     try {
-      localStorage.setItem('wormhole.difficulty', String(d))
+      localStorage.setItem(key, String(d))
     } catch {
       /* ignore */
     }
-  }, difficulty)
+  }, [DIFF_KEY, difficulty] as const)
   await page.goto(url, { waitUntil: 'load', timeout: 30000 })
   await page.waitForFunction(() => Boolean((globalThis as Record<string, unknown>).WH), undefined, { timeout: 15000 })
   await page.waitForTimeout(800)
@@ -120,10 +125,7 @@ try {
   await page.screenshot({ path: join(out, '000-title.png') })
 
   await page.addScriptTag({ path: agentPath })
-  await page.evaluate(([b, s, cap, fr]) => {
-    const pt = (globalThis as Record<string, unknown>).__playtest as { arm(b: string, s: number, cap: number, o: { forceRepeat: boolean }): void }
-    pt.arm(b as string, s as number, cap as number, { forceRepeat: fr as boolean })
-  }, [botName, seed, maxSeconds, flag('force-repeat')] as const)
+  await page.evaluate(([b, s, cap, fr]) => (globalThis as unknown as Page).__playtest.arm(b, s, cap, { forceRepeat: fr }), [botName, seed, maxSeconds, flag('force-repeat')] as const)
   await page.keyboard.press('Space') // start the run like a player does
 
   const started = Date.now()
@@ -131,20 +133,24 @@ try {
   let right = false
   let fire = false
   let nextShot = shotEvery
-  let bannerShotAt = 0 // wall time for the delayed banner shot (0 = none pending)
-  let tellShotAt = 0 // wall time for the shot of a raider's firing tell near its peak (0 = none pending)
-  let hitShotAt = 0 // wall time for the shot 1 s after a hit, when the jolt and the slow-down are over (0 = none pending)
-  let shardShotAt = 0
   let shots = 0
+  const shoot = async (s: { t: number; level: number }, suffix: string): Promise<void> => {
+    shots++
+    await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}${suffix}.png`) })
+  }
+  // Some events show best a moment later: [start of the event's name, delay in ms, name of the second shot]
+  const SECOND_SHOTS: [string, number, string][] = [
+    ['levelup', 450, 'banner'], // banners animate in: once they are fully shown
+    ['repeat', 450, 'banner'],
+    ['charge', 180, 'tell'], // the tell brightens over the charge: when the nose is white
+    ['hit', 1000, 'hit-after'], // a hit jolts the view and slows time: once both are over
+    ['shard-drop', 300, 'shard-ahead'], // the kill burst covers a fresh shard: once it has cleared
+  ]
+  const secondShotAt = new Map<string, number>() // name of a pending second shot -> wall time it is due
   let last = { t: 0, level: 1, lives: 0, score: 0 }
   const wallLimitMs = Math.max(120000, maxSeconds * 1000 * 6) // give a slow renderer room, but never hang
   for (;;) {
-    const s = await page.evaluate(() => {
-      const pt = (globalThis as Record<string, unknown>).__playtest as {
-        poll(): { steer: number; fire: boolean; done: boolean; t: number; level: number; lives: number; score: number; shot: string }
-      }
-      return pt.poll()
-    })
+    const s = await page.evaluate(() => (globalThis as unknown as Page).__playtest.poll())
     last = { t: s.t, level: s.level, lives: s.lives, score: s.score }
     const wantLeft = !s.done && s.steer < 0
     const wantRight = !s.done && s.steer > 0
@@ -156,41 +162,17 @@ try {
     right = wantRight
     fire = wantFire
     if (s.shot) {
-      shots++
-      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-${s.shot}.png`) })
-      // banners animate in: a second shot once they are fully shown
-      if (s.shot === 'levelup' || s.shot === 'repeat') bannerShotAt = Date.now() + 450
-      // the tell brightens over the charge: a second shot when the nose is white
-      if (s.shot === 'charge') tellShotAt = Date.now() + 180
-      // a hit jolts the view and slows time: a second shot once both are over
-      if (s.shot.startsWith('hit')) hitShotAt = Date.now() + 1000
-      // the kill burst covers a fresh shard: a second shot once it has cleared
-      if (s.shot === 'shard-drop') shardShotAt = Date.now() + 300
+      await shoot(s, `-${s.shot}`)
+      const second = SECOND_SHOTS.find(([event]) => s.shot.startsWith(event))
+      if (second) secondShotAt.set(second[2], Date.now() + second[1])
     }
-    if (hitShotAt > 0 && Date.now() >= hitShotAt) {
-      hitShotAt = 0
-      shots++
-      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-hit-after.png`) })
-    }
-    if (shardShotAt > 0 && Date.now() >= shardShotAt) {
-      shardShotAt = 0
-      shots++
-      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-shard-ahead.png`) })
-    }
-    if (tellShotAt > 0 && Date.now() >= tellShotAt) {
-      tellShotAt = 0
-      shots++
-      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-tell.png`) })
-    }
-    if (bannerShotAt > 0 && Date.now() >= bannerShotAt) {
-      bannerShotAt = 0
-      shots++
-      await page.screenshot({ path: join(out, `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}-banner.png`) })
+    for (const [name, at] of secondShotAt) {
+      if (Date.now() < at) continue
+      secondShotAt.delete(name)
+      await shoot(s, `-${name}`)
     }
     if (s.t >= nextShot || s.done) {
-      shots++
-      const name = `${String(shots).padStart(3, '0')}-t${Math.round(s.t)}s-L${s.level}.png`
-      await page.screenshot({ path: join(out, name) })
+      await shoot(s, '')
       nextShot += shotEvery
     }
     if (s.done) break
@@ -204,10 +186,7 @@ try {
   await page.waitForTimeout(400)
   await page.screenshot({ path: join(out, '999-end.png') })
 
-  const summary = await page.evaluate(() => {
-    const pt = (globalThis as Record<string, unknown>).__playtest as { summary(): unknown }
-    return pt.summary()
-  })
+  const summary = await page.evaluate(() => (globalThis as unknown as Page).__playtest.summary())
   const doc = {
     bot: botName,
     difficulty: modes[difficulty],
@@ -220,10 +199,10 @@ try {
     gameSpeed: last.t / wallSeconds, // 1.0 = the game ran in real time
     final: last,
     errors,
-    ...(summary as object),
+    ...summary,
   }
   writeFileSync(join(out, 'summary.json'), JSON.stringify(doc, null, 1) + '\n')
-  const f = (doc as unknown as { frames: { fps: number; p50Ms: number; p95Ms: number; maxMs: number } }).frames
+  const f = doc.frames
   console.log(`bot=${botName} mode=${modes[difficulty]} seed=${seed} renderer="${renderer}"`)
   console.log(
     `game time ${last.t.toFixed(1)}s in ${wallSeconds.toFixed(1)}s wall (speed ${(last.t / wallSeconds).toFixed(2)}x), ` +

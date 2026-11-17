@@ -18,7 +18,7 @@
 //   --cfg <PATH=value>   override one number in src/config.ts for this invocation (repeatable),
 //                        for example --cfg ENEMY.HUNT_TRACK.0=2 (to try a tuning value before
 //                        editing config; a value the game reads only once at load is not affected;
-//                        a true/false switch takes 0 or 1, for example --cfg SEQUENCE.ENABLED=0)
+//                        a true/false switch takes 0 or 1, for example --cfg EXTRA_LIFE.ENABLED=1)
 //   --workers <n>        parallel worker threads                         default cores - 1 (max 8)
 import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'

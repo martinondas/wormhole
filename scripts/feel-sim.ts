@@ -1,6 +1,7 @@
 // Headless checks for the physical-feel layer (npm run sim:feel): camera shake,
-// speed FOV, hull attitude, hit slow-down and the far-object draw scale. All of it
-// is visual only; the playtest compare proves the gameplay did not move.
+// speed FOV, hull attitude, hit slow-down, the far-object draw scale and the
+// steering torque around the tube. All but the last is visual only; the playtest
+// compare proves the gameplay did not move.
 import { PerspectiveCamera } from 'three'
 import { createShake } from '../src/render/shake'
 import { verticalFov, horizontalFov } from '../src/render/fov'
@@ -9,14 +10,11 @@ import { createAttitude } from '../src/world/attitude'
 import { createHitStop } from '../src/loop'
 import { farScale } from '../src/world/farScale'
 import { createFlight } from '../src/flight'
-import { createCraft } from '../src/craft'
-import { CAMERA, FEEL, RENDER, SHIP } from '../src/config'
+import { createCraft, stepSwing, type SwingState } from '../src/craft'
+import { CAMERA, FEEL, PHYSICS, RENDER, SHIP } from '../src/config'
+import { DEG } from '../src/util/math'
+import { check, finish, STEP_DT } from './sim-kit'
 
-let failed = 0
-function check(name: string, cond: boolean, detail = ''): void {
-  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -> ' + detail : ''}`)
-  if (!cond) failed++
-}
 const DT = 1 / 60
 
 // --- shake ---------------------------------------------------------------------
@@ -169,8 +167,20 @@ const DT = 1 / 60
   check('F1 far scale: 1 at the ship, the on-screen size still grows all the way in', farScale(0) === 1 && farScale(5) === 1 && mono)
 }
 
-if (failed > 0) {
-  console.log(`${failed} FEEL SIM CHECK(S) FAILED`)
-  process.exit(1)
+// --- steering torque -------------------------------------------------------------
+// The torque a full held key gives at rest, read back from one step at every 0.1
+// degrees: neighbours never differ by more than a small share of the full torque.
+{
+  let worst = 0
+  let last = NaN
+  for (let i = -1800; i <= 1800; i++) {
+    const s: SwingState = { theta: (i / 10) * DEG, omega: 0, steerSignal: 1 }
+    stepSwing(s, 1, 0, STEP_DT) // no gravity, no speed: omega / dt is the torque
+    const torque = s.omega / STEP_DT
+    if (!Number.isNaN(last)) worst = Math.max(worst, Math.abs(torque - last))
+    last = torque
+  }
+  check('G1 the steering torque has no step anywhere around the tube', worst < 0.02 * PHYSICS.STEER_TORQUE, `largest change per 0.1 deg: ${worst.toFixed(3)} of ${PHYSICS.STEER_TORQUE}`)
 }
-console.log('ALL FEEL SIM CHECKS PASSED')
+
+finish('FEEL SIM')

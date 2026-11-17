@@ -167,4 +167,6 @@ const api = {
   },
 }
 
-;(globalThis as unknown as { __playtest: typeof api }).__playtest = api
+/** What the Node side (scripts/playtest-live.ts) calls in the page, as `globalThis.__playtest`. */
+export type PlaytestApi = typeof api
+;(globalThis as unknown as { __playtest: PlaytestApi }).__playtest = api

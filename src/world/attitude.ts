@@ -1,5 +1,5 @@
 import { SHIP, RIDE_RADIUS } from '../config'
-import { clamp } from '../util/math'
+import { clamp, smoothing } from '../util/math'
 
 // Hull attitude from the swing (visual only). `yaw` has the sign of omega: the nose
 // turns toward the direction the craft slides along the wall. `roll` leans into the
@@ -20,7 +20,7 @@ export function createAttitude(): Attitude {
       const slip = Math.atan2(omega * RIDE_RADIUS, Math.max(speed, 1e-3))
       const yawTarget = clamp(SHIP.YAW_FOLLOW * slip, -SHIP.YAW_MAX, SHIP.YAW_MAX)
       const rollTarget = clamp(-SHIP.BANK * steerSignal - SHIP.BANK_OMEGA * omega, -SHIP.ROLL_MAX, SHIP.ROLL_MAX)
-      const k = 1 - Math.exp(-dt / Math.max(SHIP.ATTITUDE_LAG, 1e-4))
+      const k = smoothing(dt, SHIP.ATTITUDE_LAG)
       att.yaw += (yawTarget - att.yaw) * k
       att.roll += (rollTarget - att.roll) * k
     },

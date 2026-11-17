@@ -1,3 +1,5 @@
+import { smoothstep } from './util/math'
+
 // Fixed-timestep game loop with an accumulator. Physics runs at a fixed dt for
 // a stable pendulum; rendering runs once per animation frame. Render gets the
 // real frame delta (for camera smoothing etc).
@@ -39,10 +41,9 @@ export function createHitStop(cfg: { SCALE: number; HOLD: number; EASE: number }
     scale(realDt: number): number {
       t += realDt
       if (t <= cfg.HOLD) return cfg.SCALE
-      const e = (t - cfg.HOLD) / Math.max(cfg.EASE, 1e-4)
-      if (e >= 1) return 1
-      const s = e * e * (3 - 2 * e)
-      return cfg.SCALE + (1 - cfg.SCALE) * s
+      const ease = Math.max(cfg.EASE, 1e-4)
+      if (t - cfg.HOLD >= ease) return 1
+      return cfg.SCALE + (1 - cfg.SCALE) * smoothstep(0, ease, t - cfg.HOLD)
     },
     reset(): void {
       t = Infinity

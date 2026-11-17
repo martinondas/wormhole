@@ -32,6 +32,7 @@
 import { type Session } from '../../src/session'
 import { updateCraft, type CraftState } from '../../src/craft'
 import { type InputState } from '../../src/input'
+import { createRng } from '../../src/util/rng'
 import { ENERGY, ENEMY, EXTRA_LIFE, GUN, HAZARD, LIFE_SHARD, LIVES, PICKUP, TREASURE } from '../../src/config'
 import {
   createPerception,
@@ -68,7 +69,6 @@ export const TICK_HZ = 30 // perception / key-update rate (the bot's "frame rate
 const ROLL_DT = 1 / 30 // rollout step for the look-ahead search
 
 export interface BotProfile {
-  name: string
   about: string
   // 'search' plans with the look-ahead search below; 'spinner' and 'tapper' are
   // scripted probes of one exploit or one failure case (see their profiles).
@@ -108,6 +108,29 @@ const base = {
   nearBias: 0.15,
 }
 
+// The scripted bots (spinner, tapper, passive) do not plan, aim or err: every
+// limit of the look-ahead search is zero for them.
+const scripted = {
+  ...base,
+  reaction: 0,
+  decisionHz: 1,
+  lookAhead: 0,
+  horizon: 0,
+  thetaNoise: 0,
+  minHold: 0,
+  motorJitter: 0,
+  modelError: 0,
+  attention: 0,
+  planSet: 'simple' as BotProfile['planSet'],
+  lead: 0,
+  fireTol: 0,
+  aimError: 0,
+  fireRange: 0,
+  lapsePerSec: 0,
+  lapseMax: 0,
+  topAversion: 0,
+}
+
 export const PROFILES: Record<string, BotProfile> = {
   kid: {
     ...base,
@@ -115,7 +138,6 @@ export const PROFILES: Record<string, BotProfile> = {
     modelError: 0.18,
     topAversion: 80,
     aimError: 0.3,
-    name: 'kid',
     about: 'slow and sloppy: 350 ms reaction, short sight, sprays the gun, loses attention',
     reaction: 0.35,
     decisionHz: 5,
@@ -137,7 +159,6 @@ export const PROFILES: Record<string, BotProfile> = {
     modelError: 0.1,
     topAversion: 50,
     aimError: 0.2,
-    name: 'average',
     about: 'ordinary player: 250 ms reaction, plans one swing ahead, loose aim',
     reaction: 0.25,
     decisionHz: 8,
@@ -159,7 +180,6 @@ export const PROFILES: Record<string, BotProfile> = {
     modelError: 0.05,
     topAversion: 20,
     aimError: 0.1,
-    name: 'good',
     about: 'skilled player: 180 ms reaction, plans swings to collect, leads targets',
     reaction: 0.18,
     decisionHz: 12,
@@ -181,7 +201,6 @@ export const PROFILES: Record<string, BotProfile> = {
     modelError: 0,
     topAversion: 0,
     aimError: 0,
-    name: 'oracle',
     about: 'no delay, no error, sees everything spawned: its deaths approximate unfair situations',
     // It sees a whole gem line at once and its key plans are coarse, so with the
     // default bias it gives up the next gem for a plan that looks richer and is not
@@ -208,7 +227,6 @@ export const PROFILES: Record<string, BotProfile> = {
     modelError: 0.1,
     topAversion: 50,
     aimError: 0.1,
-    name: 'camper',
     about: 'average player who never shoots and parks away from raiders (safe-spot exploit), still collects gems',
     fires: false,
     reaction: 0.25,
@@ -230,78 +248,28 @@ export const PROFILES: Record<string, BotProfile> = {
   // Holds one steer key (right or left, by seed) for the whole run and holds fire:
   // measures what an endless spin earns and costs.
   spinner: {
-    ...base,
+    ...scripted,
     brain: 'spinner',
-    motorJitter: 0,
-    modelError: 0,
-    topAversion: 0,
-    aimError: 0,
-    name: 'spinner',
     about: 'holds one steer key for the whole run and fires constantly (endless-spin exploit)',
-    reaction: 0,
-    decisionHz: 1,
-    lookAhead: 0,
-    horizon: 0,
-    thetaNoise: 0,
-    minHold: 0,
-    attention: 0,
-    planSet: 'simple',
-    lead: 0,
-    fireTol: 0,
-    fireRange: 0,
-    lapsePerSec: 0,
-    lapseMax: 0,
   },
   // Rests at the bottom and collects nothing. It shoots a raider on its line, and
   // when a raider on its line shows the firing tell it waits 250 ms (its reaction),
   // taps 150 ms away and lets go. Its bolt hits are the "I dodged and it still hit
   // me" case: the pendulum carries the craft back onto the line before the bolt lands.
   tapper: {
-    ...base,
+    ...scripted,
     brain: 'tapper',
-    motorJitter: 0,
-    modelError: 0,
-    topAversion: 0,
-    aimError: 0,
-    name: 'tapper',
     about: 'rests at the bottom, shoots raiders on its line, answers a tell on its line with one 150 ms tap away',
     reaction: 0.25,
     decisionHz: 30,
-    lookAhead: 0,
-    horizon: 0,
-    thetaNoise: 0,
-    minHold: 0,
-    attention: 0,
-    planSet: 'simple',
-    lead: 0,
     fireTol: GUN.HIT_ANGLE,
     fireRange: 110,
-    lapsePerSec: 0,
-    lapseMax: 0,
   },
   passive: {
-    ...base,
-    motorJitter: 0,
-    modelError: 0,
-    topAversion: 0,
-    aimError: 0,
-    name: 'passive',
+    ...scripted,
     about: 'no input at all: the craft hangs at the bottom',
     steers: false,
     fires: false,
-    reaction: 0,
-    decisionHz: 1,
-    lookAhead: 0,
-    horizon: 0,
-    thetaNoise: 0,
-    minHold: 0,
-    attention: 0,
-    planSet: 'simple',
-    lead: 0,
-    fireTol: 0,
-    fireRange: 0,
-    lapsePerSec: 0,
-    lapseMax: 0,
   },
 }
 
@@ -324,19 +292,6 @@ function buildPlans(set: BotProfile['planSet'], horizon: number): Plan[] {
   // wait, then push (timing a late move)
   for (const a of [-1, 1]) for (const w of [0.2, 0.4, 0.7]) for (const d of [0.2, 0.5]) push(0, w, a, d)
   return plans
-}
-
-// Small seeded generator for the bot's own noise, separate from the gameplay
-// randomness so a bot never shifts the spawn sequence.
-function makeRng(seed: number): () => number {
-  let s = seed >>> 0
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0
-    let t = s
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 0x100000000
-  }
 }
 
 // Deterministic per-object error in [-1, 1] (roughly bell-shaped), keyed by the
@@ -395,7 +350,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
   const tgTravel = new Float64Array(MAX_TARGETS)
   let nTg = 0
 
-  let rng = makeRng(1)
+  let rng = createRng(1) // the bot's own noise, separate from the gameplay randomness so a bot never shifts the spawn sequence
   let salt = 1
   let nextDecision = 0
   let lapseUntil = -1
@@ -417,7 +372,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
     fire: false,
 
     reset(seed: number): void {
-      rng = makeRng(seed ^ 0x9e3779b9)
+      rng = createRng(seed ^ 0x9e3779b9)
       salt = (seed * 2654435761) >>> 0
       head = -1
       filled = 0

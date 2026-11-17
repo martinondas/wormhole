@@ -4,18 +4,15 @@
 // with stub wall objects. Two fields wired with mutual `avoid` must never hold two
 // objects inside the same SPAWN_CLEAR window - across the initial layout and
 // hundreds of recycles. A control pair WITHOUT avoid must show overlaps under the
-// same detector, so a silently-broken detector cannot pass vacuously.
+// same detector, so a silently-broken detector cannot pass vacuously. Every section
+// seeds the gameplay generator, so a run is reproducible.
 import { Group } from 'three'
 import { PHYSICS, HAZARD, FEEL } from '../src/config'
 import { createField, type Field } from '../src/world/field'
 import { type WallObject } from '../src/world/wallObject'
 import { type CraftState } from '../src/craft'
-
-let failed = 0
-function check(name: string, cond: boolean, detail = ''): void {
-  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -> ' + detail : ''}`)
-  if (!cond) failed++
-}
+import { seedRng } from '../src/util/rng'
+import { check, finish } from './sim-kit'
 
 const stub = (): WallObject => ({
   object: new Group(),
@@ -80,6 +77,7 @@ function fly(a: Field, b: Field, seconds: number): number {
 
 // ---- V1) mutually-avoiding pair: zero overlaps across layout + recycles ----
 ;(() => {
+  seedRng(1)
   const pair: Field[] = []
   const nextAvoid = (): ((d: number, theta: number) => boolean) => {
     const self = pair.length
@@ -93,12 +91,14 @@ function fly(a: Field, b: Field, seconds: number): number {
 
 // ---- V2) control pair (no avoid): the detector DOES see overlaps ----
 ;(() => {
+  seedRng(2)
   const v = fly(mk({}), mk({}), 60)
   check('V2 control pair overlaps without avoid', v > 0, `violation-samples=${v}`)
 })()
 
 // ---- V3) nudge fallback: identical fixed angle, so only the z-nudge can help ----
 ;(() => {
+  seedRng(3)
   const pair: Field[] = []
   const nextAvoid = (): ((d: number, theta: number) => boolean) => {
     const self = pair.length
@@ -161,6 +161,7 @@ function passRun(c: PassCase): { arms: number; passed: number; hits: number; mis
   return { arms, passed: arms - ahead, hits, misses, nears }
 }
 ;(() => {
+  seedRng(4)
   const near = HAZARD.CAPTURE_ANGLE + FEEL.NEAR_MINE_EXTRA / 2 // inside the near band, outside the hit cone
   const far = HAZARD.CAPTURE_ANGLE + FEEL.NEAR_MINE_EXTRA + 0.3
   const hit = passRun({ theta: 0, consume: true })
@@ -177,8 +178,9 @@ function passRun(c: PassCase): { arms: number; passed: number; hits: number; mis
 })()
 
 // ---- feed mode: the pool starts parked and is filled through spawn() ----
-// (the gem and mine fields with gem lines on; see world/sequencer.ts)
+// (the gem and mine fields; see world/sequencer.ts)
 ;(() => {
+  seedRng(5)
   let hits = 0
   let misses = 0
   let nears = 0
@@ -244,5 +246,4 @@ function passRun(c: PassCase): { arms: number; passed: number; hits: number; mis
   check('F9 reset parks everything and clears the failed-spawn count', live() === 0 && shown() === 0 && field.failedSpawns === 0)
 })()
 
-console.log(failed === 0 ? '\nALL FIELDS SIM CHECKS PASSED' : `\n${failed} CHECK(S) FAILED`)
-process.exit(failed === 0 ? 0 : 1)
+finish('FIELDS SIM')

@@ -1,6 +1,6 @@
 // Text output for the playtest harness: the compact results table, the per-level
 // pacing table, and the baseline-vs-current comparison.
-import { type Aggregate } from './metrics'
+import { type Aggregate, type ScalarKey, type Stat } from './metrics'
 
 const pad = (s: string, n: number): string => (s.length >= n ? s : s + ' '.repeat(n - s.length))
 const lpad = (s: string, n: number): string => (s.length >= n ? s : ' '.repeat(n - s.length) + s)
@@ -22,8 +22,7 @@ export function summaryTable(results: Aggregate[]): string {
     'bolts aimed/tell/hit', 'raiders (4+)', 'dead air', 'flat/quiet', 'lives+', 'bottom/upper', 'loops', 'rev/min',
   ]
   const rows = results.map((a) => {
-    const s = a.stats
-    const g = (k: string): { mean: number; median: number; p10: number; p90: number } => s[k]!
+    const g = (k: ScalarKey): Stat => a.stats[k]
     return [
       a.bot,
       a.difficulty,
@@ -60,7 +59,7 @@ export function probeTable(results: Aggregate[]): string {
     'gate 1st try', 'gem chain med/max', 'near miss/min', 'loops/min', 'waves cleared/min', 'raider-free', 'bolt+mine s/min',
   ]
   const rows = results.map((a) => {
-    const g = (k: string): { mean: number; median: number; min: number; n: number } => a.stats[k] ?? { mean: 0, median: 0, min: 0, n: 0 }
+    const g = (k: ScalarKey): Stat => a.stats[k]
     return [
       a.bot,
       a.difficulty,
@@ -104,7 +103,7 @@ export function levelTable(a: Aggregate, maxRows = 20): string {
 
 // Metrics shown in the comparison, with the direction that is "more" (not good or
 // bad: the reader decides, since easier is not always better).
-const COMPARE: [string, (x: number) => string][] = [
+const COMPARE: [ScalarKey, (x: number) => string][] = [
   ['time', f0], ['level', f1], ['score', f0], ['hitsPerMin', f2], ['timeToFirstHit', f0],
   ['livesLostMine', f2], ['livesLostBolt', f2], ['livesLostRam', f2],
   ['levelRepeats', f2], ['gemShare', pct], ['emptyGunShare', pct], ['accuracy', pct], ['killsPerMin', f2],
@@ -126,13 +125,15 @@ export function compareTable(baseline: Aggregate[], current: Aggregate[]): strin
       continue
     }
     const rows = COMPARE.map(([k, fmt]) => {
-      const b = base.stats[k]?.mean ?? 0
-      const c = cur.stats[k]?.mean ?? 0
+      // a baseline file written before a metric existed has no entry for it: shown as 0
+      const was: Stat | undefined = base.stats[k]
+      const b = was?.mean ?? 0
+      const c = cur.stats[k].mean
       const d = c - b
       const rel = Math.abs(b) > 1e-9 ? ` (${d >= 0 ? '+' : ''}${((d / Math.abs(b)) * 100).toFixed(0)}%)` : ''
       // standard error of the difference of the two means: a delta below about two
       // of these is within run-to-run noise
-      const se = Math.sqrt((base.stats[k]?.sd ?? 0) ** 2 / Math.max(base.runs, 1) + (cur.stats[k]?.sd ?? 0) ** 2 / Math.max(cur.runs, 1))
+      const se = Math.sqrt((was?.sd ?? 0) ** 2 / Math.max(base.runs, 1) + cur.stats[k].sd ** 2 / Math.max(cur.runs, 1))
       const real = se > 0 && Math.abs(d) > 2 * se ? 'CHANGED' : ''
       return [k, '', fmt(b), fmt(c), (d >= 0 ? '+' : '-') + fmt(Math.abs(d)).replace('-', '') + rel, fmt(2 * se), real]
     })

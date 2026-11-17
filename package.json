@@ -10,17 +10,16 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.playtest.json",
     "shoot": "node scripts/shoot.ts",
-    "sim": "esbuild scripts/combat-sim.ts --bundle --platform=node --format=esm --outfile=.cache/combat-sim.mjs && node .cache/combat-sim.mjs",
-    "sim:levels": "esbuild scripts/levels-sim.ts --bundle --platform=node --format=esm --outfile=.cache/levels-sim.mjs && node .cache/levels-sim.mjs",
-    "playtest": "esbuild scripts/playtest.ts --bundle --platform=node --format=esm --log-level=warning --outfile=.cache/playtest.mjs && node .cache/playtest.mjs",
+    "sim": "node scripts/run.mjs combat-sim",
+    "sim:levels": "node scripts/run.mjs levels-sim",
+    "playtest": "node scripts/run.mjs playtest",
     "playtest:baseline": "npm run playtest -- --matrix baseline --runs 60 --seed 1 --max-seconds 900 --out playtest/baseline.json",
     "playtest:compare": "npm run playtest -- --matrix baseline --runs 60 --seed 1 --max-seconds 900 --compare playtest/baseline.json",
     "playtest:next": "npm run playtest -- --matrix next --runs 60 --seed 1 --max-seconds 900 --levels --out playtest/next-level.json",
-    "playtest:live": "esbuild scripts/playtest/live-agent.ts --bundle --format=iife --log-level=warning --outfile=.cache/live-agent.js && node scripts/playtest-live.ts",
-    "sim:fields": "esbuild scripts/fields-sim.ts --bundle --platform=node --format=esm --outfile=.cache/fields-sim.mjs && node .cache/fields-sim.mjs",
-    "sim:sequence": "esbuild scripts/sequence-sim.ts --bundle --platform=node --format=esm --outfile=.cache/sequence-sim.mjs && node .cache/sequence-sim.mjs",
-    "sim:feel": "esbuild scripts/feel-sim.ts --bundle --platform=node --format=esm --outfile=.cache/feel-sim.mjs && node .cache/feel-sim.mjs",
-    "sim:swing": "esbuild scripts/swing-sim.ts --bundle --platform=node --format=esm --outfile=.cache/swing-sim.mjs && node .cache/swing-sim.mjs"
+    "playtest:live": "esbuild scripts/playtest/live-agent.ts --bundle --format=iife --log-level=warning --outfile=.cache/live-agent.js && node scripts/run.mjs playtest-live",
+    "sim:fields": "node scripts/run.mjs fields-sim",
+    "sim:sequence": "node scripts/run.mjs sequence-sim",
+    "sim:feel": "node scripts/run.mjs feel-sim"
   },
   "dependencies": {
     "three": "^0.184.0"

@@ -1,5 +1,6 @@
 import { PHYSICS } from '../config'
 import { stepSwing, type SwingState } from '../craft'
+import { DEG } from '../util/math'
 
 // Gem-line phrases: the static library the director (world/sequencer.ts) places on
 // the tube wall, and the "ghost" that turns a phrase into angles.
@@ -19,7 +20,8 @@ import { stepSwing, type SwingState } from '../craft'
 // every tier.
 
 export type Steer = -1 | 0 | 1
-export type Tier = 0 | 1 | 2
+/** How busy a phrase makes the wall: 0 calm, 1 busy, 2 a hard phrase. */
+export type Load = 0 | 1 | 2
 /** A ghost time: seconds from the phrase start, or [apex index, offset in s]. */
 export type At = number | readonly [apex: number, offset: number]
 
@@ -37,7 +39,7 @@ export interface Phrase {
   // tuning level the phrase unlocks at in the slow / normal / fast tier (null = never)
   unlock: readonly [number | null, number | null, number | null]
   weight: readonly [number, number, number] // pick weight per tier
-  load: 0 | 1 | 2 // how busy it makes the wall (the raiders ease off under load 2)
+  load: Load // the raiders ease off under load 2
   // per tier: how many other phrases lie between two uses of this one at least (default 2;
   // 0 = it may follow itself)
   spacing?: readonly [number, number, number]
@@ -50,7 +52,7 @@ export interface Phrase {
 }
 
 // The hold of an arc, per tier: the heavier the gravity, the longer the hold, so the
-// apex is above the horizontal in every tier (about 117, 122 and 142 degrees).
+// apex is above the horizontal in every tier.
 const ARC_HOLD: PerTier = [0.58, 0.5, 0.45]
 
 // Positive steer swings the ghost to positive theta; the director mirrors a phrase
@@ -67,7 +69,7 @@ export const PHRASES: readonly Phrase[] = [
   },
   {
     // left-right-left: a small swing one way, a bigger one back, and a third that
-    // carries above the horizontal (about 110 to 120 degrees)
+    // carries above the horizontal
     id: 'pump',
     unlock: [1, 0, 0],
     weight: [1, 4, 1.5],
@@ -162,10 +164,9 @@ export const PHRASES: readonly Phrase[] = [
   },
 ]
 
-const DEG = Math.PI / 180
 const MAX_HOLD_SECONDS = 3 // a hold that has not reached its angle by then ends anyway
 const MAX_APEX = 8
-const MAX_ITEMS = 8
+export const MAX_ITEMS = 8 // most gems, and most mines, one phrase holds
 const TAIL = 0.1 // s a phrase lasts beyond its last item
 
 /** One phrase in one tier: the ghost's angle over time and where its items sit. */

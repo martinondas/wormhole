@@ -1,4 +1,5 @@
 import { AUDIO, ENEMY, FEEL } from './config'
+import { clamp } from './util/math'
 
 // Web Audio mixer for the game. Architecture mirrors the rest of the codebase:
 // createAudio() owns all state and exposes a tiny API; main.ts is the single
@@ -24,7 +25,7 @@ export interface Audio {
   unlock(): void // resume the context now (call from a user-gesture handler)
   // pan -1 (left) .. 1 (right); gain multiplies the cue's volume; step picks the
   // pitch of a laddered cue (the gem chime climbs with the gem chain; for the
-  // shard tone it is the progress through the set, 0..1).
+  // shard tone it is 0 for the first shard of a set .. 1 for the last before the completing one).
   play(name: SfxName, pan?: number, gain?: number, step?: number): void
   playMusic(name: MusicName): void // switch the looping music track
   playAccel(): void // one-shot accelerate layer over the music (speed step-up)
@@ -141,7 +142,7 @@ export function createAudio(): Audio {
   const SYNTHS: Record<string, Synth> = {
     // two-note chime; the upper note climbs the gem ladder with the chain
     gem(out, now, step) {
-      const top = GEM_LADDER[Math.max(0, Math.min(step, GEM_LADDER.length - 1))]!
+      const top = GEM_LADDER[clamp(step, 0, GEM_LADDER.length - 1)]!
       blip(out, now, 'triangle', top / 1.5, top / 1.5, 0.09, 0.7)
       blip(out, now + 0.07, 'triangle', top, top, 0.14, 0.7)
     },
@@ -210,11 +211,11 @@ export function createAudio(): Audio {
       for (let i = 0; i < notes.length; i++) blip(out, now + i * step, 'triangle', notes[i]!, notes[i]!, 0.13, 0.6)
       blip(out, now + notes.length * step, 'triangle', 1568, 1568, 0.22, 0.5) // G6 sparkle tail
     },
-    // a caught life shard: one rising pair. `step` is the progress through the set
-    // (0..1, caught / set size), so the pitch climbs across the whole set, from C5
+    // a caught life shard: one rising pair. `step` runs from 0 for the first shard of
+    // a set to 1 for the last one before the completing shard, so the pitch climbs across the whole set, from C5
     // to just under C6, where the 1-up cue of the completing shard ends
     shard(out, now, step) {
-      const n = 523 * Math.pow(2, (11 / 12) * Math.max(0, Math.min(step, 1))) // C5 .. B5
+      const n = 523 * Math.pow(2, (11 / 12) * clamp(step, 0, 1)) // C5 .. B5
       blip(out, now, 'triangle', n, n, 0.1, 0.6)
       blip(out, now + 0.075, 'triangle', n * 1.5, n * 1.5, 0.16, 0.5)
     },
@@ -354,7 +355,7 @@ export function createAudio(): Audio {
         const g = ctx.createGain()
         g.gain.value = gain
         const p = ctx.createStereoPanner()
-        p.pan.value = Math.max(-1, Math.min(1, pan))
+        p.pan.value = clamp(pan, -1, 1)
         g.connect(p)
         p.connect(bus)
         out = g

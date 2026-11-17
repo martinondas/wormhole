@@ -7,9 +7,10 @@ import { ENERGY, LIVES, GUN, LIFE_SHARD } from './config'
 // kills, each scaled by the level multiplier; there is no passive distance
 // baseline, so a pure dodger scores nothing. `elapsed` is the run timer (HUD +
 // game-over) and the level reached captures how far you got. Best persists locally.
-// The best score of the gem-line scoring (TREASURE.SCORE, more gems per cycle).
-// The value an earlier version stored under 'wormhole.best' is left in place.
+// v2: scores are not comparable with the ones stored under the older 'wormhole.best' key.
 const BEST_KEY = 'wormhole.best.v2'
+
+export type ShardCatch = 'declined' | 'progress' | 'restored'
 
 export interface Game {
   energy: number // weapon charge (ammo); player-facing label is WEAPON
@@ -30,9 +31,9 @@ export interface Game {
   canFire(): boolean // enough charge (and not over) to fire one shot
   spendEnergy(n: number): void // gun cost; clamps at 0, never ends the run
   addLife(): boolean // extra-life pickup; true if a life was actually added (false at full lives / over)
-  // A caught life shard: 0 = declined (full lives / over), 1 = progress toward the
-  // next life, 2 = that shard completed the set and a life was restored.
-  addShard(): 0 | 1 | 2
+  // A caught life shard: declined (full lives / over), progress toward the next
+  // life, or restored (that shard completed the set and a life came back).
+  addShard(): ShardCatch
   hitHazard(): boolean // true if the hit landed (a life was lost); false if invulnerable / over
   start(): void // leave the title screen and begin the first run
   update(dt: number): void
@@ -98,7 +99,7 @@ export function createGame(): Game {
       this.scoreBonus += n
     },
 
-    // Count a collected gem toward the current level's gate. main resets this to 0
+    // Count a collected gem toward the current level's gate. The session resets this to 0
     // on the level-up edge (when flight advances the level) and toTitle clears it.
     addGem(): void {
       this.gemsThisLevel += 1
@@ -136,13 +137,13 @@ export function createGame(): Game {
     // then, like for the cross). The set restores exactly one life and the count starts again. Like
     // addLife it is not gated on `lives <= 0`: the last shard of a set caught in the
     // step of a fatal hit saves the run.
-    addShard(): 0 | 1 | 2 {
-      if (this.over || this.lives >= LIVES.START) return 0
+    addShard(): ShardCatch {
+      if (this.over || this.lives >= LIVES.START) return 'declined'
       this.shards += 1
-      if (this.shards < this.shardsPerLife) return 1
+      if (this.shards < this.shardsPerLife) return 'progress'
       this.shards = 0
       this.lives += 1
-      return 2
+      return 'restored'
     },
 
     // Check invuln FIRST, before spending a life: if two mines overlap the ship

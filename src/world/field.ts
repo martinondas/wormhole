@@ -1,7 +1,7 @@
 import { Group } from 'three'
 import { RIDE_RADIUS, SPAWN_CLEAR } from '../config'
 import { type CraftState } from '../craft'
-import { angleDiff } from '../util/math'
+import { angleDiff, DEG } from '../util/math'
 import { rand } from '../util/rng'
 import { type WallObject } from './wallObject'
 import { farScale } from './farScale'
@@ -42,7 +42,7 @@ export interface FieldConfig {
   sampleTheta?: () => number // spawn-angle distribution (default: uniform 0..2pi)
   // Optional per-section spacing multiplier keyed by world distance: the gap
   // BEFORE an object becomes spawnSpacing * spacingScaleAt(distance). A value < 1
-  // packs objects denser over that stretch (e.g. more mines in slow sections).
+  // packs objects denser over that stretch.
   // Default: 1 everywhere (uniform spacing).
   spacingScaleAt?: (worldDistance: number) => number
   // Fired once when the ship reaches an armed object; (theta, z) is where the
@@ -70,14 +70,12 @@ export interface FieldConfig {
 // Spawn-angle bias keyed by "angle from the bottom" (0 deg = bottom where the
 // craft rests, 180 deg = top). Most spawns land in the favored `band`, the rest
 // in `rest`; the left/right side is always uniform. Lets orbs sit mid-wall (you
-// must swing up for energy) and mines hug the bottom (you must swing away).
+// must swing up for energy).
 export interface AngleBias {
   band: [number, number] // favored range, degrees from bottom
   bias: number // probability of landing in the band (0..1)
   rest: [number, number] // fallback range, degrees from bottom
 }
-
-const DEG = Math.PI / 180
 
 export function biasedAngle(b: AngleBias): () => number {
   return () => {
@@ -139,6 +137,7 @@ export function createField(cfg: FieldConfig): Field {
   // angle-only hit test (compare craft.theta to slot.theta) is valid.
   const radius = RIDE_RADIUS
   const popScale = cfg.popScale ?? 1.8
+  const growTime = cfg.growTime ?? 0
   const slots: Slot[] = []
   let consumed = 0
   let failedSpawns = 0
@@ -154,6 +153,8 @@ export function createField(cfg: FieldConfig): Field {
   // Place a slot at a distance and re-arm it: clears triggered + state + the
   // pop transform. Both initial spawn and recycle/reset funnel through here, so
   // `triggered` can never be left stuck on across a recycle or a restart.
+  // `theta` given: a feed spawn at an exact place. Omitted: a random spawn, which
+  // samples its own angle and de-conflicts against the other fields.
   function arm(slot: Slot, worldDistance: number, theta?: number): void {
     slot.worldDistance = worldDistance
     slot.theta = theta ?? sampleTheta()
@@ -259,7 +260,7 @@ export function createField(cfg: FieldConfig): Field {
         // (3) place on the wall + idle spin/bob/pulse
         place(slot, z)
         if (slot.growT < 1) {
-          slot.growT = Math.min(1, slot.growT + dt / (cfg.growTime as number))
+          slot.growT = Math.min(1, slot.growT + dt / growTime)
           slot.obj.object.scale.multiplyScalar(growScale(slot.growT))
         }
         slot.obj.update(dt)
@@ -321,7 +322,7 @@ export function createField(cfg: FieldConfig): Field {
         if (slot.state !== 'parked') continue
         arm(slot, worldDistance, theta)
         place(slot, lastCraftDistance - worldDistance)
-        if (cfg.growTime) {
+        if (growTime > 0) {
           slot.growT = 0
           slot.obj.object.scale.multiplyScalar(growScale(0))
         }

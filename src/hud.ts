@@ -1,4 +1,5 @@
 import { ENERGY, LIVES, GUN, DIFFICULTY, HUD } from './config'
+import { type DamageCause } from './session'
 
 // Minimal in-theme HUD as a DOM overlay (crisp text, no bloom interference):
 // level / score / best top-left, run time top-right, ships + weapon charge
@@ -22,7 +23,7 @@ export interface HudState {
   level: number // current level (1-based for display)
   best: number
   difficultyIndex: number // selected DIFFICULTY.MODES index (HUD corner + game-over panel)
-  deathCause: string // what cost the last life ('mine' | 'bolt' | 'ram'), named on the game-over panel; '' if none
+  deathCause: DamageCause | undefined // what cost the last life, named on the game-over panel
 }
 
 export interface Hud {
@@ -157,8 +158,8 @@ const CSS = `
 }
 `
 
-// Game-over cause line, by the DamageCause of the last life lost.
-const CAUSE_TEXT: Record<string, string> = { mine: 'HIT BY MINE', bolt: 'RAIDER BOLT', ram: 'RAIDER RAM' }
+// Game-over cause line, by the cause of the last life lost.
+const CAUSE_TEXT: Record<DamageCause, string> = { mine: 'HIT BY MINE', bolt: 'RAIDER BOLT', ram: 'RAIDER RAM' }
 
 // Score multiplier as shown on the level banner: 1.5 -> "1.5", 2 -> "2", 2.25 -> "2.25".
 function fmtMult(m: number): string {
@@ -285,13 +286,13 @@ export function createHud(): Hud {
   let lastLives = -1
   let lastShards = -1
   let lastPerLife = -1
-  let lastBarHidden = false
+  let lastLivesOver = false
   function renderLives(lives: number, shards: number, perLife: number, over: boolean): void {
-    if (lives === lastLives && shards === lastShards && perLife === lastPerLife && over === lastBarHidden) return
+    if (lives === lastLives && shards === lastShards && perLife === lastPerLife && over === lastLivesOver) return
     lastLives = lives
     lastShards = shards
     lastPerLife = perLife
-    lastBarHidden = over
+    lastLivesOver = over
     const fill = Math.min(1, shards / perLife)
     let glyphs = ''
     for (let i = 0; i < LIVES.START; i++) {
@@ -343,7 +344,7 @@ export function createHud(): Hud {
   // and the string allocations that went with it.
   let lastScore = -1
   let lastLevel = -1
-  let lastCause = '-'
+  let lastCause: DamageCause | undefined
   let lastBest = -1
   let lastTimeTenths = -1
   let lastSpd = -1
@@ -419,11 +420,11 @@ export function createHud(): Hud {
       const prompt = s.paused ? 'PRESS ESC TO RESUME' : 'PRESS SPACE TO START'
       if (prompt !== lastPrompt) { elTitlePrompt.textContent = prompt; lastPrompt = prompt }
       if (s.over !== lastOver) { elOver.classList.toggle('show', s.over); lastOver = s.over }
-      // game-over panel. The title is static ("SHIP DESTROYED") - lives are the
-      // only fail condition now, so it is not computed here. elapsed is frozen at
+      // game-over panel. The title is static ("SHIP DESTROYED"): lives are the
+      // only fail condition. elapsed is frozen at
       // game-over, so the time line writes once on the run-ending edge.
       if (s.over) {
-        if (s.deathCause !== lastCause) { elOverCause.textContent = CAUSE_TEXT[s.deathCause] ?? ''; lastCause = s.deathCause }
+        if (s.deathCause !== lastCause) { elOverCause.textContent = s.deathCause ? CAUSE_TEXT[s.deathCause] : ''; lastCause = s.deathCause }
         if (score !== lastOverScore) { elOverScore.textContent = 'SCORE ' + pad(score, 7); lastOverScore = score }
         if (level !== lastOverLevel) { elOverLevel.textContent = 'REACHED LEVEL ' + level + ' - ' + diffMode(s.difficultyIndex).name; lastOverLevel = level }
         if (timeTenths !== lastOverTime) { elOverTime.textContent = 'TIME ' + fmtTime(s.elapsed); lastOverTime = timeTenths }

@@ -6,7 +6,7 @@ import { type HullId } from './world/ship'
 // wiring in main.ts. Both choices persist locally, so a returning player keeps
 // their setup and Space still starts instantly with the last-used settings.
 const SHIP_KEY = 'wormhole.ship'
-const DIFF_KEY = 'wormhole.difficulty'
+export const DIFF_KEY = 'wormhole.difficulty'
 
 export interface Menu {
   row: number // 0 = SHIP, 1 = DIFFICULTY

@@ -1,6 +1,5 @@
 import { CAMERA } from '../config'
-
-const DEG = Math.PI / 180
+import { DEG } from '../util/math'
 
 // Vertical FOV (degrees) for an aspect ratio and a speed widening `offsetDeg`
 // (0..CAMERA.FOV_SPEED). Three's camera.fov is vertical, so a wide window would

@@ -14,32 +14,17 @@
 //      level-up the waiting phrases still fit a replay at the new speed;
 //   C) an open-loop input-jitter model on arc and pump (a grade of the phrases
 //      against each other, not a prediction of human catch rates);
-//   D) the title screen, the pressure signal, a difficulty or flight-mode change,
-//      and the game with gem lines off.
-import { createSession, type Session } from '../src/session'
-import { createFlight, type Flight } from '../src/flight'
+//   D) the title screen, the pressure signal, and a difficulty or flight-mode change.
+import { createSession, type Session, type SessionFx } from '../src/session'
+import { createFlight, TIERS, type Flight } from '../src/flight'
 import { stepSwing, type SwingState } from '../src/craft'
 import { PHRASES, buildTrace, segmentSeconds, type Phrase, type Trace } from '../src/world/phrases'
-import { seedRng } from '../src/util/rng'
-import { angleDiff } from '../src/util/math'
-import { CLIMB, DIFFICULTY, FLIGHT, HAZARD, LEVELS, PHYSICS, SEQUENCE, TREASURE } from '../src/config'
+import { createRng, seedRng } from '../src/util/rng'
+import { angleDiff, DEG } from '../src/util/math'
+import { DIFFICULTY, HAZARD, LEVELS, PHYSICS, SEQUENCE, TREASURE } from '../src/config'
+import { check, finish, driveSession, STEP_DT as DT } from './sim-kit'
 
-// --climb-fade <n>: run every check with another CLIMB.FADE (0 = the swing with no climb
-// fade), to show the gem lines are flyable with the fade on and off.
-{
-  const i = process.argv.indexOf('--climb-fade')
-  if (i >= 0) CLIMB.FADE = Number(process.argv[i + 1])
-  console.log(`CLIMB.FADE = ${CLIMB.FADE}`)
-}
-
-let failed = 0
-function check(name: string, cond: boolean, detail = ''): void {
-  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -> ' + detail : ''}`)
-  if (!cond) failed++
-}
-
-const DT = 1 / PHYSICS.HZ
-const TIERS = [0, 1, 2]
+const IDLE = { steerTarget: 0, fire: false } // the craft rests at the bottom
 const scripted = PHRASES.filter((p) => p.script.length > 0)
 const modeNames = DIFFICULTY.MODES.map((m) => m.name)
 
@@ -89,7 +74,7 @@ function replay(
     const j = jitter ? jitter() : 0
     const seconds = seg.untilDeg ? segmentSeconds(seg, tier) : Math.max(0, segmentSeconds(seg, tier) + j)
     const steps = Math.round(seconds * PHYSICS.HZ)
-    const target = seg.untilDeg ? (seg.untilDeg[tier]! * Math.PI) / 180 : 0
+    const target = seg.untilDeg ? seg.untilDeg[tier]! * DEG : 0
     let extra = Math.round(Math.max(0, j) * PHYSICS.HZ) // a late release: hold on this many steps past the angle
     for (let k = 0; k < steps; k++) {
       // an early release lets go when the angle is still |j| seconds away
@@ -144,7 +129,7 @@ const levelFor = (f: Flight, mode: number, T: number): number | null => {
         // how far from the bottom the path gets (unwrapped: above 180 = over the top)
         let peak = 0
         for (let t = 0; t <= trace.duration; t += DT) peak = Math.max(peak, Math.abs(trace.thetaAt(t)))
-        const peakDeg = (peak * 180) / Math.PI
+        const peakDeg = peak / DEG
         if (mode === 0) peaks += ` ${phrase.id}/t${tier} ${peakDeg.toFixed(0)}`
         // a ring: over the top and down to the horizontal on the far side at least
         if (phrase.id === 'loop' && peakDeg < 270) loopShort += ` ${modeNames[mode]}/t${tier}:${peakDeg.toFixed(0)}`
@@ -216,8 +201,8 @@ function runDirector(mode: number, cycles: number, seed: number) {
   let prevId = ''
   let prevPrevId = ''
   let session!: Session
-  const fx = {
-    phrasePlaced: (p: Rec & { sectionStart: number; sectionEnd: number; clearEnd: number; level: number; mines: number }) => {
+  const fx: SessionFx = {
+    phrasePlaced: (p) => {
       if (!session) return // the layout made while the session is built is replaced by reset()
       stats.phrases++
       if (stats.phrases <= SEQUENCE.WARMUP_PHRASES) {
@@ -250,7 +235,7 @@ function runDirector(mode: number, cycles: number, seed: number) {
       recs.push({ id: p.id, tier: p.tier, mirror: p.mirror, start: p.start, end: p.end, speed: p.speed, gems: p.gems, cycle: p.cycle })
       if (recs.length > 12) recs.shift()
     },
-    sectionPlanned: (tier: number, mines: number, budget: number) => {
+    sectionPlanned: (tier, mines, budget) => {
       if (!session) return
       if (warmupInSection) {
         // a section that holds the mine-free opening of the run is under its budget by design
@@ -265,7 +250,7 @@ function runDirector(mode: number, cycles: number, seed: number) {
         stats.worstMine = `tier ${tier}: ${mines} mines, budget ${budget.toFixed(2)}`
       }
     },
-    cyclePlanned: (_cycle: number, gems: number) => {
+    cyclePlanned: (_cycle, gems) => {
       if (session) stats.cycleGems.push(gems)
     },
     levelUp: () => {
@@ -285,7 +270,7 @@ function runDirector(mode: number, cycles: number, seed: number) {
         const gT: number[] = []
         const gTheta: number[] = []
         const mirror = r.mirror ? -1 : 1
-        session.fields[1]!.visit((theta, wd) => {
+        session.fieldByKind.gem.visit((theta, wd) => {
           if (wd >= start - 0.5 && wd <= end + 0.5) {
             gT.push((wd - start) / speed)
             gTheta.push(mirror * theta) // back to the unmirrored phrase; the replay mirrors it again
@@ -297,27 +282,22 @@ function runDirector(mode: number, cycles: number, seed: number) {
       }
     },
   }
-  session = createSession(fx as never)
+  session = createSession(fx)
   session.flight.setDifficulty(mode)
   seedRng(seed)
   session.reset()
   session.begin()
-  const input = { steerTarget: 0, fire: false }
-  let steps = 0
-  while (session.flight.cycles < cycles && steps < PHYSICS.HZ * 60 * cycles) {
-    if (steps % 2 === 0) {
-      const advance = session.flight.cycles % 3 !== 2
-      session.game.gemsThisLevel = advance ? session.flight.gemQuota(session.flight.level) : 0
-      session.preUpdate()
-    }
-    session.game.invuln = 1e9
-    session.game.lives = 3
-    session.step(input, DT)
-    steps++
-  }
-  stats.failedSpawns = session.fields[1]!.failedSpawns + session.fields[2]!.failedSpawns
-  session.fields[1]!.visit(() => stats.gemsLive++)
-  session.fields[2]!.visit(() => stats.minesLive++)
+  const advance = driveSession(session, IDLE, {
+    invulnerable: true,
+    beforeFrame: () => {
+      const levelUp = session.flight.cycles % 3 !== 2
+      session.game.gemsThisLevel = levelUp ? session.flight.gemQuota(session.flight.level) : 0
+    },
+  })
+  for (let steps = 0; session.flight.cycles < cycles && steps < PHYSICS.HZ * 60 * cycles; steps++) advance()
+  stats.failedSpawns = session.fieldByKind.gem.failedSpawns + session.fieldByKind.mine.failedSpawns
+  session.fieldByKind.gem.visit(() => stats.gemsLive++)
+  session.fieldByKind.mine.visit(() => stats.minesLive++)
   return { stats, session }
 }
 
@@ -353,17 +333,13 @@ for (let mode = 0; mode < DIFFICULTY.MODES.length; mode++) {
   check(`B5 ${name}: no failed spawn`, stats.failedSpawns === 0, `${stats.failedSpawns}`)
   check(`B5b ${name}: the first ${SEQUENCE.WARMUP_PHRASES} phrases of a run carry no mines`, stats.warmupMines === 0, `${stats.warmupMines}`)
   check(`B6 ${name}: after a level-up the waiting phrases still collect every gem`, stats.levelUps > CYCLES / 2 && stats.rescaleChecked > 0 && stats.rescaleMissed === 0, `${stats.levelUps} level-ups, ${stats.rescaleChecked} phrases replayed, ${stats.rescaleMissed} short`)
-  check(`B7 ${name}: no phrase comes back sooner than its spacing allows, rest between phrases at least GAP`, stats.repeats3 === 0 && stats.restMin >= SEQUENCE.GAP[1]! - 1e-6, `repeats=${stats.repeats3} shortest rest ${stats.restMin.toFixed(2)}s, mean ${(stats.restSum / stats.rests).toFixed(2)}s, longest ${stats.quietMax.toFixed(2)}s, over 4 s: ${stats.restsOver4}`)
+  check(`B7 ${name}: no phrase comes back sooner than its spacing allows, rest between phrases at least GAP`, stats.repeats3 === 0 && stats.restMin >= SEQUENCE.GAP[1] - 1e-6, `repeats=${stats.repeats3} shortest rest ${stats.restMin.toFixed(2)}s, mean ${(stats.restSum / stats.rests).toFixed(2)}s, longest ${stats.quietMax.toFixed(2)}s, over 4 s: ${stats.restsOver4}`)
 }
 
 // ---- C) open-loop input jitter on arc and pump ----
 ;(() => {
   const f = createFlight()
-  let s = 12345
-  const rnd = (): number => {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
-    return s / 0x100000000
-  }
+  const rnd = createRng(12345)
   const jitter = (): number => (rnd() * 2 - 1) * 0.08
   let worst = 1
   let line = ''
@@ -385,7 +361,7 @@ for (let mode = 0; mode < DIFFICULTY.MODES.length; mode++) {
   check('C1 +/-80 ms input jitter still collects at least 75% of the gems of arc and pump', worst >= 0.75, `worst ${Math.round(worst * 100)}% |${line}`)
 })()
 
-// ---- D) title screen, pressure, and the game with gem lines off ----
+// ---- D) title screen, pressure, and a difficulty or flight-mode change ----
 ;(() => {
   let firstId = ''
   let firstMirror = true
@@ -408,7 +384,7 @@ for (let mode = 0; mode < DIFFICULTY.MODES.length; mode++) {
   let gems = 0
   let farthest = 0
   let rightSide = 0
-  session.fields[1]!.visit((theta, wd) => {
+  session.fieldByKind.gem.visit((theta, wd) => {
     gems++
     farthest = Math.max(farthest, wd)
     if (wd < SEQUENCE.FIRST_AT + 60 && theta > 0) rightSide++
@@ -418,17 +394,17 @@ for (let mode = 0; mode < DIFFICULTY.MODES.length; mode++) {
   let wrong = 0
   for (const l of loads) {
     const mid = (l.start + l.end) / 2
-    if (session.sequencer!.pressureAt(mid) !== l.load) wrong++
-    if (session.sequencer!.pressureAt(l.start - 0.5) !== 0 && !loads.some((o) => o !== l && o.start <= l.start - 0.5 && o.end >= l.start - 0.5)) wrong++
+    if (session.sequencer.pressureAt(mid) !== l.load) wrong++
+    if (session.sequencer.pressureAt(l.start - 0.5) !== 0 && !loads.some((o) => o !== l && o.start <= l.start - 0.5 && o.end >= l.start - 0.5)) wrong++
   }
   check('D3 pressureAt gives the load inside a phrase and 0 between phrases', loads.length > 1 && wrong === 0, `${loads.length} phrases, ${wrong} wrong`)
 
   // a difficulty change on the title screen lays the tube out again for the new speeds
   const quasar = DIFFICULTY.MODES.findIndex((m) => m.name === 'QUASAR')
   session.flight.setDifficulty(quasar)
-  const staleBefore = session.sequencer!.stale()
+  const staleBefore = session.sequencer.stale()
   session.replan()
-  check('D4 a difficulty change on the title screen re-lays the gem lines', staleBefore && !session.sequencer!.stale())
+  check('D4 a difficulty change on the title screen re-lays the gem lines', staleBefore && !session.sequencer.stale())
   session.flight.setDifficulty(DIFFICULTY.DEFAULT)
 
   // a pinned flight mode (the testing key) mid-run: the tube ahead is planned again
@@ -436,13 +412,9 @@ for (let mode = 0; mode < DIFFICULTY.MODES.length; mode++) {
   seedRng(9)
   session.reset()
   session.begin()
-  const input = { steerTarget: 0, fire: false }
+  const advance = driveSession(session, IDLE, { invulnerable: true })
   const fly = (seconds: number): void => {
-    for (let k = 0; k < PHYSICS.HZ * seconds; k++) {
-      if (k % 2 === 0) session.preUpdate()
-      session.game.invuln = 1e9
-      session.step(input, DT)
-    }
+    for (let k = 0; k < PHYSICS.HZ * seconds; k++) advance()
   }
   fly(5)
   session.flight.mode = 'fast'
@@ -453,47 +425,15 @@ for (let mode = 0; mode < DIFFICULTY.MODES.length; mode++) {
   const before = loads.length
   fly(25)
   for (const l of loads.slice(before)) if (l.end < l.start) crossing++
-  session.fields[1]!.visit((_theta, wd) => tiers.add(session.flight.tierIndexAt(wd)))
+  session.fieldByKind.gem.visit((_theta, wd) => tiers.add(session.flight.tierIndexAt(wd)))
   let liveGems = 0
-  session.fields[1]!.visit(() => liveGems++)
+  session.fieldByKind.gem.visit(() => liveGems++)
   const pinnedOk = loads.length > 4 && crossing === 0 && liveGems > 0 && tiers.size === 1 && tiers.has(2)
   session.flight.mode = 'sections'
   fly(12)
   let gemsAfter = 0
-  session.fields[1]!.visit(() => gemsAfter++)
-  check('D4b a flight mode switched mid-run keeps the gem lines coming', pinnedOk && gemsAfter > 0 && !session.sequencer!.stale(), `${loads.length} phrases while pinned fast, ${liveGems} gems live, ${gemsAfter} after the switch back`)
-})()
-;(() => {
-  SEQUENCE.ENABLED = false
-  const session = createSession()
-  seedRng(3)
-  session.reset()
-  session.begin()
-  let gems = 0
-  let mines = 0
-  session.fields[1]!.visit(() => gems++)
-  session.fields[2]!.visit(() => mines++)
-  const input = { steerTarget: 0, fire: false }
-  let offered = 0
-  const s2 = createSession({ gemMissed: () => offered++, gemCollected: () => offered++ })
-  seedRng(3)
-  s2.reset()
-  s2.begin()
-  for (let k = 0; k < PHYSICS.HZ * 40; k++) {
-    if (k % 2 === 0) s2.preUpdate()
-    s2.game.invuln = 1e9
-    s2.step(input, DT)
-  }
-  const f = session.flight
-  const cycleLen = (f.tierSpeedOf(0, 0) + f.tierSpeedOf(0, 1) + f.tierSpeedOf(0, 2)) * FLIGHT.SECTION_SECONDS
-  const oldQuota = Math.round((cycleLen / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
-  check('D5 gem lines off: random gem and mine fields, no director', session.sequencer === undefined && gems === TREASURE.RANDOM_COUNT && mines === HAZARD.RANDOM_COUNT && offered > 5, `${gems} gems, ${mines} mines laid out, ${offered} gems passed in 40 s`)
-  check('D6 gem lines off: the quota comes from the cycle length', f.gemQuota(0) === oldQuota, `${f.gemQuota(0)} vs ${oldQuota}`)
-  SEQUENCE.ENABLED = true
+  session.fieldByKind.gem.visit(() => gemsAfter++)
+  check('D4b a flight mode switched mid-run keeps the gem lines coming', pinnedOk && gemsAfter > 0 && !session.sequencer.stale(), `${loads.length} phrases while pinned fast, ${liveGems} gems live, ${gemsAfter} after the switch back`)
 })()
 
-if (failed) {
-  console.error(`\n${failed} CHECK(S) FAILED`)
-  process.exit(1)
-}
-console.log('\nALL SEQUENCE SIM CHECKS PASSED')
+finish('SEQUENCE SIM')

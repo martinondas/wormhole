@@ -4,7 +4,7 @@
 // without knowing how its spawning or raider AI works.
 import { type Session, type SessionFx, type DamageCause } from '../../src/session'
 import { angleDiff } from '../../src/util/math'
-import { ENEMY, ENERGY, GUN, LIVES } from '../../src/config'
+import { ENEMY, ENERGY, GUN, HAZARD, LIVES } from '../../src/config'
 import { createPerception, createSnapshot, KIND_GEM, KIND_LIFE, KIND_MINE, KIND_ORB, KIND_SHARD, PHASE_DEPART, PHASE_EXIT, MAX_ENEMIES } from './perception'
 
 export const BUCKET_SECONDS = 5 // intensity timeline resolution
@@ -40,82 +40,89 @@ export interface LevelStats {
   tellsAimed: number // ... of which had their tell start on the player's line
 }
 
-export interface RunResult {
-  seed: number
+// Every scalar metric of a run, in report order. This list is the one source of
+// the metric names: RunResult, the aggregated stats and the report tables are
+// typed from it.
+export const SCALAR_KEYS = [
   // --- outcome
-  time: number // seconds survived (capped at --max-seconds)
-  capped: number // 1 if the run hit the time cap alive
-  level: number // level reached (1-based)
-  score: number
-  deathCause: DamageCause | 'none'
+  'time', // seconds survived (capped at --max-seconds)
+  'capped', // 1 if the run hit the time cap alive
+  'level', // level reached (1-based)
+  'score',
   // --- damage
-  livesLost: number
-  livesLostMine: number
-  livesLostBolt: number
-  livesLostRam: number
-  hitsPerMin: number
-  timeToFirstHit: number // seconds until the first life was lost (run time if never)
+  'livesLost',
+  'livesLostMine',
+  'livesLostBolt',
+  'livesLostRam',
+  'hitsPerMin',
+  'timeToFirstHit', // seconds until the first life was lost (run time if never)
   // --- progression
-  levelRepeats: number // gem-gate failures: cycles that ended without a level-up
-  gems: number
-  gemsOffered: number
-  gemShare: number // collected / offered
-  orbs: number
-  orbsOffered: number
-  extraLives: number // lives regained (shard sets completed, plus extra-life crosses when that field is on)
-  shardsDropped: number // life shards left by kills
-  shardsCaught: number
-  shardCatchShare: number // caught / dropped (NaN with none dropped)
-  livesFromShards: number // lives restored by a completed shard set
-  crossesDropped: number // whole-life crosses left by destroyed squads
-  crossesCaught: number
+  'levelRepeats', // gem-gate failures: cycles that ended without a level-up
+  'gems',
+  'gemsOffered',
+  'gemShare', // collected / offered
+  'orbs',
+  'orbsOffered',
+  'extraLives', // every life regained: completed shard sets, squad crosses, and extra-life crosses when that field is on
+  'shardsDropped', // life shards left by kills
+  'shardsCaught',
+  'shardCatchShare', // caught / dropped (NaN with none dropped)
+  'livesFromShards', // lives restored by a completed shard set
+  'crossesDropped', // whole-life crosses left by destroyed squads
+  'crossesCaught',
   // --- gun
-  emptyGunShare: number // share of time with less than one shot of charge
-  meanCharge: number // mean weapon charge 0..1
-  shots: number
-  accuracy: number // player bolts that struck a raider / shots
-  kills: number
-  killsPerMin: number
+  'emptyGunShare', // share of time with less than one shot of charge
+  'meanCharge', // mean weapon charge 0..1
+  'shots',
+  'accuracy', // player bolts that struck a raider / shots
+  'kills',
+  'killsPerMin',
   // --- raiders
-  boltsAtPlayer: number // enemy bolts fired
-  boltsAimedShare: number // share fired on the player's line (would hit if the player did not move)
-  tellsAimedShare: number // share of bolts whose firing tell STARTED on the player's line (aimed at the player, dodged or not)
-  boltsHitShare: number // share that cost a life
-  boltsDodgedShare: number // 1 - (hit or absorbed by i-frames) / fired
-  raidersMean: number // mean raiders in play
-  raidersMax: number
-  raiders4PlusShare: number // share of time with 4 or more raiders in play
+  'boltsAtPlayer', // enemy bolts fired
+  'boltsAimedShare', // share fired on the player's line (would hit if the player did not move)
+  'tellsAimedShare', // share of bolts whose firing tell STARTED on the player's line (aimed at the player, dodged or not)
+  'boltsHitShare', // share that cost a life
+  'boltsDodgedShare', // 1 - (hit or absorbed by i-frames) / fired
+  'raidersMean', // mean raiders in play
+  'raidersMax',
+  'raiders4PlusShare', // share of time with 4 or more raiders in play
   // --- pacing
-  deadAirLongest: number // longest stretch (s) with nothing to collect, dodge or fight
-  deadAirShare: number
-  threatsPerMin: number
-  intensityCV: number // spread of threats per 5 s bucket (std / mean): 0 = perfectly flat pacing
-  quietShare: number // share of 5 s buckets with at most one threat (breathers)
+  'deadAirLongest', // longest stretch (s) with nothing to collect, dodge or fight
+  'deadAirShare',
+  'threatsPerMin',
+  'intensityCV', // spread of threats per 5 s bucket (std / mean): 0 = perfectly flat pacing
+  'quietShare', // share of 5 s buckets with at most one threat (breathers)
   // --- use of the wall
-  bottomShare: number // time within 30 degrees of the bottom
-  upperShare: number // time above the horizontal (more than 90 degrees from the bottom)
-  wallBinsUsed: number // of 12 30-degree bins, how many hold at least 2% of the time
-  loops: number // times over the top
+  'bottomShare', // time within 15 degrees of the bottom (the 30-degree bin centered on it)
+  'upperShare', // time more than 105 degrees from the bottom (the five 30-degree bins centered on 120 to 240 degrees)
+  'wallBinsUsed', // of 12 30-degree bins, how many hold at least 2% of the time
+  'loops', // times over the top
   // --- input
-  reversalsPerMin: number // left<->right changes of steering direction
-  pressesPerMin: number // steer key presses
-  steerDuty: number // share of time a steer key is held
-  mineCloseCalls: number // mines that passed just outside the hit cone
+  'reversalsPerMin', // left<->right changes of steering direction
+  'pressesPerMin', // steer key presses
+  'steerDuty', // share of time a steer key is held
+  'mineCloseCalls', // mines that passed just outside the hit cone
   // --- feedback events and fairness probes
-  killDistanceMedian: number // median distance ahead of the ship at which raiders died
-  killsBeyond60Share: number // share of kills farther than 60 units ahead
-  clumpShare: number // share of time with two live raiders within 0.4 rad and 10 units
-  tellToArrivalMin: number // shortest time from a charge start to its bolt reaching the ship plane (Infinity if none)
-  lifeBalance: number // lives regained / lives lost (lives lost floored at 1)
-  chainHits: number // lives lost within 1 s after the i-frames of the previous hit ended
-  gateFirstTry: number // share of levels whose first cycle ended with the quota met (NaN if no cycle ended)
-  gemChainMedian: number // median length of a run of consecutive gems without a miss
-  gemChainMax: number
-  nearMissPerMin: number // mine near-miss events (session's mineNearMiss)
-  loopsPerMin: number // loopCompleted events per minute
-  wavesClearedPerMin: number // raider waves destroyed to the last member, per minute
-  raiderFreeShare: number // share of time with no raider in play and no enemy bolt in flight (breathers)
-  boltMinePerMin: number // seconds per minute with an enemy bolt in flight and a mine less than 1 s ahead
+  'killDistanceMedian', // median distance ahead of the ship at which raiders died
+  'killsBeyond60Share', // share of kills farther than 60 units ahead
+  'clumpShare', // share of time with two live raiders within 0.4 rad and 10 units
+  'tellToArrivalMin', // shortest time from a charge start to its bolt reaching the ship plane (Infinity if none)
+  'lifeBalance', // lives regained / lives lost (lives lost floored at 1)
+  'chainHits', // lives lost within 1 s after the i-frames of the previous hit ended
+  'gateFirstTry', // share of levels whose first cycle ended with the quota met (NaN if no cycle ended)
+  'gemChainMedian', // median length of a run of consecutive gems without a miss
+  'gemChainMax',
+  'nearMissPerMin', // mine near-miss events (session's mineNearMiss)
+  'loopsPerMin', // loopCompleted events per minute
+  'wavesClearedPerMin', // raider waves destroyed to the last member, per minute
+  'raiderFreeShare', // share of time with no raider in play and no enemy bolt in flight (breathers)
+  'boltMinePerMin', // seconds per minute with an enemy bolt in flight and a mine less than 1 s ahead
+] as const
+export type ScalarKey = (typeof SCALAR_KEYS)[number]
+
+export type RunResult = Record<ScalarKey, number> & {
+  seed: number
+  deathCause: DamageCause | 'none'
   // --- distributions (not aggregated as scalars)
   raiderHist: number[] // time share by raiders in play (index = count)
   thetaHist: number[] // time share by 30-degree wall bin (index 0 = bottom, 6 = top)
@@ -364,19 +371,13 @@ export function createRecorder(session: Session): Recorder {
       chargeHead = 0
       prevEnemyZ.fill(NaN)
       r = {
+        ...(Object.fromEntries(SCALAR_KEYS.map((k) => [k, 0])) as Record<ScalarKey, number>),
         seed,
-        time: 0, capped: 0, level: 1, score: 0, deathCause: 'none',
-        livesLost: 0, livesLostMine: 0, livesLostBolt: 0, livesLostRam: 0, hitsPerMin: 0, timeToFirstHit: 0,
-        levelRepeats: 0, gems: 0, gemsOffered: 0, gemShare: 0, orbs: 0, orbsOffered: 0, extraLives: 0, shardsDropped: 0, shardsCaught: 0, shardCatchShare: NaN, livesFromShards: 0, crossesDropped: 0, crossesCaught: 0,
-        emptyGunShare: 0, meanCharge: 0, shots: 0, accuracy: 0, kills: 0, killsPerMin: 0,
-        boltsAtPlayer: 0, boltsAimedShare: 0, tellsAimedShare: 0, boltsHitShare: 0, boltsDodgedShare: 0,
-        raidersMean: 0, raidersMax: 0, raiders4PlusShare: 0,
-        deadAirLongest: 0, deadAirShare: 0, threatsPerMin: 0, intensityCV: 0, quietShare: 0,
-        bottomShare: 0, upperShare: 0, wallBinsUsed: 0, loops: 0,
-        reversalsPerMin: 0, pressesPerMin: 0, steerDuty: 0, mineCloseCalls: 0,
-        killDistanceMedian: 0, killsBeyond60Share: 0, clumpShare: 0, tellToArrivalMin: Infinity,
-        lifeBalance: 0, chainHits: 0, gateFirstTry: NaN, gemChainMedian: 0, gemChainMax: 0,
-        nearMissPerMin: 0, loopsPerMin: 0, wavesClearedPerMin: 0, raiderFreeShare: 0, boltMinePerMin: 0,
+        deathCause: 'none',
+        level: 1,
+        shardCatchShare: NaN,
+        tellToArrivalMin: Infinity,
+        gateFirstTry: NaN,
         raiderHist: [], thetaHist: [], perLevel: [], timeline: [], timelineLevel: [],
       }
     },
@@ -426,7 +427,7 @@ export function createRecorder(session: Session): Recorder {
           else {
             threat()
             const gap = Math.abs(angleDiff(craft.theta, snap.objTheta[i]!))
-            if (gap < 0.62 + CLOSE_CALL) r.mineCloseCalls++
+            if (gap < HAZARD.CAPTURE_ANGLE + CLOSE_CALL) r.mineCloseCalls++
           }
         }
         const eta = (wd - craft.distance) / Math.max(craft.speed, 1)
@@ -600,28 +601,13 @@ export interface Aggregate {
   difficulty: string
   runs: number
   maxSeconds: number
-  stats: Record<string, Stat>
+  stats: Record<ScalarKey, Stat>
   deathCauses: Record<string, number> // share of runs by the final blow
   raiderHist: number[]
   thetaHist: number[]
   perLevel: LevelAggregate[]
   timeline: { t: number; aliveShare: number; threatsPer5s: number; level: number }[]
 }
-
-const SCALARS: (keyof RunResult)[] = [
-  'time', 'capped', 'level', 'score',
-  'livesLost', 'livesLostMine', 'livesLostBolt', 'livesLostRam', 'hitsPerMin', 'timeToFirstHit',
-  'levelRepeats', 'gems', 'gemsOffered', 'gemShare', 'orbs', 'orbsOffered', 'extraLives', 'shardsDropped', 'shardsCaught', 'shardCatchShare', 'livesFromShards', 'crossesDropped', 'crossesCaught',
-  'emptyGunShare', 'meanCharge', 'shots', 'accuracy', 'kills', 'killsPerMin',
-  'boltsAtPlayer', 'boltsAimedShare', 'tellsAimedShare', 'boltsHitShare', 'boltsDodgedShare',
-  'raidersMean', 'raidersMax', 'raiders4PlusShare',
-  'deadAirLongest', 'deadAirShare', 'threatsPerMin', 'intensityCV', 'quietShare',
-  'bottomShare', 'upperShare', 'wallBinsUsed', 'loops',
-  'reversalsPerMin', 'pressesPerMin', 'steerDuty', 'mineCloseCalls',
-  'killDistanceMedian', 'killsBeyond60Share', 'clumpShare', 'tellToArrivalMin',
-  'lifeBalance', 'chainHits', 'gateFirstTry', 'gemChainMedian', 'gemChainMax',
-  'nearMissPerMin', 'loopsPerMin', 'wavesClearedPerMin', 'raiderFreeShare', 'boltMinePerMin',
-]
 
 function stat(values: number[]): Stat {
   const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b)
@@ -639,8 +625,7 @@ function stat(values: number[]): Stat {
 
 export function aggregate(bot: string, difficulty: string, maxSeconds: number, runs: RunResult[]): Aggregate {
   const n = Math.max(runs.length, 1)
-  const stats: Record<string, Stat> = {}
-  for (const k of SCALARS) stats[k] = stat(runs.map((r) => r[k] as number))
+  const stats = Object.fromEntries(SCALAR_KEYS.map((k) => [k, stat(runs.map((r) => r[k]))])) as Record<ScalarKey, Stat>
 
   const deathCauses: Record<string, number> = { mine: 0, bolt: 0, ram: 0, none: 0 }
   for (const r of runs) deathCauses[r.deathCause] = (deathCauses[r.deathCause] ?? 0) + 1 / n

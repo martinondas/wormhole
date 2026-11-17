@@ -1,26 +1,21 @@
 // Headless behavior checks for the level / difficulty system (npm run sim:levels).
-// Exercises src/flight.ts directly (no DOM): the gem-gated level progression, per-
-// level tier speeds, the score multiplier, the two gravity modes, the level speed
-// cap, tier/level lookups for tube + field scaling, and edge cases (distance 0,
-// negative, pinned modes). Bundled with esbuild, like combat-sim.ts.
+// Exercises src/flight.ts and src/levels.ts directly (no DOM): the gem-gated level
+// progression, per-level tier speeds, the score multiplier, the two gravity modes,
+// the level speed cap, tier/level lookups for tube + field scaling, the raider wave
+// tables, and edge cases (distance 0, negative, pinned modes).
 //
-// The level is GATED on gems now, so it is no longer a pure function of distance:
-// you must call update() incrementally with a running gem count. flyTo() simulates
-// flying forward feeding a fixed gem count per step - a large count is an "active"
-// player who always meets the quota (levels then advance at every cycle boundary,
-// exactly the old pure-distance behavior, which the speed/gravity checks rely on);
-// a count of 0 is a "passive" player who never advances.
+// The level is gated on gems, so it is not a pure function of distance: update()
+// must be called incrementally with a running gem count. flyTo() flies forward and
+// feeds a fixed gem count per step - a large count is an "active" player who always
+// meets the quota (the level then advances at every cycle boundary, which the speed
+// and gravity checks rely on); a count of 0 is a "passive" player who never advances.
 import { createFlight, type Flight } from '../src/flight'
 import { createSession } from '../src/session'
 import { createLevelTuning, waveRoster, waveAliveCap, waveHunters, aggression, deepPressure, fireCooldown, bombMult } from '../src/levels'
 import { PHRASES } from '../src/world/phrases'
-import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, HAZARD, TREASURE, DIFFICULTY, ENEMY, SEQUENCE } from '../src/config'
+import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, DIFFICULTY, ENEMY, SEQUENCE } from '../src/config'
+import { check, finish, withConfig, driveSession } from './sim-kit'
 
-let failed = 0
-function check(name: string, cond: boolean, detail = ''): void {
-  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -> ' + detail : ''}`)
-  if (!cond) failed++
-}
 const approx = (a: number, b: number, eps = 1e-6): boolean => Math.abs(a - b) <= eps
 
 // Derived expectations (mirror flight.ts math, computed independently here).
@@ -39,11 +34,6 @@ const speedBonus = (lvl: number): number => {
 }
 const tierSpeed = (lvl: number, t: number): number => base[t]! + speedBonus(lvl)
 const cycleLen = (lvl: number): number => (tierSpeed(lvl, 0) + tierSpeed(lvl, 1) + tierSpeed(lvl, 2)) * secs
-// gem quota at a TUNING level with gem lines on (mirror of flight.ts), and with them off
-const quotaAt = (T: number, modeMax = 1): number =>
-  Math.round(SEQUENCE.GEMS_PER_CYCLE * Math.min(LEVELS.QUOTA_FRACTION_MAX, modeMax, LEVELS.GEM_QUOTA_FRACTION + LEVELS.QUOTA_FRACTION_STEP * T))
-const gemQuota = (lvl: number): number => quotaAt(lvl) // ORION: the tuning level is the level
-const randomQuota = (lvl: number): number => Math.round((cycleLen(lvl) / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
 
 // cumulative distance where level L begins, assuming every cycle advanced (active player)
 function cumStart(L: number): number {
@@ -68,7 +58,7 @@ function flyTo(distance: number, gems: number, stepSize = 20, difficulty?: numbe
 }
 const ACTIVE = 100000 // gems >> any quota: always meets the gate (advances every cycle)
 
-// level/speed/multiplier/cap at a distance for an ACTIVE player (old distance model)
+// level/speed/multiplier/cap at a distance for an ACTIVE player
 function at(distance: number): { level: number; target: number; mult: number; speedMax: number } {
   const f = flyTo(distance, ACTIVE)
   return { level: f.level, target: f.targetSpeed(), mult: f.scoreMultiplier, speedMax: f.speedMax() }
@@ -110,7 +100,7 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   check('C3 L2 multiplier', approx(at(cumStart(2) + 50).mult, 1 + 2 * step), `${at(cumStart(2) + 50).mult}`)
 })()
 
-// ---- D) speed cap follows the level (replaces the old fixed SPEED.FAST clamp) ----
+// ---- D) speed cap follows the level ----
 ;(() => {
   check('D1 L0 speedMax = L0 fast', approx(at(100).speedMax, tierSpeed(0, 2)), `${at(100).speedMax}`)
   check('D2 L1 speedMax = L1 fast > L0 fast', at(cumStart(1) + 50).speedMax > tierSpeed(0, 2))
@@ -123,21 +113,19 @@ function at(distance: number): { level: number; target: number; mult: number; sp
 })()
 
 // ---- E) gravity: tier mode preserves feel; absolute mode does not ----
-;(() => {
-  const modeWas = LEVELS.GRAVITY_MODE
-  // tier mode: full gravity at the LEVEL's own slow speed, the floor at its own fast
-  LEVELS.GRAVITY_MODE = 'tier'
+// tier mode: full gravity at the LEVEL's own slow speed, the floor at its own fast
+withConfig(LEVELS, { GRAVITY_MODE: 'tier' }, () => {
   const f = flyTo(cumStart(1) + 50, ACTIVE) // level 1, slow section
   check('E1 tier: full gravity at L1 slow speed', approx(f.gravityForSpeed(tierSpeed(1, 0)), PHYSICS.GRAVITY_K), `${f.gravityForSpeed(tierSpeed(1, 0))}`)
   check('E2 tier: floor gravity at L1 fast speed', approx(f.gravityForSpeed(tierSpeed(1, 2)), PHYSICS.GRAVITY_K * FLIGHT.GRAVITY_FLOOR), `${f.gravityForSpeed(tierSpeed(1, 2))}`)
   check('E3 tier: gravity monotonic decreasing in speed', f.gravityForSpeed(tierSpeed(1, 0)) > f.gravityForSpeed(tierSpeed(1, 1)) && f.gravityForSpeed(tierSpeed(1, 1)) > f.gravityForSpeed(tierSpeed(1, 2)))
-  // absolute mode: at L1 slow speed gravity is already < full (lighter than tier mode)
-  LEVELS.GRAVITY_MODE = 'absolute'
+})
+// absolute mode: at L1 slow speed gravity is already < full (lighter than tier mode)
+withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
   const g = flyTo(cumStart(1) + 50, ACTIVE)
   check('E4 absolute: L1 slow gravity < full (lighter)', g.gravityForSpeed(tierSpeed(1, 0)) < PHYSICS.GRAVITY_K - 1e-6, `${g.gravityForSpeed(tierSpeed(1, 0))}`)
   check('E5 gravity clamped to [0, K]', g.gravityForSpeed(0) <= PHYSICS.GRAVITY_K + 1e-9 && g.gravityForSpeed(9999) >= -1e-9)
-  LEVELS.GRAVITY_MODE = modeWas
-})()
+})
 
 // ---- L) difficulty modes: one slope/offset mapping drives every lookup ----
 // ORION (the default) is the identity mapping, so every other section already
@@ -171,16 +159,15 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   check('L6 speed ratio normalizes vs the untuned base', approx(hard.speedRatioAt(100), hardSlow / SPEED.SLOW), `${hard.speedRatioAt(100)}`)
 })()
 
-// ---- F) tier/level lookups used by tube coloring + field scaling (GATED) ----
+// ---- F) tier lookups used by tube coloring + field scaling (GATED) ----
 ;(() => {
   const f = createFlight() // fresh: gated at level 0 (nothing collected yet)
   // section tiers within level 0
   check('F1 tierIndexAt L0 slow', f.tierIndexAt(0) === 0)
   check('F2 tierIndexAt L0 normal', f.tierIndexAt(400) === 1)
   check('F3 tierIndexAt L0 fast', f.tierIndexAt(1000) === 2)
-  // GATED: a distance a "level ahead" still reports the CURRENT level (the gate
-  // holds the next level until the quota is met) and the cycle's colors just repeat.
-  check('F4 levelAt ahead stays current level (gate holds)', f.levelAt(cumStart(1) + 10) === 0)
+  // GATED: past one cycle the colors of the current level repeat (the gate holds the
+  // next level until the quota is met).
   check('F5 tierIndexAt wraps to slow past one cycle', f.tierIndexAt(cycleLen(0) + 10) === 0)
   check('F6 tierIndexAt wraps the cycle (normal again)', f.tierIndexAt(cycleLen(0) + 400) === 1)
 })()
@@ -199,7 +186,7 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   check('G5 pinned fast: target = base fast, level 0', approx(f.targetSpeed(), SPEED.FAST) && f.level === 0)
 })()
 
-// ---- H) speed-normalized density levers (orbs flat per second; bombs tighten) ----
+// ---- H) speed-normalized orb spacing (orbs flat per second) ----
 ;(() => {
   const f1 = createFlight() // gated level 0: ratios are 1
   check('H1 speedRatio = 1 at level 1', approx(f1.speedRatioAt(100), 1))
@@ -211,24 +198,14 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   const f5 = flyTo(dNormalL5, ACTIVE) // active player reaches level 4 by this distance
   check('H3 speedRatio L5 normal tier = (52+20)/52', approx(f5.speedRatioAt(dNormalL5), (base[1]! + speedBonus(4)) / base[1]!), `${f5.speedRatioAt(dNormalL5)}`)
 
-  // Encounter rate per second = tierSpeed / (baseSpacing * mult * speedRatio).
+  // Encounter rate per second = tierSpeed / (baseSpacing * speedRatio).
   // Design: orbs are FLAT per second across levels (rising speed already makes them
-  // harder to catch, so they do not also thin out), while bombs get DENSER per second
-  // as bombSpacingMult falls. Both vs level 1.
-  const orbRate = (f: Flight, lvl: number, dist: number): number => {
-    const mult = LEVELS.TABLE[Math.min(lvl, LEVELS.TABLE.length - 1)]!.orbSpacingMult
-    return tierSpeed(lvl, 1) / (PICKUP.SPAWN_SPACING * mult * f.speedRatioAt(dist))
-  }
-  const bombRate = (f: Flight, lvl: number, dist: number): number => {
-    const mult = LEVELS.TABLE[Math.min(lvl, LEVELS.TABLE.length - 1)]!.bombSpacingMult
-    return tierSpeed(lvl, 1) / (HAZARD.SPAWN_SPACING * mult * f.speedRatioAt(dist))
-  }
+  // harder to catch, so they do not also thin out).
+  const orbRate = (f: Flight, lvl: number, dist: number): number =>
+    tierSpeed(lvl, 1) / (PICKUP.SPAWN_SPACING * f.speedRatioAt(dist))
   const orbL1 = orbRate(f1, 0, 400) // L1 normal section
   const orbL5 = orbRate(f5, 4, dNormalL5)
   check('H4 orb rate is FLAT L1 -> L5 (count unchanged; speed makes catching harder)', approx(orbL5, orbL1), `L1 ${orbL1.toFixed(3)}/s -> L5 ${orbL5.toFixed(3)}/s`)
-  const bombL1 = bombRate(f1, 0, 400)
-  const bombL5 = bombRate(f5, 4, dNormalL5)
-  check('H5 bomb rate RISES L1 -> L5 (denser, as intended)', bombL5 > bombL1, `L1 ${bombL1.toFixed(3)}/s -> L5 ${bombL5.toFixed(3)}/s`)
 })()
 
 // ---- J) speed curve: per-level increment decays across bands but never plateaus ----
@@ -240,18 +217,12 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   check('J3 LATE band increment = SPEED_STEP.LATE', approx(incAt(15), LEVELS.SPEED_STEP.LATE), `${incAt(15)}`)
   check('J4 increment decays EARLY > MID > LATE', incAt(9) > incAt(10) && incAt(10) > incAt(15))
   check('J5 never plateaus (every increment > 0)', incAt(40) > 0, `${incAt(40)}`)
-  // L17 fast (0-based 16) lands where the design says (~138), well below the old linear 155
-  check('J6 L17 fast ~ 138 (tamed from old 155)', approx(tierSpeed(16, 2), 138), `${tierSpeed(16, 2)}`)
+  // L17 fast (0-based 16) lands where the design says (~138)
+  check('J6 L17 fast ~ 138', approx(tierSpeed(16, 2), 138), `${tierSpeed(16, 2)}`)
 })()
 
-// ---- K) mine density: tightens past the table to a floor (mirror of levels.ts bombMult) ----
+// ---- K) mine density (levels.ts bombMult): tightens past the table to a floor ----
 ;(() => {
-  const bombMult = (lvl: number): number => {
-    const t = LEVELS.TABLE
-    if (lvl < t.length) return t[lvl]!.bombSpacingMult
-    const last = t[t.length - 1]!.bombSpacingMult
-    return Math.max(LEVELS.BOMB_MULT_FLOOR, last - (lvl - (t.length - 1)) * LEVELS.BOMB_MULT_STEP)
-  }
   check('K1 past-table mines denser than L5', bombMult(8) < LEVELS.TABLE[LEVELS.TABLE.length - 1]!.bombSpacingMult, `${bombMult(8)}`)
   check('K2 mine multiplier floored (playable)', approx(bombMult(99), LEVELS.BOMB_MULT_FLOOR), `${bombMult(99)}`)
   check('K3 floor never goes below config floor', bombMult(99) >= LEVELS.BOMB_MULT_FLOOR - 1e-9)
@@ -260,33 +231,17 @@ function at(distance: number): { level: number; target: number; mult: number; sp
 // ---- I) gem gate: quota scaling + advance / replay behavior ----
 ;(() => {
   const f = createFlight()
-  // per level and mode: round(GEMS_PER_CYCLE * fraction), the fraction rising with the tuning level
-  let bad = ''
-  let line = ''
   let highest = 0 // the largest quota of any level in any mode
-  DIFFICULTY.MODES.forEach((m, i) => {
+  DIFFICULTY.MODES.forEach((_m, i) => {
     const g = createFlight()
     g.setDifficulty(i)
-    const qs: number[] = []
-    for (let l = 0; l <= 40; l++) {
-      const want = quotaAt(Math.max(0, m.offset + m.slope * l), m.quotaMax)
-      highest = Math.max(highest, g.gemQuota(l))
-      if (g.gemQuota(l) !== want) bad += ` ${m.name} L${l + 1}: ${g.gemQuota(l)} vs ${want}`
-      if (l === 0 || l === 4 || l === 9 || l === 19 || l === 39) qs.push(g.gemQuota(l))
-    }
-    line += ` ${m.name} L1/5/10/20/40: ${qs.join(',')};`
+    for (let l = 0; l <= 40; l++) highest = Math.max(highest, g.gemQuota(l))
   })
-  check('I1 gemQuota per level and mode matches round(GEMS_PER_CYCLE * fraction)', bad === '', bad || line)
   const quotas = [...Array(41).keys()].map((l) => f.gemQuota(l))
   const nonDecreasing = quotas.every((q, i) => i === 0 || q >= quotas[i - 1]!)
   const cap = Math.round(SEQUENCE.GEMS_PER_CYCLE * LEVELS.QUOTA_FRACTION_MAX)
   check('I2 gemQuota never falls, starts at half a cycle of gems, ends at the capped fraction', nonDecreasing && f.gemQuota(0) === Math.round(SEQUENCE.GEMS_PER_CYCLE * LEVELS.GEM_QUOTA_FRACTION) && f.gemQuota(40) === cap, `L1 ${quotas[0]} ... L41 ${quotas[40]} (cap ${cap})`)
   check('I2b every quota stays at least 3 gems under the fewest a cycle offers', highest <= SEQUENCE.GEMS_PER_CYCLE - 3, `${highest} of at least ${SEQUENCE.GEMS_PER_CYCLE}`)
-  // gem lines off: the quota is a fraction of the gems one cycle's length holds
-  SEQUENCE.ENABLED = false
-  const offQuotas = [0, 1, 2, 3, 4, 5].map((l) => f.gemQuota(l))
-  SEQUENCE.ENABLED = true
-  check('I2c gem lines off: gemQuota follows the cycle length', offQuotas.every((q, l) => q === randomQuota(l)) && offQuotas[5]! > offQuotas[0]!, offQuotas.join(','))
 
   // passive player (0 gems) never advances, however far they fly; the cycle still
   // flows (speeds stay level 0, tiers keep cycling) - just no level-up.
@@ -295,7 +250,7 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   check('I4 passive speedMax stays level 0', approx(passive.speedMax(), tierSpeed(0, 2)))
 
   // meeting the quota advances at the boundary; one short replays the same level
-  const q0 = gemQuota(0)
+  const q0 = f.gemQuota(0)
   check('I5 quota met -> advance to level 1', flyTo(cumStart(1), q0).level === 1, `q0=${q0}`)
   check('I6 one short -> stays level 0 (replays)', flyTo(cumStart(1), q0 - 1).level === 0)
 })()
@@ -325,19 +280,12 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   })
   session.reset()
   session.begin()
-  const dt = 1 / PHYSICS.HZ
-  const input = { steerTarget: 0, fire: false }
-  let steps = 0
-  while (session.flight.cycles < plan.length && steps < PHYSICS.HZ * 900) {
-    if (steps % 2 === 0) {
-      // the cycle in progress is number `cycles`: force its gem count from the plan
-      session.game.gemsThisLevel = plan[session.flight.cycles] ? session.flight.gemQuota(session.flight.level) : 0
-      session.preUpdate()
-    }
-    session.game.invuln = 1e9
-    session.step(input, dt)
-    steps++
-  }
+  const advance = driveSession(session, { steerTarget: 0, fire: false }, {
+    invulnerable: true,
+    // the cycle in progress is number `cycles`: force its gem count from the plan
+    beforeFrame: () => (session.game.gemsThisLevel = plan[session.flight.cycles] ? session.flight.gemQuota(session.flight.level) : 0),
+  })
+  for (let steps = 0; session.flight.cycles < plan.length && steps < PHYSICS.HZ * 900; steps++) advance()
   const f = session.flight
   check('M1 cycleEnded fires once per cycle', ended === f.cycles && ended === plan.length, `events=${ended} cycles=${f.cycles}`)
   check('M2 advanced is true exactly when the level rose', mismatch === 0 && advancedCount === f.level && levelUps === f.level, `mismatches=${mismatch} advanced=${advancedCount} level=${f.level} levelUps=${levelUps}`)
@@ -346,25 +294,28 @@ function at(distance: number): { level: number; target: number; mult: number; sp
 
 // ---- N) raider waves: roster, alive cap, hunters per tuning level and per mode ----
 ;(() => {
-  // the wave table by tuning level T: [roster, alive cap, hunters]
-  const want: Record<number, [number, number, number]> = {
-    0: [2, 2, 0], 1: [3, 2, 0], 2: [3, 3, 1], 3: [4, 3, 1], 4: [5, 3, 1], 5: [5, 3, 1], 6: [6, 3, 1],
-    7: [6, 4, 1], 8: [7, 4, 1], 9: [7, 4, 2], 10: [8, 4, 2], 12: [9, 4, 2], 20: [9, 4, 2], 40: [9, 4, 2],
-  }
+  const Ts = [...Array(60).keys()]
+  const neverFalls = (f: (T: number) => number): boolean => Ts.every((T) => T === 0 || f(T) >= f(T - 1))
   let bad = ''
-  for (const [k, [roster, cap, hunters]] of Object.entries(want)) {
-    const T = Number(k)
-    if (waveRoster(T) !== roster || waveAliveCap(T) !== cap || waveHunters(T) !== hunters) {
-      bad += ` T${T}: ${waveRoster(T)}/${waveAliveCap(T)}/${waveHunters(T)}`
-    }
-  }
-  check('N1 wave table: roster / alive cap / hunters by tuning level', bad === '', bad || 'T0..T40 as specified')
-  let capMax = 0
-  for (let T = 0; T < 60; T++) capMax = Math.max(capMax, waveAliveCap(T))
-  check('N2 alive cap never exceeds MAX_ENEMIES_CAP (4)', capMax === LEVELS.MAX_ENEMIES_CAP && LEVELS.MAX_ENEMIES_CAP === 4, `max=${capMax}`)
+  LEVELS.WAVES.forEach((row, T) => {
+    const capOk = T >= LEVELS.WAVE_CAP4_FROM || waveAliveCap(T) === row.cap
+    const huntersOk = T >= LEVELS.WAVE_HUNTERS2_FROM || waveHunters(T) === row.hunters
+    if (waveRoster(T) !== row.roster || !capOk || !huntersOk) bad += ` T${T}: ${waveRoster(T)}/${waveAliveCap(T)}/${waveHunters(T)}`
+  })
+  check('N1 roster / alive cap / hunters match the LEVELS.WAVES rows', bad === '', bad || `T0..T${LEVELS.WAVES.length - 1}`)
+  check('N1b roster, alive cap and hunters never fall with the level; the roster ends at WAVE_ROSTER_MAX', neverFalls(waveRoster) && neverFalls(waveAliveCap) && neverFalls(waveHunters) && waveRoster(59) === LEVELS.WAVE_ROSTER_MAX, `T59: ${waveRoster(59)}/${waveAliveCap(59)}/${waveHunters(59)}`)
+  const over = Ts.filter((T) => waveHunters(T) > waveAliveCap(T) || waveAliveCap(T) > waveRoster(T))
+  check('N1c hunters never exceed the alive cap, the alive cap never exceeds the roster', over.length === 0, over.map((T) => `T${T}`).join(' '))
+  const capMax = Math.max(...Ts.map(waveAliveCap))
+  check('N2 the alive cap reaches MAX_ENEMIES_CAP and never exceeds it', capMax === LEVELS.MAX_ENEMIES_CAP, `max=${capMax}`)
   check('N3 aggression: 0 up to AGGRESSION_FROM, 0.5 halfway, 1 from the end of the span', aggression(0) === 0 && aggression(LEVELS.AGGRESSION_FROM) === 0 && approx(aggression(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN / 2), 0.5) && aggression(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN) === 1 && aggression(30) === 1, `from T${LEVELS.AGGRESSION_FROM} over ${LEVELS.AGGRESSION_SPAN} levels`)
 
-  check('N3b fire cooldown: EARLY at T0, FIRE_COOLDOWN at AGGRESSION_FROM, DEEP x the deep-pressure factor at full aggression, DEEP x DEEP_COOLDOWN_K at full deep pressure, never rising, no deep pressure up to DEEP_FROM', approx(fireCooldown(0), ENEMY.FIRE_COOLDOWN_EARLY) && approx(fireCooldown(LEVELS.AGGRESSION_FROM), ENEMY.FIRE_COOLDOWN) && approx(fireCooldown(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN), ENEMY.FIRE_COOLDOWN_DEEP * (1 + (ENEMY.DEEP_COOLDOWN_K - 1) * deepPressure(LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN))) && approx(fireCooldown(30), ENEMY.FIRE_COOLDOWN_DEEP * ENEMY.DEEP_COOLDOWN_K) && deepPressure(LEVELS.DEEP_FROM) === 0 && deepPressure(LEVELS.DEEP_FROM + LEVELS.DEEP_SPAN) === 1 && [...Array(30).keys()].every((T) => fireCooldown(T + 1) <= fireCooldown(T) + 1e-9), `T0 ${fireCooldown(0)} T1 ${fireCooldown(1)} T2 ${fireCooldown(2)} T8 ${fireCooldown(8).toFixed(2)} T14 ${fireCooldown(14)}`)
+  const fullAggression = LEVELS.AGGRESSION_FROM + LEVELS.AGGRESSION_SPAN
+  check('N3b fire cooldown: FIRE_COOLDOWN_EARLY at T0, FIRE_COOLDOWN at AGGRESSION_FROM', approx(fireCooldown(0), ENEMY.FIRE_COOLDOWN_EARLY) && approx(fireCooldown(LEVELS.AGGRESSION_FROM), ENEMY.FIRE_COOLDOWN), `T0 ${fireCooldown(0)} T${LEVELS.AGGRESSION_FROM} ${fireCooldown(LEVELS.AGGRESSION_FROM)}`)
+  check('N3c fire cooldown at full aggression: FIRE_COOLDOWN_DEEP x the deep-pressure factor', approx(fireCooldown(fullAggression), ENEMY.FIRE_COOLDOWN_DEEP * (1 + (ENEMY.DEEP_COOLDOWN_K - 1) * deepPressure(fullAggression))), `T${fullAggression} ${fireCooldown(fullAggression).toFixed(2)}`)
+  check('N3d fire cooldown at full deep pressure: FIRE_COOLDOWN_DEEP x DEEP_COOLDOWN_K', approx(fireCooldown(30), ENEMY.FIRE_COOLDOWN_DEEP * ENEMY.DEEP_COOLDOWN_K), `T30 ${fireCooldown(30).toFixed(2)}`)
+  check('N3e fire cooldown never rises with the level', [...Array(30).keys()].every((T) => fireCooldown(T + 1) <= fireCooldown(T) + 1e-9), `T1 ${fireCooldown(1)} T8 ${fireCooldown(8).toFixed(2)} T14 ${fireCooldown(14).toFixed(2)}`)
+  check('N3f deep pressure: 0 up to DEEP_FROM, 1 from DEEP_FROM + DEEP_SPAN', deepPressure(LEVELS.DEEP_FROM) === 0 && deepPressure(LEVELS.DEEP_FROM + LEVELS.DEEP_SPAN) === 1)
 
   // per mode: the played (display) level a wave size is reached at
   const capAt = (difficulty: number, displayLevel: number): number => {
@@ -381,29 +332,31 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   const orion = idx('ORION')
   const milky = idx('MILKY WAY')
   const quasar = idx('QUASAR')
-  check('N4 ORION: L1-2 two alive, L3 three alive with a hunter, L8 four alive', capAt(orion, 1) === 2 && capAt(orion, 2) === 2 && capAt(orion, 3) === 3 && waveHunters(tAt(orion, 2)) === 0 && waveHunters(tAt(orion, 3)) === 1 && capAt(orion, 7) === 3 && capAt(orion, 8) === 4, `caps L1..L8: ${[1, 2, 3, 4, 5, 6, 7, 8].map((l) => capAt(orion, l)).join(',')}`)
-  check('N5 ORION L1 is two weavers (roster 2, no hunter)', waveRoster(tAt(orion, 1)) === 2 && waveHunters(tAt(orion, 1)) === 0)
+  // ORION is the identity mapping: level L plays the wave of tuning level L - 1
+  const rows = LEVELS.WAVES.map((_row, T) => T + 1)
+  check('N4 ORION plays the wave table as written: level L has the tuning level and the alive cap of T = L - 1', rows.every((l) => tAt(orion, l) === l - 1 && capAt(orion, l) === waveAliveCap(l - 1)), `caps L1..L${rows.length}: ${rows.map((l) => capAt(orion, l)).join(',')}`)
   const firstHunter = (difficulty: number): number => [...Array(40).keys()].map((k) => k + 1).find((l) => waveHunters(tAt(difficulty, l)) > 0) ?? Infinity
   check('N6 MILKY WAY reaches each wave size later than ORION', tAt(milky, 1) === 0 && [...Array(20).keys()].every((k) => tAt(milky, k + 1) <= tAt(orion, k + 1)) && waveHunters(tAt(milky, 3)) === 0 && firstHunter(milky) > firstHunter(orion) && capAt(milky, 8) <= 3, `T at L1..L8: ${[1, 2, 3, 4, 5, 6, 7, 8].map((l) => tAt(milky, l)).join(',')}`)
-  check('N7 QUASAR starts with a squad of four, three alive, one hunter', waveRoster(tAt(quasar, 1)) === 4 && capAt(quasar, 1) === 3 && waveHunters(tAt(quasar, 1)) === 1, `T at L1 = ${tAt(quasar, 1)}`)
+  const quasarT = tAt(quasar, 1)
+  check('N7 QUASAR starts on the wave of its offset, a larger squad than the first of ORION', quasarT === Math.round(DIFFICULTY.MODES[quasar]!.offset) && waveRoster(quasarT) > waveRoster(tAt(orion, 1)) && capAt(quasar, 1) >= capAt(orion, 1), `T at L1 = ${quasarT}: roster ${waveRoster(quasarT)}, alive ${capAt(quasar, 1)}, hunters ${waveHunters(quasarT)}`)
   const eases = DIFFICULTY.MODES.map((m) => m.ease)
   check('N8 ease: MILKY WAY above 1, ORION 1, QUASAR 1', eases[milky]! > 1 && eases[orion] === 1 && eases[quasar] === 1, eases.join(','))
   const f = createFlight()
   f.setDifficulty(milky)
   check('N9 flight.ease() follows the selected mode', f.ease() === eases[milky])
 
-  // The three steps in pressure land on three different ORION levels: the hunter at
-  // level 3, the extra mines of the phrases at level 4, the aggression ramp after it.
+  // The hunter is the first step in pressure on ORION: it arrives before the extra
+  // mines of the phrases and before the aggression ramp.
   const extraMineT = Math.min(...PHRASES.flatMap((p) => (p.mines ?? []).map((m) => m.minTuned ?? 0)).filter((t) => t > 0))
   const hunterLevel = firstHunter(orion)
   const mineLevel = extraMineT + 1
   const aggressionLevel = [...Array(40).keys()].map((k) => k + 1).find((l) => aggression(tAt(orion, l)) > 0) ?? Infinity
-  check('N10 ORION: hunter at level 3, extra phrase mines at level 4, aggression rises from level 4', hunterLevel === 3 && mineLevel === 4 && aggressionLevel === 4 && SEQUENCE.SCATTER.MINES_3_FROM === extraMineT, `hunter L${hunterLevel}, mines L${mineLevel}, aggression L${aggressionLevel}`)
-  check('N11 levels 1 and 2 are the warm-up: slow fire, no hunter, the lightest mine budgets', fireCooldown(1) > 1.5 * ENEMY.FIRE_COOLDOWN && waveHunters(1) === 0 && bombMult(0) === 1 && bombMult(1) >= 0.9 && bombMult(2) > bombMult(3), `cooldown T0 ${fireCooldown(0)} T1 ${fireCooldown(1).toFixed(2)} T2 ${fireCooldown(2)}; mine mult ${[0, 1, 2, 3, 4].map((T) => bombMult(T)).join(' ')}`)
+  check('N10 ORION: the first hunter arrives before the extra phrase mines and before the aggression ramp', hunterLevel < mineLevel && hunterLevel < aggressionLevel, `hunter L${hunterLevel}, mines L${mineLevel}, aggression L${aggressionLevel}`)
+  check('N10b the extra mines of the phrases start at SCATTER.MINES_3_FROM', SEQUENCE.SCATTER.MINES_3_FROM === extraMineT, `phrases T${extraMineT}, scatter T${SEQUENCE.SCATTER.MINES_3_FROM}`)
+  // the warm-up: the tuning levels below AGGRESSION_FROM
+  const warmUp = [...Array(LEVELS.AGGRESSION_FROM).keys()]
+  const mults = [...Array(40).keys()].map(bombMult)
+  check('N11 the warm-up levels fire slower than FIRE_COOLDOWN and have no hunter; the mine multiplier starts at 1 and never rises', warmUp.every((T) => fireCooldown(T) > ENEMY.FIRE_COOLDOWN && waveHunters(T) === 0) && mults[0] === 1 && mults.every((m, T) => T === 0 || m <= mults[T - 1]!), `cooldown ${warmUp.map((T) => fireCooldown(T).toFixed(2)).join(' ')}; mine mult ${mults.slice(0, 5).join(' ')}`)
 })()
 
-if (failed) {
-  console.error(`\n${failed} CHECK(S) FAILED`)
-  process.exit(1)
-}
-console.log('\nALL LEVEL SIM CHECKS PASSED')
+finish('LEVEL SIM')

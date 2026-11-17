@@ -44,7 +44,7 @@ export interface Ship {
 // the raptor's footprint (span ~5, length ~5) so the identical hit windows also
 // LOOK fair between ships. Returned geometry feeds the dark fill and the edges.
 
-// RAPTOR - the original winged fighter (X-wing-ish): hexagonal fuselage, nose
+// RAPTOR - the winged fighter (X-wing-ish): hexagonal fuselage, nose
 // cone, canopy, four X-wings with engine pods and tip cannons.
 function buildRaptorHull(): BufferGeometry {
   const parts: BufferGeometry[] = []

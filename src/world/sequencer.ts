@@ -1,8 +1,8 @@
 import { FLIGHT, SEQUENCE, SPEED, SPAWN_CLEAR, type FlightMode } from '../config'
-import { type Flight } from '../flight'
-import { angleDiff } from '../util/math'
+import { N_TIERS, TIERS, pinnedTier, type Flight } from '../flight'
+import { angleDiff, clamp, lerp, DEG } from '../util/math'
 import { rand, randRange } from '../util/rng'
-import { PHRASES, buildTrace, type Phrase, type Trace } from './phrases'
+import { PHRASES, MAX_ITEMS, buildTrace, type Load, type Phrase, type Trace } from './phrases'
 
 // The gem-line director. It fills the gem and mine pools (feed-mode fields) with
 // phrases from world/phrases.ts.
@@ -24,13 +24,12 @@ import { PHRASES, buildTrace, type Phrase, type Trace } from './phrases'
 // waiting item beyond the boundary is moved to keep its time (levelUp).
 
 const SECS = FLIGHT.SECTION_SECONDS
-const N_TIERS = 3
-const DEG = Math.PI / 180
 const LOG = 16 // phrases remembered for pressureAt
 const MAX_PLAN = 8 // phrases one section can hold
 const PLAN_TRIES = 16 // plans drawn for a section before the closest one is taken
 const PHRASE_CUE = 0.5 // s before a phrase's start that onPhraseAhead fires
 const SHORTEST = 1.2 // s: about the shortest phrase, when estimating how many more fit
+const LATER_GEMS = 4 // gems each of those further phrases is counted as adding
 const PLACE_TRIES = 4 // forward nudges when a scripted phrase lands on an orb or an extra life
 const ITEM_TRIES = 8 // angle samples for one scatter gem or mine
 const EDGE = 0.15 // s a scatter keeps free before its first and after its last item
@@ -38,7 +37,7 @@ const EDGE = 0.15 // s a scatter keeps free before its first and after its last 
 /** What the director just placed (one reused object, for the sims and metrics). */
 export interface PlacedPhrase {
   id: Phrase['id']
-  load: 0 | 1 | 2
+  load: Load
   tier: number
   level: number
   mirror: boolean
@@ -72,7 +71,7 @@ export interface SequencerDeps {
 export interface Sequencer {
   update(craftDistance: number): void // place what the horizon has reached (once per frame)
   levelUp(): void // the level rose at the boundary flight.cycleStart(): re-time the tube beyond it
-  pressureAt(distance: number): 0 | 1 | 2 // load of the phrase covering a distance, else 0
+  pressureAt(distance: number): Load // load of the phrase covering a distance, else 0
   reset(): void // plan from distance 0 (title screen and run start)
   stale(): boolean // the tube was planned for other speeds than flight now gives (difficulty changed)
 }
@@ -84,7 +83,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
   // One trace per phrase and tier. With tier-relative gravity the steady gravity of
   // a tier is the same at every level, so level 0 stands for all of them.
   const traces: (Trace | undefined)[][] = PHRASES.map((p) =>
-    [0, 1, 2].map((tier) =>
+    TIERS.map((tier) =>
       p.script.length > 0 && p.unlock[tier] !== null ? buildTrace(p, tier, flight.gravityOf(0, flight.tierSpeedOf(0, tier))) : undefined,
     ),
   )
@@ -119,7 +118,8 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
   // the best plan found so far while a section is being planned
   const keptPhrase = new Int8Array(MAX_PLAN)
   const keptDur = new Float64Array(MAX_PLAN)
-  const keptItems = new Uint8Array(MAX_PLAN * 2) // gems, then mines
+  const keptPlanGems = new Uint8Array(MAX_PLAN)
+  const keptPlanMines = new Uint8Array(MAX_PLAN)
   let keptN = 0
   let keptGems = 0
   let keptMines = 0
@@ -135,10 +135,10 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
   let logHead = 0
 
   // scratch for one phrase's items (ghost time, angle)
-  const gemT = new Float64Array(8)
-  const gemTheta = new Float64Array(8)
-  const mineT = new Float64Array(8)
-  const mineTheta = new Float64Array(8)
+  const gemT = new Float64Array(MAX_ITEMS)
+  const gemTheta = new Float64Array(MAX_ITEMS)
+  const mineT = new Float64Array(MAX_ITEMS)
+  const mineTheta = new Float64Array(MAX_ITEMS)
   let nGems = 0
   let nMines = 0
   const cand = new Int8Array(N)
@@ -150,15 +150,11 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     gems: 0, mines: 0, sectionStart: 0, sectionEnd: 0, clearEnd: 0, cycle: 0,
   }
 
-  const pinnedTier = (m: FlightMode): number => (m === 'slow' ? 0 : m === 'fast' ? 2 : 1)
   const tierOf = (index: number): number => (mode === 'sections' ? index : pinnedTier(mode))
   const speedOf = (tier: number): number => flight.tierSpeedOf(level, tier)
   // the whole tuning level, as the level tables use it (levels.ts)
   const tuning = (): number => Math.round(flight.tuned(level))
-  const gap = (): number => {
-    const k = Math.min(1, Math.max(0, flight.tuned(level) / SEQUENCE.GAP_FULL_T))
-    return SEQUENCE.GAP[0]! + (SEQUENCE.GAP[1]! - SEQUENCE.GAP[0]!) * k
-  }
+  const gap = (): number => lerp(SEQUENCE.GAP[0], SEQUENCE.GAP[1], clamp(flight.tuned(level) / SEQUENCE.GAP_FULL_T, 0, 1))
 
   // Distance the craft covers in the first BOUNDARY_CLEAR seconds of a section. It
   // enters at the previous tier's speed and eases at SPEED.EASE, so a section entered
@@ -231,8 +227,8 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
   // longest a scatter of g gems and m mines can take
   const scatterSeconds = (g: number, m: number): number => {
     const S = SEQUENCE.SCATTER
-    const gems = EDGE + (g - 1) * S.GEM_GAP[1]!
-    const mines = m > 0 ? S.MINE_FIRST[1]! + (m - 1) * S.MINE_GAP[1]! : 0
+    const gems = EDGE + (g - 1) * S.GEM_GAP[1]
+    const mines = m > 0 ? S.MINE_FIRST[1] + (m - 1) * S.MINE_GAP[1] : 0
     return Math.max(gems, mines) + EDGE
   }
   const scatterMaxMines = (): number => (tuning() >= SEQUENCE.SCATTER.MINES_3_FROM ? 3 : 2)
@@ -293,8 +289,8 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       kept2 = last2
       keptPhrase.set(planPhrase)
       keptDur.set(planDur)
-      keptItems.set(planGems)
-      keptItems.set(planMines, MAX_PLAN)
+      keptPlanGems.set(planGems)
+      keptPlanMines.set(planMines)
     }
     planN = keptN
     cycleGems = keptGems
@@ -303,8 +299,8 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     last2 = kept2
     planPhrase.set(keptPhrase)
     planDur.set(keptDur)
-    planGems.set(keptItems.subarray(0, MAX_PLAN))
-    planMines.set(keptItems.subarray(MAX_PLAN))
+    planGems.set(keptPlanGems)
+    planMines.set(keptPlanMines)
     planNext = 0
     if (planN === 0) return
     // spread: the spare time goes between the phrases, half a share before the first
@@ -331,6 +327,8 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     const gemNeed = (lastSection ? SEQUENCE.GEMS_PER_CYCLE : SEQUENCE.GEMS_CUMULATIVE_MIN[secIndex]!) - cycleGems
     const mineNeed = secBudget - 1 - secMines // mines still missing to land within one of the budget
     const opening = first && planN === 0
+    // gems this pick would hold: a scripted phrase its own, a scatter as many as fit
+    const pickGems = (i: number): number => traces[i]![secTier]?.nGems ?? Math.min(SEQUENCE.SCATTER.GEMS[1], gemRoom)
     const warmup = plannedBefore + planN < SEQUENCE.WARMUP_PHRASES // the run opens without mines
 
     // Candidates, each with what the section could still reach after it: its own
@@ -341,13 +339,13 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     for (let i = 0; i < N; i++) {
       if (opening ? i !== arcIndex : !unlocked(i) || tooSoon(i)) continue
       const trace = traces[i]![secTier]
-      const gems = trace ? trace.nGems : Math.min(3, gemRoom)
-      const dur = trace ? trace.duration : scatterSeconds(2, 0)
-      if (dur > timeLeft || gems > gemRoom || gems < 2) continue
+      const gems = pickGems(i)
+      const dur = trace ? trace.duration : scatterSeconds(SEQUENCE.SCATTER.GEMS[0], 0) // the shortest scatter
+      if (dur > timeLeft || gems > gemRoom || gems < SEQUENCE.SCATTER.GEMS[0]) continue
       if (!warmup && secMines + (trace ? baseMines(trace) : 0) > secBudget + 1) continue
       const later = Math.max(0, Math.floor((timeLeft - dur) / (rest + SHORTEST)))
       cand[n] = i
-      candGems[n] = Math.min(gemRoom, gems + later * 4)
+      candGems[n] = Math.min(gemRoom, gems + later * LATER_GEMS)
       candMines[n] = maxMines(i) + laterMines(later, i)
       if (candGems[n]! > bestGems) bestGems = candGems[n]!
       if (candMines[n]! > bestMines) bestMines = candMines[n]!
@@ -355,10 +353,9 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     }
     if (n === 0) return false
 
-    const ownGems = (i: number): number => traces[i]![secTier]?.nGems ?? Math.min(3, gemRoom)
     let choice = -1
     if (greedy) {
-      for (let k = 0; k < n; k++) if (choice < 0 || ownGems(cand[k]!) > ownGems(choice)) choice = cand[k]!
+      for (let k = 0; k < n; k++) if (choice < 0 || pickGems(cand[k]!) > pickGems(choice)) choice = cand[k]!
     }
     // Keep the candidates that can still meet the gem goal and the mine budget; when
     // none can do both, the gem goal alone (the gem gate depends on it).
@@ -392,10 +389,11 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       while (mines < all && secMines + mines + 1 <= secBudget + 0.5) mines++
       dur = trace.duration
     } else {
-      // a scatter takes 2 or 3 gems (3 only with time and room for it) and as many
-      // mines as the section's budget still asks for and the time allows
-      const canThree = gemRoom >= 3 && timeLeft >= scatterSeconds(3, 0)
-      gems = canThree && (gemNeed >= 3 || rand() < 0.5) ? 3 : 2
+      // a scatter takes its fewest or its most gems (the most only with time and room
+      // for it) and as many mines as the section's budget still asks for and the time allows
+      const [few, many] = SEQUENCE.SCATTER.GEMS
+      const canMany = gemRoom >= many && timeLeft >= scatterSeconds(many, 0)
+      gems = canMany && (gemNeed >= many || rand() < 0.5) ? many : few
       mines = warmup ? 0 : Math.max(0, Math.min(scatterMaxMines(), Math.round(secBudget - secMines)))
       while (mines > 0 && scatterSeconds(gems, mines) > timeLeft) mines--
       dur = scatterSeconds(gems, mines)
@@ -423,11 +421,11 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     nMines = 0
     let t = EDGE
     for (let i = 0; i < g; i++) {
-      if (i > 0) t += randRange(S.GEM_GAP[0]!, S.GEM_GAP[1]!)
+      if (i > 0) t += randRange(S.GEM_GAP[0], S.GEM_GAP[1])
       // not on an orb, and within reach of the gem before it through the bottom
       let theta = 0
       for (let k = 0; k < ITEM_TRIES; k++) {
-        theta = (rand() < 0.5 ? -1 : 1) * randRange(S.GEM_DEG[0]!, S.GEM_DEG[1]!) * DEG
+        theta = (rand() < 0.5 ? -1 : 1) * randRange(S.GEM_DEG[0], S.GEM_DEG[1]) * DEG
         const reach = i === 0 || Math.abs(theta - gemTheta[i - 1]!) <= S.GEM_REACH
         if (reach && !deps.blocked(start + t * speed, theta)) break
       }
@@ -435,11 +433,11 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       gemTheta[nGems] = theta
       nGems++
     }
-    t = randRange(S.MINE_FIRST[0]!, S.MINE_FIRST[1]!)
+    t = randRange(S.MINE_FIRST[0], S.MINE_FIRST[1])
     for (let i = 0; i < m; i++) {
-      if (i > 0) t += randRange(S.MINE_GAP[0]!, S.MINE_GAP[1]!)
+      if (i > 0) t += randRange(S.MINE_GAP[0], S.MINE_GAP[1])
       for (let k = 0; k < ITEM_TRIES; k++) {
-        const theta = (rand() < 0.5 ? -1 : 1) * randRange(S.MINE_DEG[0]!, S.MINE_DEG[1]!) * DEG
+        const theta = (rand() < 0.5 ? -1 : 1) * randRange(S.MINE_DEG[0], S.MINE_DEG[1]) * DEG
         let clear = !deps.blocked(start + t * speed, theta)
         for (let j = 0; j < nGems; j++) {
           if (Math.abs(gemT[j]! - t) < S.NEAR && Math.abs(angleDiff(theta, gemTheta[j]!)) < SEQUENCE.MINE_CLEAR) clear = false
@@ -485,7 +483,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     if (trace) {
       // an orb or an extra life in the way of a scripted phrase: move on a little
       // (into the rest that follows), then leave out the mines that still sit on one
-      const room = index + 1 < planN ? clearEnd + (planAt[index + 1]! - SEQUENCE.GAP[1]!) * speed : secEnd
+      const room = index + 1 < planN ? clearEnd + (planAt[index + 1]! - SEQUENCE.GAP[1]) * speed : secEnd
       for (let k = 0; k < PLACE_TRIES; k++) {
         if (!itemsBlocked(start, speed) || start + SPAWN_CLEAR.NUDGE + planDur[index]! * speed > room) break
         start += SPAWN_CLEAR.NUDGE
@@ -589,9 +587,9 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       }
     },
 
-    pressureAt(distance: number): 0 | 1 | 2 {
+    pressureAt(distance: number): Load {
       for (let i = 0; i < LOG; i++) {
-        if (logEnd[i]! >= distance && logStart[i]! <= distance) return logLoad[i] as 0 | 1 | 2
+        if (logEnd[i]! >= distance && logStart[i]! <= distance) return logLoad[i] as Load
       }
       return 0
     },

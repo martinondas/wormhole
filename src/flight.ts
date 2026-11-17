@@ -1,4 +1,4 @@
-import { PHYSICS, SPEED, FLIGHT, LEVELS, TREASURE, DIFFICULTY, SEQUENCE, type FlightMode } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, DIFFICULTY, SEQUENCE, type FlightMode } from './config'
 import { clamp } from './util/math'
 
 // Runtime-switchable flight mode + the difficulty-by-level model. Speed is the
@@ -8,8 +8,8 @@ import { clamp } from './util/math'
 //
 // A level occupies a stretch of tube whose length is the sum of its three section
 // lengths, and each section length = its tier speed x SECTION_SECONDS, so every
-// section is equal in TIME (~10s) and a level is ~30s regardless of how fast the
-// tiers get. Levels grow longer in distance as they speed up.
+// section is equal in TIME regardless of how fast the tiers get. Levels grow longer
+// in distance as they speed up.
 //
 // GEM GATE (sections mode): a level does NOT advance on distance alone. At each
 // cycle boundary it advances only if you have collected the level's gem quota
@@ -22,10 +22,13 @@ import { clamp } from './util/math'
 // Levels only progress in 'sections' mode (the game). Pinned slow/normal/fast
 // (G-key, for feel testing) hold a single tier at level 1 with multiplier 1 and no gate.
 
-const TIERS = [0, 1, 2] as const // slow, normal, fast
+export const TIERS = [0, 1, 2] as const // slow, normal, fast
 const BASE = [SPEED.SLOW, SPEED.NORMAL, SPEED.FAST]
 const ORDER: FlightMode[] = ['slow', 'normal', 'fast', 'sections'] // G-key cycle
-const N_TIERS = TIERS.length
+export const N_TIERS = TIERS.length
+
+// The tier a pinned mode holds (slow / normal / fast force one tier; 'sections' cycles them).
+export const pinnedTier = (mode: FlightMode): number => (mode === 'slow' ? 0 : mode === 'fast' ? 2 : 1)
 
 export interface Flight {
   mode: FlightMode
@@ -38,7 +41,6 @@ export interface Flight {
   speed01(speed: number): number // 0 at the current level's slow-tier speed, 1 at its fast-tier speed (clamped)
   gravityForSpeed(speed: number): number // pendulum strength for the current level
   tierIndexAt(distance: number): number // 0/1/2 at a world distance (tube coloring)
-  levelAt(distance: number): number // level (0-based) at a world distance (field scaling)
   // Speed of the tier at a world distance, relative to that same tier at level 1.
   // Field spacing is in DISTANCE but encounter rate = speed / spacing, so density
   // levers must scale spacing by this to mean a time-rate ("twice as rare") rather
@@ -67,9 +69,8 @@ export function createFlight(): Flight {
   const step = LEVELS.SCORE_MULT_STEP
 
   // Per-level speed bonus added to every tier: a decaying-but-never-zero increment
-  // across three bands by (0-based) level, so early levels keep the original +5 step
-  // while deep levels still speed up, ever more slowly (never plateaus). earlyN is the
-  // count of full-EARLY increments (display L1->L10 = 9), midN the MID ones (L11->L15 = 5).
+  // across three bands by (0-based) level (config LEVELS.SPEED_STEP / SPEED_BAND).
+  // earlyN counts the EARLY increments, midN the MID ones.
   const earlyN = LEVELS.SPEED_BAND.EARLY_UNTIL - 1
   const midN = LEVELS.SPEED_BAND.MID_UNTIL - LEVELS.SPEED_BAND.EARLY_UNTIL
   const speedBonus = (level: number): number => {
@@ -84,7 +85,7 @@ export function createFlight(): Flight {
   // fractional) tuning level; speedBonus is piecewise-linear, so fractions work.
   // Applied INSIDE tierSpeed, so every derived quantity (cycle length, gem quota,
   // gravity span, speed cap, score multiplier) follows the mode automatically.
-  let mode = DIFFICULTY.MODES[DIFFICULTY.DEFAULT] ?? { name: 'ORION', slope: 1, offset: 0, ease: 1, quotaMax: 1 }
+  let mode = DIFFICULTY.MODES[DIFFICULTY.DEFAULT]!
   const tuned = (level: number): number => Math.max(0, mode.offset + mode.slope * level)
 
   // tier speed at a level, and the distance length of one section / a full level.
@@ -107,12 +108,10 @@ export function createFlight(): Flight {
     return N_TIERS - 1 // numeric guard (offset should always land above)
   }
 
-  // Gems required to clear a level. With gem lines every cycle offers at least
+  // Gems required to clear a level. Every cycle offers at least
   // SEQUENCE.GEMS_PER_CYCLE gems, so the quota is a fraction of that count, and the
-  // fraction rises with the tuning level up to a cap (the mode may cap it lower). With random gem fields
-  // (SEQUENCE.ENABLED false) it is a fraction of the gems one cycle's length holds.
+  // fraction rises with the tuning level up to a cap (the mode may cap it lower).
   const gemQuota = (level: number): number => {
-    if (!SEQUENCE.ENABLED) return Math.round((cycleLen(level) / TREASURE.SPAWN_SPACING) * LEVELS.GEM_QUOTA_FRACTION)
     const fraction = Math.min(LEVELS.QUOTA_FRACTION_MAX, mode.quotaMax, LEVELS.GEM_QUOTA_FRACTION + LEVELS.QUOTA_FRACTION_STEP * tuned(level))
     return Math.round(SEQUENCE.GEMS_PER_CYCLE * fraction)
   }
@@ -127,9 +126,6 @@ export function createFlight(): Flight {
     const floor = FLIGHT.GRAVITY_FLOOR
     return PHYSICS.GRAVITY_K * (floor + (1 - floor) * Math.pow(t, FLIGHT.GRAVITY_CURVE))
   }
-
-  // Pinned-mode tier (slow/normal/fast force one tier; sections cycles them).
-  const pinnedTier = (mode: FlightMode): number => (mode === 'slow' ? 0 : mode === 'fast' ? 2 : 1)
 
   // Gated progression state (sections mode). gatedLevel only advances when a cycle
   // ends with the gem quota met; levelStartDistance marks where the current cycle
@@ -169,7 +165,7 @@ export function createFlight(): Flight {
       // Cross any completed cycles (in practice <= 1 per frame). On each boundary the
       // cycle window moves forward; the level advances ONLY if the quota was met, else
       // it replays. After an advance the new level starts with no gems counted yet
-      // (main resets the live counter on the level-up edge), so `gems` drops to 0 here
+      // (the session resets the live counter on the level-up edge), so `gems` drops to 0 here
       // to keep a same-frame second boundary from advancing twice on stale gems.
       let gems = gemsThisLevel
       let len = cycleLen(gatedLevel)
@@ -193,8 +189,7 @@ export function createFlight(): Flight {
       return curTargetSpeed
     },
 
-    // The craft never needs to exceed the current level's fast-tier speed; this
-    // replaces the old fixed SPEED.FAST clamp so high levels can actually speed up.
+    // The craft never needs to exceed the current level's fast-tier speed.
     speedMax(): number {
       return tierSpeed(curLevel, N_TIERS - 1)
     },
@@ -224,11 +219,6 @@ export function createFlight(): Flight {
     tierIndexAt(distance: number): number {
       if (this.mode !== 'sections') return pinnedTier(this.mode)
       return tierAtGated(distance)
-    },
-
-    levelAt(_distance: number): number {
-      if (this.mode !== 'sections') return 0
-      return gatedLevel // gated: the tube ahead is the current level until you qualify
     },
 
     speedRatioAt(distance: number): number {

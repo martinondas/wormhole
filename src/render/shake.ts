@@ -1,11 +1,12 @@
 import { FEEL } from '../config'
+import { DEG } from '../util/math'
 
 // Camera shake from one `trauma` value in 0..1. Events add trauma, it decays
 // linearly at SHAKE.DECAY per second, and the offset is trauma squared times a sum
 // of three fixed-frequency sines per axis (smooth, not random jitter). The camera
 // rig applies it after lookAt; it never touches the craft state or the aim.
 export interface Shake {
-  trauma: number
+  readonly trauma: number
   add(amount: number): void
   update(dt: number): void // advance time and decay trauma
   readonly x: number // view offset along camera right (world units)
@@ -29,19 +30,19 @@ function wave(freqs: readonly number[], t: number, phase: number): number {
 
 export function createShake(): Shake {
   let t = 0
+  let trauma = 0
   let x = 0
   let y = 0
   let roll = 0
-  const shake: Shake = {
-    trauma: 0,
+  return {
     add(amount: number): void {
-      shake.trauma = Math.min(1, shake.trauma + amount)
+      trauma = Math.min(1, trauma + amount)
     },
     update(dt: number): void {
       t += dt
-      shake.trauma = shake.trauma - FEEL.SHAKE.DECAY * dt
-      if (shake.trauma < 1e-9) shake.trauma = 0 // land on exactly 0 despite float steps
-      const k = shake.trauma * shake.trauma
+      trauma = trauma - FEEL.SHAKE.DECAY * dt
+      if (trauma < 1e-9) trauma = 0 // land on exactly 0 despite float steps
+      const k = trauma * trauma
       if (k === 0) {
         x = 0
         y = 0
@@ -50,7 +51,10 @@ export function createShake(): Shake {
       }
       x = FEEL.SHAKE.MAX_OFFSET * k * wave(FX, t, 0.7)
       y = FEEL.SHAKE.MAX_OFFSET * k * wave(FY, t, 2.1)
-      roll = ((FEEL.SHAKE.MAX_ROLL_DEG * Math.PI) / 180) * k * wave(FR, t, 4.3)
+      roll = FEEL.SHAKE.MAX_ROLL_DEG * DEG * k * wave(FR, t, 4.3)
+    },
+    get trauma(): number {
+      return trauma
     },
     get x(): number {
       return x
@@ -62,11 +66,10 @@ export function createShake(): Shake {
       return roll
     },
     reset(): void {
-      shake.trauma = 0
+      trauma = 0
       x = 0
       y = 0
       roll = 0
     },
   }
-  return shake
 }

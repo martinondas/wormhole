@@ -5,7 +5,7 @@ import { createTube } from './world/tube'
 import { createShip } from './world/ship'
 import { createBurst } from './world/burst'
 import { Input } from './input'
-import { createSession, type SessionFx } from './session'
+import { createSession, type DamageCause, type SessionFx } from './session'
 import { seedRng } from './util/rng'
 import { createHud } from './hud'
 import { createMenu } from './menu'
@@ -45,6 +45,11 @@ const hud = createHud()
 const burst = createBurst()
 stage.scene.add(burst.object)
 stage.onResize((w, h) => burst.setResolution(w, h))
+
+const audio = createAudio()
+let readyCueThisGem = false // the quota-meeting gem plays READY, not its chime
+let lastLoopCue = -Infinity // game time of the last loop cue
+let deathCause: DamageCause | undefined // cause of the last life lost this run
 
 // The gameplay itself (craft, levels, fields, gun, raiders, bolts, run state and
 // the fixed-step order) lives in session.ts, shared with the headless playtest
@@ -86,11 +91,11 @@ const fx: SessionFx = {
     audio.play('whoosh', sideOf(theta))
     shake.add(FEEL.SHAKE.NEAR)
   },
-  // the charge whine comes from the raider's side, louder the closer its line is to yours
-  // (never below 0.45: a tell from across the tube must still be heard over gunfire)
+  // the charge whine comes from the raider's side, louder the closer its line is to
+  // yours (from FEEL.CHARGE_GAIN_MIN across the tube up to full gain on your line)
   enemyChargeStarted: (theta) => {
     const near = 1 - Math.abs(angleDiff(theta, craft.theta)) / Math.PI
-    audio.play('charge', sideOf(theta), 0.45 + 0.55 * near * near)
+    audio.play('charge', sideOf(theta), FEEL.CHARGE_GAIN_MIN + (1 - FEEL.CHARGE_GAIN_MIN) * near * near)
   },
   enemyChipped: () => audio.play('chip'),
   waveCleared: () => audio.play('waveClear'), // the squad is destroyed: a soft chime opens the breather
@@ -101,7 +106,7 @@ const fx: SessionFx = {
   // a caught shard that does not complete the set: its step of the rising tone
   // (the completing shard plays the 1-up through lifeCollected instead)
   shardCollected: (count, restored) => {
-    if (!restored) audio.play('shard', 0, 1, (count - 1) / Math.max(1, game.shardsPerLife - 2))
+    if (!restored) audio.play('shard', 0, 1, shardToneStep(count))
   },
   // a shard or cross caught at full lives paid score: the top step of the shard tone
   bonusCollected: () => audio.play('shard', 0, 1, 1),
@@ -128,9 +133,9 @@ const fx: SessionFx = {
 }
 // Stereo side of something at `theta` relative to the craft: -1 left .. 1 right.
 const sideOf = (theta: number): number => Math.sin(angleDiff(theta, craft.theta))
-let readyCueThisGem = false // the quota-meeting gem plays READY, not its chime
-let lastLoopCue = -Infinity // game time of the last loop cue
-let deathCause = '' // cause of the last life lost this run
+// Step of the shard tone for the `count`-th shard of a set: 0 for the first, 1 for
+// the last one before the completing shard (which plays the 1-up instead).
+const shardToneStep = (count: number): number => (count - 1) / Math.max(1, game.shardsPerLife - 2)
 const session = createSession(fx)
 const { craft, flight, game, fields, enemies, projectiles, gun } = session
 for (const sys of [...fields, enemies, projectiles]) {
@@ -147,7 +152,6 @@ flight.setDifficulty(menu.diffIndex)
 session.replan() // the gem lines follow the mode's speeds
 hud.setMenu(menu.shipName(), menu.diffIndex, menu.row)
 const perf = createPerfOverlay() // press P to toggle the FPS / frame-time overlay
-const audio = createAudio()
 let paused = false // Esc pauses a live run to the intro/menu screen; resume with Space or Esc
 audio.arm() // a click/tap to focus the canvas wakes the menu track (autoplay policy)
 audio.playMusic(musicTrack()) // 'menu' on the title; queued until the first gesture unlocks audio
@@ -182,7 +186,7 @@ function beginRun(): void {
 // rather than dropping straight into a new run. The next run starts from the title
 // on Space/Enter (beginRun), exactly like the first run on load.
 function returnToTitle(): void {
-  deathCause = ''
+  deathCause = undefined
   lastLoopCue = -Infinity
   session.reset()
   burst.reset()
@@ -334,7 +338,7 @@ startLoop(
 //   WH.config.PHYSICS.STEER_TORQUE = 22
 //   WH.craft.theta            // inspect current state
 //   WH.game.lives             // inspect run state
-//   WH.fields[1].object       // the treasure field's group
+//   WH.session.fieldByKind.gem.object // the treasure field's group
 ;(window as unknown as { WH: unknown }).WH = {
   session, // the whole gameplay session (what the playtest bots drive)
   fx, // the session's event hooks; the live playtest harness wraps these to count events

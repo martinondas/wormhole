@@ -1,7 +1,7 @@
-import { CLIMB, PHYSICS, SPEED } from './config'
+import { PHYSICS, SPEED } from './config'
 import { stepPendulum, type PendulumState } from './physics/pendulum'
 import { type InputState } from './input'
-import { angleDiff, approach, clamp, smoothstep } from './util/math'
+import { approach, clamp } from './util/math'
 
 // Full player-craft state: the angular pendulum plus forward speed and a
 // smoothed steering signal (so taps feel weighty rather than instant).
@@ -45,18 +45,6 @@ export function stepSwing(s: SwingState, steerTarget: number, gravityK: number, 
   // only the "hold a side key and spin up forever" runaway is tamed. Gravity is
   // left untouched, so a dive from high up can still carry omega past the cap.
   let steerTorque = PHYSICS.STEER_TORQUE * s.steerSignal
-  // Climb fade (config CLIMB): high on the wall the torque that pushes farther up
-  // weakens, so height there comes from momentum. h is the angle from the bottom;
-  // `up` is 1 while the torque pushes away from the bottom and blends to 0 at the
-  // top, which keeps the torque continuous when the craft crosses it. At or below
-  // CLIMB.START nothing is touched.
-  if (CLIMB.FADE > 0 && steerTorque !== 0) {
-    const h = Math.abs(angleDiff(s.theta, 0))
-    if (h > CLIMB.START) {
-      const up = clamp((Math.sign(steerTorque) * Math.sin(s.theta)) / CLIMB.UP_SOFT, 0, 1)
-      steerTorque *= 1 - CLIMB.FADE * smoothstep(CLIMB.START, CLIMB.END, h) * up
-    }
-  }
   if (steerTorque * s.omega > 0) {
     steerTorque *= clamp(1 - Math.abs(s.omega) / PHYSICS.STEER_OMEGA_MAX, 0, 1)
   }
@@ -73,9 +61,8 @@ export function updateCraft(
 ): void {
   stepSwing(s, input.steerTarget, gravityK, dt)
 
-  // Forward speed is set by the active flight tier / section (the player no
-  // longer throttles); ease toward it so section changes ramp instead of snap.
-  // Never halts (tiers are all > 0).
+  // Forward speed is set by the active flight tier / section, not the player;
+  // ease toward it so section changes ramp instead of snap.
   s.speed = approach(s.speed, targetSpeed, SPEED.EASE * dt)
   // Floor: never halt (SPEED.SLOW is the lowest tier of level 1). Ceiling: the
   // current level's fast-tier speed (grows with the level, so high levels are not

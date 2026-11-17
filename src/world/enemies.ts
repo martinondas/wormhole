@@ -1,10 +1,11 @@
 import { Group } from 'three'
 import { ENEMY, GUN, LEVELS, RENDER, RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
-import { waveRoster, waveHunters, aggression, deepPressure, fireCooldown as levelFireCooldown } from '../levels'
+import { waveRoster, waveHunters, aggression, fireCooldown as levelFireCooldown, fireStagger as levelFireStagger } from '../levels'
 import { angleDiff, clamp, lerp } from '../util/math'
-import { rand as rand01, randRange as rand } from '../util/rng'
+import { rand, randRange } from '../util/rng'
 import { createEnemy, type Enemy } from './enemy'
+import { type Load } from './phrases'
 import { farScale } from './farScale'
 
 // The enemy pool, the per-enemy state machine and the wave director. NOT a Field: a
@@ -46,9 +47,9 @@ export interface Enemies {
   // wave and the aggression. ease is the difficulty mode's factor on the fire
   // cooldown and the breather (1 = as tuned).
   setLevel(T: number, ease?: number): void
-  // How busy the wall ahead is (0 calm, 1 busy, 2 a hard phrase): at 2 no wave
-  // starts, hunters hold fire and only one fire slot is open.
-  setPressure(p: 0 | 1 | 2): void
+  // How busy the wall ahead is: at load 2 no wave starts, hunters hold fire and only
+  // one fire slot is open.
+  setPressure(p: Load): void
   setHoldFire(hold: boolean): void // while true no raider starts a firing tell (a cycle boundary is near)
   tryKill(theta: number, z: number): boolean // a player bolt at (theta,z) - true if it struck an enemy
   setResolution(w: number, h: number): void
@@ -68,12 +69,11 @@ export interface Enemies {
 
 export type EnemyPhase = 'approach' | 'engage' | 'depart' | 'exit' | 'dead'
 export type EnemyRole = 'weaver' | 'hunter'
-type Phase = EnemyPhase
 
 interface Slot {
   enemy: Enemy
   active: boolean // a live enemy on screen (false while the slot waits for the director)
-  phase: Phase
+  phase: EnemyPhase
   theta: number
   worldDistance: number
   hp: number
@@ -84,7 +84,7 @@ interface Slot {
   laneZ: number // ship-relative depth it holds in engage
   strafeAmpK: number // its own weave width ...
   strafeWK: number // ... and weave rate, as multipliers
-  flankSide: number // a second hunter's side of the player's line (+1 / -1; 0 = not chosen yet)
+  flankSide: -1 | 0 | 1 // a second hunter's side of the player's line (0 = not chosen yet)
   // engage
   thetaCenter: number
   strafePhase: number
@@ -102,9 +102,6 @@ interface Slot {
 }
 
 const FLASH_TIME = 0.12
-const laneNear = (): number => ENEMY.LANES[0]!
-const laneMid = (): number => ENEMY.LANES[1]!
-const laneFar = (): number => ENEMY.LANES[2]!
 
 // Formations: the weave-center offset (rad from the anchor) of spot k in a squad of
 // n in the fight at once. SPREAD is side by side; PINCER is two wings wide of the player
@@ -130,7 +127,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   let chargers = 0
   let sinceCharge = Infinity // seconds since the last charge start (FIRE_STAGGER)
   let leadHunter: Slot | undefined // the engaged hunter that takes the player's own line this step
-  let pressure: 0 | 1 | 2 = 0
+  let pressure: Load = 0
   let holdFire = false
 
   // level tuning (setLevel)
@@ -138,7 +135,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   let roster = waveRoster(0)
   let hunters = waveHunters(0)
   let aggr = aggression(0)
-  let fireStagger: number = ENEMY.FIRE_STAGGER // least s between two charge starts at the current level
+  let fireStagger = levelFireStagger(0) // least s between two charge starts at the current level
   let ease = 1
 
   // wave director
@@ -158,40 +155,52 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   // projectiles.update) and debugStage() can compute ship-relative z.
   let craftDistance = 0
 
+  // Every slot default. The pool starts from it and reset() returns to it; arm(),
+  // enterEngage() and debugStage() then set what a live raider needs.
+  function clearSlot(slot: Slot): void {
+    slot.active = false
+    slot.phase = 'approach'
+    slot.theta = 0
+    slot.worldDistance = 0
+    slot.hp = ENEMY.HP
+    slot.role = 'weaver'
+    slot.formK = -1
+    slot.stationOffset = 0
+    slot.laneZ = ENEMY.LANES[1]
+    slot.strafeAmpK = 1
+    slot.strafeWK = 1
+    slot.flankSide = 0
+    slot.thetaCenter = 0
+    slot.strafePhase = 0
+    slot.engageT = 0
+    slot.fireCd = 0
+    slot.charging = false
+    slot.chargeT = 0
+    slot.flashT = 0
+    slot.exitT = 0
+    slot.exitZ = 0
+    slot.popT = 0
+    slot.popZ = 0
+    slot.enemy.object.visible = false
+    slot.enemy.object.scale.setScalar(1)
+    slot.enemy.setOpacity(1)
+    slot.enemy.setCharge(0)
+  }
+
   for (let i = 0; i < LEVELS.MAX_ENEMIES_CAP; i++) {
     const enemy = createEnemy()
     group.add(enemy.object)
-    enemy.object.visible = false
-    slots.push({
-      enemy,
-      active: false,
-      phase: 'approach',
-      theta: 0,
-      worldDistance: 0,
-      hp: ENEMY.HP,
-      role: 'weaver',
-      formK: -1,
-      stationOffset: 0,
-      laneZ: laneMid(),
-      strafeAmpK: 1,
-      strafeWK: 1,
-      flankSide: 0,
-      thetaCenter: 0,
-      strafePhase: 0,
-      engageT: 0,
-      fireCd: 0,
-      charging: false,
-      chargeT: 0,
-      flashT: 0,
-      exitT: 0,
-      exitZ: 0,
-      popT: 0,
-      popZ: 0,
-    })
+    const slot = { enemy } as Slot
+    clearSlot(slot)
+    slots.push(slot)
   }
 
   const fighting = (slot: Slot): boolean => slot.active && (slot.phase === 'approach' || slot.phase === 'engage')
-  const fireCooldown = (): number => levelFireCooldown(tuningLevel) * ease + rand(-ENEMY.FIRE_JITTER, ENEMY.FIRE_JITTER)
+  // the visible firing tell: 0 idle .. 1 about to fire
+  const chargeLevel = (slot: Slot): number => (slot.charging ? Math.min(slot.chargeT / ENEMY.CHARGE_TIME, 1) : 0)
+  // where a formation wants its anchor: on the player's line, but never on the top wall
+  const anchorGoal = (craft: CraftState): number => clamp(angleDiff(craft.theta, 0), -ENEMY.ANCHOR_MAX, ENEMY.ANCHOR_MAX)
+  const fireCooldown = (): number => levelFireCooldown(tuningLevel) * ease + randRange(-ENEMY.FIRE_JITTER, ENEMY.FIRE_JITTER)
 
   // The smallest angle between `slot`'s formation spot and a fighting weaver that
   // holds depth lane `lane` (Infinity when the lane is empty).
@@ -234,25 +243,26 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     // near and far lanes, each new one the lane where its nearest neighbour is
     // farthest away in angle, so two ships at one depth are never side by side.
     // A squad without a hunter (the first levels) takes the lanes of EARLY_LANES.
-    if (slot.role === 'hunter') slot.laneZ = laneMid()
+    const [near, mid, far] = ENEMY.LANES
+    if (slot.role === 'hunter') slot.laneZ = mid
     else if (leaver) slot.laneZ = leaver.laneZ
     else if (waveHuntersN === 0) slot.laneZ = ENEMY.LANES[ENEMY.EARLY_LANES[k % 2]!]!
-    else slot.laneZ = lanePeerGap(slot, laneFar()) > lanePeerGap(slot, laneNear()) ? laneFar() : laneNear()
-    slot.strafeAmpK = rand(ENEMY.STRAFE_AMP_K[0]!, ENEMY.STRAFE_AMP_K[1]!)
-    slot.strafeWK = rand(ENEMY.STRAFE_W_K[0]!, ENEMY.STRAFE_W_K[1]!)
+    else slot.laneZ = lanePeerGap(slot, far) > lanePeerGap(slot, near) ? far : near
+    slot.strafeAmpK = randRange(ENEMY.STRAFE_AMP_K[0], ENEMY.STRAFE_AMP_K[1])
+    slot.strafeWK = randRange(ENEMY.STRAFE_W_K[0], ENEMY.STRAFE_W_K[1])
     slot.flankSide = 0
     slot.active = true
     slot.phase = 'approach'
     slot.thetaCenter = anchorTheta + slot.stationOffset
     slot.theta = slot.thetaCenter
-    slot.worldDistance = craftDistance + ENEMY.SPAWN_AHEAD + rand01() * ENEMY.SPAWN_JITTER
+    slot.worldDistance = craftDistance + ENEMY.SPAWN_AHEAD + rand() * ENEMY.SPAWN_JITTER
     slot.hp = ENEMY.HP
     slot.charging = false
     slot.chargeT = 0
     slot.flashT = 0
     slot.exitT = 0
     slot.popT = 0
-    slot.strafePhase = rand01() * Math.PI * 2 // desync raiders so they do not weave in lockstep
+    slot.strafePhase = rand() * Math.PI * 2 // desync raiders so they do not weave in lockstep
     slot.enemy.object.visible = true
     slot.enemy.object.scale.setScalar(1)
     slot.enemy.setOpacity(1)
@@ -288,9 +298,8 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     armT = 0
     waveHuntersN = hunters
     formN = Math.max(1, Math.min(roster, maxActive, ENEMY.WAVE.FIGHT_MAX))
-    formation = rand01() < 0.5 ? 'spread' : 'pincer'
-    // around the player's line, but never laid out on the top wall
-    anchorTheta = clamp(angleDiff(craft.theta, 0), -ENEMY.ANCHOR_MAX, ENEMY.ANCHOR_MAX)
+    formation = rand() < 0.5 ? 'spread' : 'pincer'
+    anchorTheta = anchorGoal(craft)
   }
 
   function endWave(): void {
@@ -343,8 +352,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       return
     }
     // the shape follows the player loosely
-    const want = clamp(angleDiff(craft.theta, 0), -ENEMY.ANCHOR_MAX, ENEMY.ANCHOR_MAX)
-    anchorTheta += clamp(want - anchorTheta, -ENEMY.ANCHOR_TRACK * dt, ENEMY.ANCHOR_TRACK * dt)
+    anchorTheta += clamp(anchorGoal(craft) - anchorTheta, -ENEMY.ANCHOR_TRACK * dt, ENEMY.ANCHOR_TRACK * dt)
   }
 
   // Keep two raiders from reading as one: when a pair is close in angle and in depth,
@@ -382,7 +390,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   function enterEngage(slot: Slot): void {
     // keep thetaCenter / strafePhase from APPROACH so the weave flows on without a snap
     slot.phase = 'engage'
-    slot.engageT = ENEMY.ENGAGE_TIME + rand(-ENEMY.ENGAGE_TIME_JITTER, ENEMY.ENGAGE_TIME_JITTER)
+    slot.engageT = ENEMY.ENGAGE_TIME + randRange(-ENEMY.ENGAGE_TIME_JITTER, ENEMY.ENGAGE_TIME_JITTER)
     slot.fireCd = fireCooldown()
     slot.charging = false
     slot.chargeT = 0
@@ -398,10 +406,50 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     return clamp(step / dt / ENEMY.STRAFE_OMEGA_MAX, -1, 1)
   }
 
+  // An engaged hunter slides its weave center to the player's line. A second hunter
+  // does not stack on the first: it takes the line HUNT_FLANK beside the player's and
+  // waits there for the player to come to it.
+  function steerHunter(slot: Slot, craft: CraftState, dt: number): void {
+    const track = lerp(ENEMY.HUNT_TRACK[0], ENEMY.HUNT_TRACK[1], aggr) * dt
+    let goal = craft.theta
+    if (slot !== leadHunter) {
+      // it keeps the side it came from, so it never crosses the first hunter
+      if (slot.flankSide === 0) slot.flankSide = angleDiff(slot.thetaCenter, craft.theta) >= 0 ? 1 : -1
+      goal += slot.flankSide * ENEMY.HUNT_FLANK
+    }
+    const next = slot.thetaCenter + clamp(angleDiff(goal, slot.thetaCenter), -track, track)
+    // ... and it waits rather than slide through the first hunter's spot
+    const gapNow = leadHunter && slot !== leadHunter ? Math.abs(angleDiff(slot.thetaCenter, leadHunter.thetaCenter)) : Infinity
+    const gapNext = leadHunter && slot !== leadHunter ? Math.abs(angleDiff(next, leadHunter.thetaCenter)) : Infinity
+    if (gapNext >= ENEMY.HUNT_GAP_MIN || gapNext >= gapNow) slot.thetaCenter = next
+  }
+
+  // A raider whose cooldown has run out starts its firing tell if it may. A charge
+  // needs a free fire slot (so incoming fire stays a readable rhythm however many are
+  // engaged), a beat since the last tell, and enough distance for a fair tell. A
+  // hunter also waits until it sits on the player's line, and holds fire through a
+  // hard phrase on the wall. `z` is the raider's ship-relative depth.
+  function tryStartCharge(slot: Slot, craft: CraftState, z: number): void {
+    const hunter = slot.role === 'hunter'
+    const openSlots = pressure === 2 ? 1 : ENEMY.FIRE_SLOTS
+    const free = !holdFire && chargers < openSlots && sinceCharge >= fireStagger && z <= -ENEMY.FIRE_MIN_AHEAD
+    const aimed = !hunter || (pressure < 2 && Math.abs(angleDiff(craft.theta, slot.theta)) < ENEMY.HUNT_FIRE_ANGLE)
+    if (free && aimed) {
+      chargers++
+      sinceCharge = 0
+      slot.charging = true
+      slot.chargeT = 0
+      deps.onChargeStart?.(slot.theta, z)
+    } else if (!hunter) {
+      // back off a beat and re-try (jittered, so no fixed pool order always wins the
+      // next free slot). A hunter re-checks every step instead: it fires the moment
+      // it is on the line and a slot is free.
+      slot.fireCd = ENEMY.FIRE_SLOT_RETRY * randRange(0.5, 1.5)
+    }
+  }
+
   function updateSlot(slot: Slot, craft: CraftState, dt: number): void {
     if (!slot.active) return
-
-    let bankFactor = 0
 
     if (slot.phase === 'dead') {
       slot.popT += dt / ENEMY.POP_TIME
@@ -419,18 +467,23 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     const inFormation = slot.formK >= 0 && !(slot.role === 'hunter' && slot.phase === 'engage')
     if (inFormation) slot.thetaCenter = anchorTheta + slot.stationOffset
 
+    let bankFactor = 0
+    let z: number // ship-relative depth after this step's move
+
     if (slot.phase === 'approach') {
       slot.worldDistance += (craft.speed + ENEMY.CLOSE_SPEED_DELTA) * dt
       // it weaves from the moment it appears, not diving straight down one line
       bankFactor = strafe(slot, ENEMY.STRAFE_AMP, dt)
-      const z = craftDistance - slot.worldDistance
+      z = craftDistance - slot.worldDistance
       if (z >= ENEMY.ENGAGE_Z_FAR) enterEngage(slot)
     } else if (slot.phase === 'engage') {
-      const z = craftDistance - slot.worldDistance
+      // the firing and leaving rules read the depth the step started at
+      const zStart = craftDistance - slot.worldDistance
       // station-keeping: speed springs toward the raider's own depth lane
-      const target = craft.speed + ENEMY.STATION_SPRING_K * (z - slot.laneZ)
+      const target = craft.speed + ENEMY.STATION_SPRING_K * (zStart - slot.laneZ)
       const speed = clamp(target, craft.speed - ENEMY.STATION_SPEED_CLAMP, craft.speed + ENEMY.STATION_SPEED_CLAMP)
       slot.worldDistance += speed * dt
+      z = craftDistance - slot.worldDistance
 
       const hunter = slot.role === 'hunter'
       // Strafe theta around the center, hard-capped so the player can always
@@ -438,24 +491,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       // exact firing line (an honest aim tell) and the raider commits to its shot
       // - giving the player a clean window to swing off the line or shoot it.
       if (!slot.charging) {
-        if (hunter) {
-          // Slide to the player's line and sit on it with a small weave. A second
-          // hunter does not stack on the first: it takes the line HUNT_FLANK beside the
-          // player's and waits there for the player to come to it.
-          const track = lerp(ENEMY.HUNT_TRACK[0]!, ENEMY.HUNT_TRACK[1]!, aggr) * dt
-          let goal = craft.theta
-          if (slot !== leadHunter) {
-            // it keeps the side it came from, so it never crosses the first hunter
-            if (slot.flankSide === 0) slot.flankSide = angleDiff(slot.thetaCenter, craft.theta) >= 0 ? 1 : -1
-            goal += slot.flankSide * ENEMY.HUNT_FLANK
-          }
-          const next = slot.thetaCenter + clamp(angleDiff(goal, slot.thetaCenter), -track, track)
-          // ... and it waits rather than slide through the first hunter's spot
-          const gapNow = leadHunter && slot !== leadHunter ? Math.abs(angleDiff(slot.thetaCenter, leadHunter.thetaCenter)) : Infinity
-          const gapNext = leadHunter && slot !== leadHunter ? Math.abs(angleDiff(next, leadHunter.thetaCenter)) : Infinity
-          if (gapNext >= ENEMY.HUNT_GAP_MIN || gapNext >= gapNow) slot.thetaCenter = next
-          bankFactor = strafe(slot, ENEMY.HUNT_STRAFE_AMP, dt)
-        } else bankFactor = strafe(slot, ENEMY.STRAFE_AMP, dt)
+        if (hunter) steerHunter(slot, craft, dt)
+        // a hunter sits on its line with a small weave
+        bankFactor = strafe(slot, hunter ? ENEMY.HUNT_STRAFE_AMP : ENEMY.STRAFE_AMP, dt)
       }
 
       // firing: a visible charge tell, then a bolt down the enemy's current theta
@@ -465,47 +503,27 @@ export function createEnemies(deps: EnemyDeps): Enemies {
           // only fire when clearly AHEAD: a bolt spawned at/behind the ship plane
           // would register instantly with no travel or dodge time. This makes the
           // "always dodgeable" guarantee structural, not tuning-dependent.
-          if (z < -GUN.BULLET_HIT_Z) deps.spawnEnemyBolt(slot.theta, z, ENEMY.BULLET_SPEED)
+          if (zStart < -GUN.BULLET_HIT_Z) deps.spawnEnemyBolt(slot.theta, zStart, ENEMY.BULLET_SPEED)
           slot.charging = false
           slot.chargeT = 0
           slot.fireCd = fireCooldown()
         }
       } else {
         slot.fireCd -= dt
-        if (slot.fireCd <= 0) {
-          // A charge needs a free fire slot (so incoming fire stays a readable
-          // rhythm however many are engaged), a beat since the last tell, and
-          // enough distance for a fair tell. A hunter also waits until it sits on
-          // the player's line, and holds fire through a hard phrase on the wall.
-          const openSlots = pressure === 2 ? 1 : ENEMY.FIRE_SLOTS
-          const free = !holdFire && chargers < openSlots && sinceCharge >= fireStagger && z <= -ENEMY.FIRE_MIN_AHEAD
-          const aimed = !hunter || (pressure < 2 && Math.abs(angleDiff(craft.theta, slot.theta)) < ENEMY.HUNT_FIRE_ANGLE)
-          if (free && aimed) {
-            chargers++
-            sinceCharge = 0
-            slot.charging = true
-            slot.chargeT = 0
-            deps.onChargeStart?.(slot.theta, z)
-          } else if (!hunter) {
-            // back off a beat and re-try (jittered, so no fixed pool order always
-            // wins the next free slot). A hunter re-checks every step instead: it
-            // fires the moment it is on the line and a slot is free.
-            slot.fireCd = ENEMY.FIRE_SLOT_RETRY * rand(0.5, 1.5)
-          }
-        }
+        if (slot.fireCd <= 0) tryStartCharge(slot, craft, zStart)
       }
 
       // leave: forward after its time in the lane, or fall behind if it slipped
       // past the ship. A hunter of a wave has no timer of its own: it stays until it
       // is shot or the wave's time is up, so not shooting it is never the easy way.
       if (!hunter || slot.formK < 0) slot.engageT -= dt
-      if (z > ENEMY.ENGAGE_BREAK_Z) leave(slot, 'depart', z)
-      else if (slot.engageT <= 0) leave(slot, 'exit', z)
+      if (zStart > ENEMY.ENGAGE_BREAK_Z) leave(slot, 'depart', zStart)
+      else if (slot.engageT <= 0) leave(slot, 'exit', zStart)
     } else if (slot.phase === 'exit') {
       // exit: accelerate away into the fog ahead, fading; no strafe, no fire
       slot.exitT += dt
       slot.worldDistance += (craft.speed + ENEMY.EXIT_SPEED_DELTA + ENEMY.EXIT_ACCEL * slot.exitT) * dt
-      const z = craftDistance - slot.worldDistance
+      z = craftDistance - slot.worldDistance
       if (z <= -ENEMY.SPAWN_AHEAD) {
         recycle(slot)
         return
@@ -514,14 +532,12 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     } else {
       // depart: fall behind, no strafe, no fire
       slot.worldDistance += (craft.speed + ENEMY.DEPART_SPEED_DELTA) * dt
-      const z = craftDistance - slot.worldDistance
+      z = craftDistance - slot.worldDistance
       if (z > ENEMY.RECYCLE_BEHIND) {
         recycle(slot)
         return
       }
     }
-
-    const z = craftDistance - slot.worldDistance
 
     // ram: lethal contact with the hull whenever the raider is near the ship plane
     // and on the ship's line. Raiders hold their lanes far ahead and leave forward,
@@ -534,9 +550,8 @@ export function createEnemies(deps: EnemyDeps): Enemies {
 
     // edge brightness: charge tell, or a brief hit flash (whichever is brighter)
     if (slot.flashT > 0) slot.flashT -= dt
-    const chargeLevel = slot.charging ? Math.min(slot.chargeT / ENEMY.CHARGE_TIME, 1) : 0
     const flashLevel = slot.flashT > 0 ? slot.flashT / FLASH_TIME : 0
-    slot.enemy.setCharge(Math.max(chargeLevel, flashLevel))
+    slot.enemy.setCharge(Math.max(chargeLevel(slot), flashLevel))
 
     place(slot, z, bankFactor)
     slot.enemy.update(dt)
@@ -576,11 +591,11 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       roster = waveRoster(T)
       hunters = waveHunters(T)
       aggr = aggression(T)
-      fireStagger = ENEMY.FIRE_STAGGER * (1 + (ENEMY.DEEP_STAGGER_K - 1) * deepPressure(T))
+      fireStagger = levelFireStagger(T)
       ease = easeFactor
     },
 
-    setPressure(p: 0 | 1 | 2): void {
+    setPressure(p: Load): void {
       pressure = p
     },
 
@@ -590,7 +605,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       if (holdFire && !hold) {
         for (const slot of slots) {
           if (slot.active && slot.phase === 'engage' && !slot.charging) {
-            slot.fireCd = Math.max(slot.fireCd, fireCooldown() * rand(ENEMY.BOUNDARY_HOLD.RESUME[0]!, ENEMY.BOUNDARY_HOLD.RESUME[1]!))
+            slot.fireCd = Math.max(slot.fireCd, fireCooldown() * randRange(ENEMY.BOUNDARY_HOLD.RESUME[0], ENEMY.BOUNDARY_HOLD.RESUME[1]))
           }
         }
       }
@@ -652,65 +667,23 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       formation = 'spread'
       formN = 1
       anchorTheta = 0
-      for (const slot of slots) {
-        // clear EVERY mutable field so reset() and arm()/enterEngage() cannot
-        // drift (arm/enterEngage still overwrite the spawn-specific ones).
-        slot.active = false
-        slot.phase = 'approach'
-        slot.theta = 0
-        slot.worldDistance = 0
-        slot.hp = ENEMY.HP
-        slot.role = 'weaver'
-        slot.formK = -1
-        slot.stationOffset = 0
-        slot.laneZ = laneMid()
-        slot.strafeAmpK = 1
-        slot.strafeWK = 1
-        slot.flankSide = 0
-        slot.thetaCenter = 0
-        slot.strafePhase = 0
-        slot.engageT = 0
-        slot.fireCd = 0
-        slot.charging = false
-        slot.chargeT = 0
-        slot.flashT = 0
-        slot.exitT = 0
-        slot.exitZ = 0
-        slot.popT = 0
-        slot.popZ = 0
-        slot.enemy.object.visible = false
-        slot.enemy.object.scale.setScalar(1)
-        slot.enemy.setOpacity(1)
-        slot.enemy.setCharge(0)
-      }
+      for (const slot of slots) clearSlot(slot)
     },
 
     debugStage(theta: number, z: number, slotIndex = 0, role: EnemyRole = 'weaver'): void {
       const slot = slots[slotIndex]
       if (!slot) return
+      clearSlot(slot)
       slot.active = true
       slot.phase = 'engage'
       slot.role = role
-      slot.formK = -1
-      slot.stationOffset = 0
       slot.laneZ = z
-      slot.strafeAmpK = 1
-      slot.strafeWK = 1
-      slot.flankSide = 0
       slot.theta = theta
       slot.thetaCenter = theta
       slot.worldDistance = craftDistance - z
-      slot.hp = ENEMY.HP
-      slot.charging = false
-      slot.chargeT = 0
-      slot.flashT = 0
-      slot.exitT = 0
       slot.engageT = ENEMY.ENGAGE_TIME
       slot.fireCd = ENEMY.FIRE_COOLDOWN
       slot.enemy.object.visible = true
-      slot.enemy.object.scale.setScalar(1)
-      slot.enemy.setOpacity(1)
-      slot.enemy.setCharge(0)
       place(slot, z, 0)
       slot.enemy.update(0)
     },
@@ -719,8 +692,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       for (let i = 0; i < slots.length; i++) {
         const slot = slots[i]!
         if (!slot.active || slot.phase === 'dead') continue
-        const charge01 = slot.charging ? Math.min(slot.chargeT / ENEMY.CHARGE_TIME, 1) : 0
-        fn(slot.theta, craftDistance - slot.worldDistance, slot.phase, charge01, i)
+        fn(slot.theta, craftDistance - slot.worldDistance, slot.phase, chargeLevel(slot), i)
       }
     },
 

@@ -1,6 +1,7 @@
 import { PerspectiveCamera, Vector3 } from 'three'
-import { CAMERA, TUBE, SHIP } from '../config'
+import { CAMERA, SHIP, RIDE_RADIUS } from '../config'
 import { type CraftState } from '../craft'
+import { smoothing } from '../util/math'
 import { type Shake } from './shake'
 
 // Mostly-fixed chase cam: the tube (wormhole) stays put while the craft rides
@@ -19,8 +20,8 @@ export function createCameraRig(
   shake: Shake,
 ): CameraRig {
   let camTheta = 0 // smoothed orbit angle (small fraction of craft.theta)
-  const camRadius = TUBE.RADIUS - SHIP.RADIAL_OFFSET - CAMERA.RISE
-  const lookRadius = TUBE.RADIUS - SHIP.RADIAL_OFFSET
+  const camRadius = RIDE_RADIUS - CAMERA.RISE
+  const lookRadius = RIDE_RADIUS
   const up = new Vector3()
   const right = new Vector3()
   const camUp = new Vector3()
@@ -37,7 +38,7 @@ export function createCameraRig(
       const s = Math.sin(craft.theta)
 
       // orbit only a little, smoothed (frame-rate independent)
-      const k = 1 - Math.exp(-frameDt / Math.max(CAMERA.FOLLOW_LAG, 1e-4))
+      const k = smoothing(frameDt, CAMERA.FOLLOW_LAG)
       camTheta += (s * CAMERA.ORBIT_FOLLOW - camTheta) * k
 
       camera.position.set(
@@ -59,7 +60,7 @@ export function createCameraRig(
       )
 
       // speed FOV: smoothed, and the projection is rebuilt only when it moved
-      const kf = 1 - Math.exp(-frameDt / Math.max(CAMERA.FOV_LAG, 1e-4))
+      const kf = smoothing(frameDt, CAMERA.FOV_LAG)
       fov += (CAMERA.FOV_SPEED * speed01 - fov) * kf
       if (Math.abs(fov - fovApplied) > 0.05) {
         fovApplied = fov

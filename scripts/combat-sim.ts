@@ -1,28 +1,22 @@
-// Headless behavior sim for the combat loop. Drives the REAL wired systems
-// (gun + projectiles + enemies + game) through the real fixed-step order, with no
-// browser/WebGL - three.js objects construct fine without a renderer. Asserts the
-// integrated behavior that screenshots cannot: energy-per-shot, 2-hit kills with
-// score+refund, lethal enemy bolts (hit when aligned, miss when dodged), and rams.
-//
-// Run:  npm run sim   (bundles with esbuild + runs under node; the local source
-// uses extensionless imports that bare `node` cannot resolve - see package.json).
+// Headless behavior sim for the combat loop (npm run sim). Drives the real gun,
+// projectiles, enemies and game through the fixed-step order of the session, with
+// no browser or WebGL (three.js objects construct without a renderer). It checks:
+//   A-G  the gun and its charge, kills, enemy bolts, rams, i-frames, how a raider
+//        leaves, and that passive flight scores nothing;
+//   H-L  the raiders as a group: fire slots, charge tells, waves at several tuning
+//        levels, the hunter, formations and depth lanes;
+//   M    life shards and squad crosses, in the real session.
 import { PHYSICS, SPEED, SHIP, GUN, ENEMY, LEVELS, LIVES, LIFE_SHARD, EXTRA_LIFE } from '../src/config'
 import { createSession } from '../src/session'
 import { createCraft, updateCraft, type CraftState } from '../src/craft'
 import { createGame, type Game } from '../src/game'
 import { createGun, type Gun } from '../src/gun'
 import { createProjectiles, type Projectiles } from '../src/world/projectiles'
-import { createEnemies, type Enemies } from '../src/world/enemies'
-import { waveAliveCap, waveRoster, deepPressure } from '../src/levels'
+import { createEnemies, type Enemies, type EnemyDeps } from '../src/world/enemies'
+import { waveAliveCap, waveRoster, fireStagger } from '../src/levels'
 import { angleDiff } from '../src/util/math'
 import { seedRng } from '../src/util/rng'
-
-const dt = 1 / PHYSICS.HZ
-let failures = 0
-function check(name: string, cond: boolean, detail = ''): void {
-  console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -> ' + detail : ''}`)
-  if (!cond) failures++
-}
+import { check, finish, withConfig, driveSession, STEP_DT as dt } from './sim-kit'
 
 const NEUTRAL = { steerTarget: 0, fire: false }
 
@@ -33,28 +27,31 @@ interface Rig {
   projectiles: Projectiles
   enemies: Enemies
 }
-function makeRig(onEnemyBolt?: () => void): Rig {
+// The wired systems of one test. By default an enemy bolt is spawned, a ram costs a
+// life and a kill pays score and charge; `deps` replaces any of these. `level` is
+// the tuning level of the raiders (AGGRESSION_FROM: ENEMY.FIRE_COOLDOWN applies as written).
+function makeRig(deps: Partial<EnemyDeps> = {}, level: number = LEVELS.AGGRESSION_FROM): Rig {
   const craft = createCraft()
   const game = createGame()
   const gun = createGun()
   const projectiles = createProjectiles()
   const enemies = createEnemies({
-    spawnEnemyBolt: (t, z, vz) => {
-      onEnemyBolt?.()
-      projectiles.spawn('enemy', t, z, vz)
-    },
+    spawnEnemyBolt: (t, z, vz) => projectiles.spawn('enemy', t, z, vz),
     onRam: () => game.hitHazard(),
     onKill: () => {
       game.addScore(ENEMY.SCORE)
       game.addEnergy(ENEMY.ENERGY_REFUND)
     },
+    ...deps,
   })
   enemies.reset(0)
-  enemies.setLevel(LEVELS.AGGRESSION_FROM) // the level where ENEMY.FIRE_COOLDOWN applies as written
+  enemies.setLevel(level)
   return { craft, game, gun, projectiles, enemies }
 }
+// hooks of a rig whose raiders cannot hurt the craft and pay nothing
+const HARMLESS: Partial<EnemyDeps> = { onRam: () => false, onKill: () => {} }
 
-// one fixed step in the same order as main.ts
+// one fixed step, in the order of the session
 function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): void {
   if (opts.integrate === false) {
     r.craft.distance += r.craft.speed * dt // advance forward but freeze theta
@@ -78,8 +75,8 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   const e0 = r.game.energy
   let shots = 0
   for (let i = 0; i < PHYSICS.HZ; i++) {
-    // count shots by watching the per-step charge drop: charge changes only on a
-    // shot now (spendEnergy), so any drop of about a shot's cost is one shot.
+    // count shots by the per-step charge drop: the charge falls only on a shot
+    // (spendEnergy), so any drop of about a shot's cost is one shot.
     const before = r.game.energy
     step(r, true)
     if (before - r.game.energy > GUN.COST * 0.5) shots++
@@ -99,22 +96,9 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   check('A4 firing never ends the run', r.game.over === overBefore && !r.game.over)
 })()
 
-// ---- G) scoring: passive flight earns nothing (no distance baseline) ----
-// Regression for the no-farm fix: flying without collecting or killing must score
-// 0, however far you travel. (Distance points were removed precisely so a passive
-// dodger - and a level-1 camper - cannot farm score by surviving.)
-;(() => {
-  const r = makeRig()
-  for (let i = 0; i < PHYSICS.HZ * 3; i++) step(r, false) // 3s of passive flight, no firing
-  check('G1 passive flight scores 0 (no distance points)', r.game.score() === 0, `score=${r.game.score()}, dist=${Math.round(r.craft.distance)}`)
-})()
-
 // ---- B) kill: 2 aligned hits -> +SCORE, +ENERGY_REFUND, killed==1
-;(() => {
-  const ampWas = ENEMY.STRAFE_AMP
-  const fireWas = ENEMY.FIRE_COOLDOWN
-  ENEMY.STRAFE_AMP = 0 // hold theta so the test is deterministic
-  ENEMY.FIRE_COOLDOWN = 999 // do not let it shoot back during the kill test
+// STRAFE_AMP 0 holds the raider's theta; FIRE_COOLDOWN 999: it does not shoot back
+withConfig(ENEMY, { STRAFE_AMP: 0, FIRE_COOLDOWN: 999 }, () => {
   const r = makeRig()
   r.enemies.debugStage(0, -32) // engage, dead ahead, in the band
   r.game.energy = 50 // mid-bar: the refund lands unclamped and observable for any refund value
@@ -133,21 +117,10 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   check('B2 kill scores ENEMY.SCORE', r.game.scoreBonus === ENEMY.SCORE, `scoreBonus=${r.game.scoreBonus}`)
   check('B3 score jumped by at least the points of a kill', r.game.score() - scoreBefore >= ENEMY.SCORE, '')
   check('B4 kill applied ENERGY_REFUND', Math.abs((r.game.energy - preKillStep) - ENEMY.ENERGY_REFUND) < 1e-6, `kill-step refund=${(r.game.energy - preKillStep).toFixed(1)}`)
-  ENEMY.STRAFE_AMP = ampWas
-  ENEMY.FIRE_COOLDOWN = fireWas
-})()
+})
 
 // ---- C) enemy bolt: lethal when aligned, dodged when theta swung away
-;(() => {
-  const fireWas = ENEMY.FIRE_COOLDOWN
-  const jitWas = ENEMY.FIRE_JITTER
-  const chgWas = ENEMY.CHARGE_TIME
-  const ampWas = ENEMY.STRAFE_AMP
-  ENEMY.FIRE_COOLDOWN = 0.1
-  ENEMY.FIRE_JITTER = 0
-  ENEMY.CHARGE_TIME = 0.1
-  ENEMY.STRAFE_AMP = 0
-
+withConfig(ENEMY, { FIRE_COOLDOWN: 0.1, FIRE_JITTER: 0, CHARGE_TIME: 0.1, STRAFE_AMP: 0 }, () => {
   // aligned: ship holds theta 0 where the enemy fires from -> a life is lost
   {
     const r = makeRig()
@@ -165,18 +138,10 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
     for (let i = 0; i < PHYSICS.HZ * 2; i++) step(r, false, { integrate: false }) // hold theta 1.6
     check('C2 dodged: no life lost', r.game.lives === lives0, `lives stayed ${r.game.lives}`)
   }
-  ENEMY.FIRE_COOLDOWN = fireWas
-  ENEMY.FIRE_JITTER = jitWas
-  ENEMY.CHARGE_TIME = chgWas
-  ENEMY.STRAFE_AMP = ampWas
-})()
+})
 
 // ---- D) ram: hull contact at the ship plane costs a life, enemy survives
-;(() => {
-  const ampWas = ENEMY.STRAFE_AMP
-  const fireWas = ENEMY.FIRE_COOLDOWN
-  ENEMY.STRAFE_AMP = 0
-  ENEMY.FIRE_COOLDOWN = 999
+withConfig(ENEMY, { STRAFE_AMP: 0, FIRE_COOLDOWN: 999 }, () => {
   const r = makeRig()
   r.enemies.debugStage(0, -1.5) // staged right at the ship plane, same theta
   const lives0 = r.game.lives
@@ -184,9 +149,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   step(r, false, { integrate: false })
   check('D1 ram costs a life', r.game.lives === lives0 - 1, `lives ${lives0} -> ${r.game.lives}`)
   check('D2 ram does not kill the enemy', r.enemies.killed === killed0, `killed=${r.enemies.killed}`)
-  ENEMY.STRAFE_AMP = ampWas
-  ENEMY.FIRE_COOLDOWN = fireWas
-})()
+})
 
 // ---- E) one encounter costs at most one life (invuln-first guard)
 ;(() => {
@@ -201,17 +164,11 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
 // fog. It never comes back through the ship plane, so it cannot ram a player who
 // simply did not shoot it. Only a raider that already slipped behind the ship falls
 // back (and can still be rammed into, see D).
-;(() => {
-  const ampWas = ENEMY.STRAFE_AMP
-  const fireWas = ENEMY.FIRE_COOLDOWN
-  const engWas = ENEMY.ENGAGE_TIME
-  const jitWas = ENEMY.ENGAGE_TIME_JITTER
-  const firstWas = ENEMY.WAVE.FIRST_DELAY
-  ENEMY.STRAFE_AMP = 0 // hold the raider on the ship's line (theta 0)
-  ENEMY.FIRE_COOLDOWN = 999 // isolate leaving from lethal bolts
-  ENEMY.ENGAGE_TIME = 0.3 // its time is up almost at once
-  ENEMY.ENGAGE_TIME_JITTER = 0
-  ENEMY.WAVE.FIRST_DELAY = 999 // no wave of its own during the check
+// STRAFE_AMP 0 holds the raider on the ship's line (theta 0), FIRE_COOLDOWN 999
+// keeps lethal bolts out of the check, ENGAGE_TIME 0.3: its time is up almost at
+// once, FIRST_DELAY 999: no wave of its own during the check.
+const F_ENEMY = { STRAFE_AMP: 0, FIRE_COOLDOWN: 999, ENGAGE_TIME: 0.3, ENGAGE_TIME_JITTER: 0 }
+withConfig(ENEMY, F_ENEMY, () => withConfig(ENEMY.WAVE, { FIRST_DELAY: 999 }, () => {
   {
     const r = makeRig()
     r.enemies.debugStage(0, -40) // engaged on the ship's line
@@ -251,11 +208,15 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
     }
     check('F2 a raider that slipped behind the ship falls behind and recycles', phaseSeen === 'depart' && gone, `phase=${phaseSeen} gone=${gone}`)
   }
-  ENEMY.STRAFE_AMP = ampWas
-  ENEMY.FIRE_COOLDOWN = fireWas
-  ENEMY.ENGAGE_TIME = engWas
-  ENEMY.ENGAGE_TIME_JITTER = jitWas
-  ENEMY.WAVE.FIRST_DELAY = firstWas
+}))
+
+// ---- G) scoring: passive flight earns nothing ----
+// Flying without collecting or killing scores 0, however far the craft travels:
+// score comes only from gems and kills.
+;(() => {
+  const r = makeRig()
+  for (let i = 0; i < PHYSICS.HZ * 3; i++) step(r, false) // 3s of passive flight, no firing
+  check('G1 passive flight scores 0 (no distance points)', r.game.score() === 0, `score=${r.game.score()}, dist=${Math.round(r.craft.distance)}`)
 })()
 
 // ---- H) fire-slot cap: many engaged raiders, bounded simultaneous fire ----
@@ -264,15 +225,14 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
 // full CHARGE_TIME, so bolts over a window T are hard-bounded by
 // FIRE_SLOTS * (T / CHARGE_TIME + 1) - independent of how many raiders engage.
 // (Uncapped, four parallel chargers would fire roughly 4 * T / CHARGE_TIME, ~2x over.)
-;(() => {
-  const ampWas = ENEMY.STRAFE_AMP
-  const fireWas = ENEMY.FIRE_COOLDOWN
-  const jitWas = ENEMY.FIRE_JITTER
-  ENEMY.STRAFE_AMP = 0
-  ENEMY.FIRE_COOLDOWN = 0.01
-  ENEMY.FIRE_JITTER = 0
+withConfig(ENEMY, { STRAFE_AMP: 0, FIRE_COOLDOWN: 0.01, FIRE_JITTER: 0 }, () => {
   let bolts = 0
-  const r = makeRig(() => bolts++)
+  const r: Rig = makeRig({
+    spawnEnemyBolt: (t, z, vz) => {
+      bolts++
+      r.projectiles.spawn('enemy', t, z, vz)
+    },
+  })
   // thetas well off the ship's line (theta 0) so no bolt lands and no ram triggers
   const staged = LEVELS.MAX_ENEMIES_CAP
   for (let i = 0; i < staged; i++) r.enemies.debugStage(1.0 + i * 0.8, -35, i)
@@ -281,10 +241,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   const bound = ENEMY.FIRE_SLOTS * (T / ENEMY.CHARGE_TIME + 1)
   check('H1 bolts bounded by the fire slots', bolts <= bound, `bolts=${bolts} bound=${bound.toFixed(1)}`)
   check('H2 raiders still fire under the cap', bolts >= 2, `bolts=${bolts}`)
-  ENEMY.STRAFE_AMP = ampWas
-  ENEMY.FIRE_COOLDOWN = fireWas
-  ENEMY.FIRE_JITTER = jitWas
-})()
+})
 
 // ---- I) every charge start is reported once: starts = bolts + aborted charges ----
 // Quick waves of six with a short cooldown and a short time in the lane, and a
@@ -293,20 +250,19 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
 // by its line: it is resolved by a bolt down that line, it stays pending while a
 // raider still sits on that line charging, and otherwise it was aborted.
 // Independently, every raider seen with a charge tell must belong to a reported start.
-;(() => {
-  const saved = { ...ENEMY }
-  const savedWave = { ...ENEMY.WAVE, BREATHER: { ...ENEMY.WAVE.BREATHER } }
-  ENEMY.SPAWN_AHEAD = 70 // new members reach their lanes quickly
-  ENEMY.WAVE.FIRST_DELAY = 0
-  ENEMY.WAVE.REINFORCE_DELAY = 0.3
-  ENEMY.WAVE.BREATHER.BASE = 0.5
-  ENEMY.WAVE.BREATHER.MIN = 0.5
-  ENEMY.FIRE_COOLDOWN = 0.2
-  ENEMY.FIRE_COOLDOWN_DEEP = 0.2
-  ENEMY.FIRE_JITTER = 0.1
-  ENEMY.ENGAGE_TIME = 1.4
-  ENEMY.ENGAGE_TIME_JITTER = 1.0
-  ENEMY.STRAFE_AMP = 0.3
+const I_ENEMY = {
+  SPAWN_AHEAD: 70, // new members reach their lanes quickly
+  FIRE_COOLDOWN: 0.2,
+  FIRE_COOLDOWN_DEEP: 0.2,
+  FIRE_JITTER: 0.1,
+  ENGAGE_TIME: 1.4,
+  ENGAGE_TIME_JITTER: 1.0,
+  STRAFE_AMP: 0.3,
+}
+const quickWaves = (fn: () => void): void =>
+  withConfig(ENEMY, I_ENEMY, () =>
+    withConfig(ENEMY.WAVE, { FIRST_DELAY: 0, REINFORCE_DELAY: 0.3 }, () => withConfig(ENEMY.WAVE.BREATHER, { BASE: 0.5, MIN: 0.5 }, fn)))
+quickWaves(() => {
   seedRng(7)
   let starts = 0
   let bolts = 0
@@ -315,26 +271,23 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   const pending: number[] = [] // lines of charges not yet resolved
   const boltLines: number[] = []
   const freshLines: number[] = [] // starts in the current step
-  const craft = createCraft()
-  const game = createGame()
-  const gun = createGun()
-  const projectiles = createProjectiles()
-  const enemies = createEnemies({
-    spawnEnemyBolt: (t, z, vz) => {
-      bolts++
-      boltLines.push(t)
-      projectiles.spawn('enemy', t, z, vz)
+  const r: Rig = makeRig(
+    {
+      ...HARMLESS,
+      spawnEnemyBolt: (t, z, vz) => {
+        bolts++
+        boltLines.push(t)
+        r.projectiles.spawn('enemy', t, z, vz)
+      },
+      onChargeStart: (t) => {
+        starts++
+        pending.push(t)
+        freshLines.push(t)
+      },
     },
-    onRam: () => false,
-    onKill: () => {},
-    onChargeStart: (t) => {
-      starts++
-      pending.push(t)
-      freshLines.push(t)
-    },
-  })
-  enemies.reset(0)
-  enemies.setLevel(6)
+    6,
+  )
+  const { craft, game, gun, projectiles, enemies } = r
   enemies.setMaxActive(waveAliveCap(6))
   const charging: number[] = [] // lines of raiders seen with a tell this step
   game.energy = 1e9
@@ -363,9 +316,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   check('I1 charge starts = bolts + aborted charges', starts === bolts + aborts + pending.length, `starts=${starts} bolts=${bolts} aborts=${aborts} pending=${pending.length}`)
   check('I2 every visible tell was reported as a charge start', unreported === 0, `unreported=${unreported}`)
   check('I3 the scenario has both outcomes', bolts > 10 && aborts > 5, `bolts=${bolts} aborts=${aborts} kills=${enemies.killed}`)
-  Object.assign(ENEMY, saved)
-  Object.assign(ENEMY.WAVE, savedWave)
-})()
+})
 
 // ---- J) waves: the director on the real constants, at several tuning levels ----
 // A craft swinging gently around the bottom that fires in bursts, for three minutes
@@ -385,12 +336,9 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
     let clears = 0
     const startLine: number[] = []
     const startAt: number[] = []
-    const r: Rig = {
-      craft: createCraft(),
-      game: createGame(),
-      gun: createGun(),
-      projectiles: createProjectiles(),
-      enemies: createEnemies({
+    const r: Rig = makeRig(
+      {
+        ...HARMLESS,
         spawnEnemyBolt: (theta, z, vz) => {
           bolts++
           const k = startLine.lastIndexOf(theta)
@@ -401,8 +349,6 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
           } else minTell = 0 // a bolt without a tell
           r.projectiles.spawn('enemy', theta, z, vz)
         },
-        onRam: () => false,
-        onKill: () => {},
         onChargeStart: (theta) => {
           minStagger = Math.min(minStagger, now - lastStart)
           lastStart = now
@@ -410,10 +356,9 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
           startAt.push(now)
         },
         onWaveClear: () => clears++,
-      }),
-    }
-    r.enemies.reset(0)
-    r.enemies.setLevel(T)
+      },
+      T,
+    )
     const cap = waveAliveCap(T)
     r.enemies.setMaxActive(cap)
     r.game.energy = 1e9
@@ -441,19 +386,97 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
     }
     check(`J1 T${T}: live raiders never exceed the alive cap`, maxAlive <= cap && maxAlive > 0, `max alive=${maxAlive} cap=${cap}`)
     check(`J2 T${T}: every bolt has at least ${TELL_MIN.toFixed(2)} s from tell to arrival`, bolts > 0 && minTell >= TELL_MIN, `bolts=${bolts} shortest=${minTell.toFixed(3)}s`)
-    check(`J3 T${T}: two tells are never closer than the level's fire stagger`, minStagger >= ENEMY.FIRE_STAGGER * (1 + (ENEMY.DEEP_STAGGER_K - 1) * deepPressure(T)) - 1e-9, `closest=${minStagger.toFixed(3)}s`)
+    check(`J3 T${T}: two tells are never closer than the level's fire stagger`, minStagger >= fireStagger(T) - 1e-9, `closest=${minStagger.toFixed(3)}s`)
     check(`J4 T${T}: no raider behind the ship`, maxZ < 0, `nearest z=${maxZ.toFixed(1)}`)
     check(`J5 T${T}: waves come and go (roster ${waveRoster(T)})`, waves >= 3 && r.enemies.killed > 0, `waves=${waves} cleared=${clears} kills=${r.enemies.killed}`)
   }
 })()
 
+// ---- K) hunter: slides to the player's line, fires only when it is on it ----
+// ENGAGE_TIME 999: the staged hunter never leaves. FIRST_DELAY 999 keeps waves out of
+// the first three cases; the last two run with FIRST_DELAY 0, so a wave may start at once.
+const stageHunter = (r: Rig, theta: number): void => r.enemies.debugStage(theta, ENEMY.LANES[1], 0, 'hunter')
+withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
+  withConfig(ENEMY.WAVE, { FIRST_DELAY: 999 }, () => {
+    // parked craft: the hunter comes from the side wall and its tells are on the line
+    {
+      let worstTell = 0
+      let tells = 0
+      const r: Rig = makeRig(
+        {
+          ...HARMLESS,
+          onChargeStart: (theta) => {
+            tells++
+            worstTell = Math.max(worstTell, Math.abs(angleDiff(r.craft.theta, theta)))
+          },
+        },
+        0,
+      )
+      stageHunter(r, 2.0)
+      const lives0 = r.game.lives
+      let firstTellAt = -1
+      for (let i = 0; i < PHYSICS.HZ * 8; i++) {
+        step(r, false, { integrate: false }) // parked at theta 0
+        if (tells > 0 && firstTellAt < 0) firstTellAt = i * dt
+      }
+      check('K1 hunter reaches a parked craft and fires down its line', tells >= 2 && worstTell < ENEMY.HUNT_FIRE_ANGLE, `tells=${tells} worst offset=${worstTell.toFixed(2)} first at ${firstTellAt.toFixed(1)}s`)
+      check('K2 a parked craft is hit by the hunter', r.game.lives < lives0, `lives ${lives0} -> ${r.game.lives}`)
+    }
+    // a craft that stays ahead of the hunter's slide is never fired at by it
+    {
+      let tells = 0
+      const r = makeRig({ ...HARMLESS, onChargeStart: () => tells++ }, 0)
+      stageHunter(r, 0)
+      let minGap = Infinity
+      // 3.5 s: long enough for several cooldowns, short enough that the craft does not
+      // come around the tube and meet the hunter from the other side
+      for (let i = 0; i < PHYSICS.HZ * 3.5; i++) {
+        r.craft.theta = 1.0 + (ENEMY.HUNT_TRACK[0] + 0.5) * (i * dt) // moves away faster than the hunter slides
+        step(r, false, { integrate: false })
+        r.enemies.visit((theta) => {
+          minGap = Math.min(minGap, Math.abs(angleDiff(r.craft.theta, theta)))
+        })
+      }
+      check('K3 a craft that stays off the line is not fired at by the hunter', tells === 0 && minGap > ENEMY.HUNT_FIRE_ANGLE, `tells=${tells} closest=${minGap.toFixed(2)} rad`)
+    }
+  })
+  withConfig(ENEMY.WAVE, { FIRST_DELAY: 0 }, () => {
+    // a hard phrase on the wall (pressure 2): the hunter holds fire, no wave starts
+    {
+      let tells = 0
+      const r = makeRig({ ...HARMLESS, onChargeStart: () => tells++ }, 0)
+      r.enemies.setPressure(2)
+      stageHunter(r, 0)
+      let maxAlive = 0
+      for (let i = 0; i < PHYSICS.HZ * 6; i++) {
+        step(r, false, { integrate: false })
+        let alive = 0
+        r.enemies.visit(() => alive++)
+        maxAlive = Math.max(maxAlive, alive)
+      }
+      check('K4 pressure 2: the hunter holds fire and no wave starts', tells === 0 && maxAlive === 1 && !r.enemies.waveActive, `tells=${tells} alive=${maxAlive}`)
+    }
+    // fire hold (a cycle boundary is near): no tell starts while it is on, fire resumes after
+    {
+      let tells = 0
+      const r = makeRig({ ...HARMLESS, onChargeStart: () => tells++ }, 0)
+      stageHunter(r, 0)
+      r.enemies.setHoldFire(true)
+      for (let i = 0; i < PHYSICS.HZ * 4; i++) step(r, false, { integrate: false })
+      const held = tells
+      r.enemies.setHoldFire(false)
+      for (let i = 0; i < PHYSICS.HZ * 3; i++) step(r, false, { integrate: false })
+      check('K5 fire hold: no tell starts while it is on, the hunter fires again after', held === 0 && tells >= 1, `held=${held} after=${tells}`)
+    }
+  })
+})
+
 // ---- L) formation and depth lanes ----
 // A wave arrives as a shape: the first two members appear FORM_SEP apart (side by
 // side) or 2 * PINCER_OFFSET apart (a pincer). Once three raiders have settled, each
 // holds a different depth lane, more than 10 units from the next.
-;(() => {
-  const engWas = ENEMY.ENGAGE_TIME
-  ENEMY.ENGAGE_TIME = 999 // nobody leaves during the check
+// ENGAGE_TIME 999: nobody leaves during the check
+withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
   let shapes = 0
   let badShape = ''
   let settled = 0
@@ -493,122 +516,12 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
       if (!ok) badShape += ` seed ${seed}: ${gap.toFixed(2)}`
     }
   }
-  const laneGap = Math.min(ENEMY.LANES[0]! - ENEMY.LANES[1]!, ENEMY.LANES[1]! - ENEMY.LANES[2]!)
+  const laneGap = Math.min(ENEMY.LANES[0] - ENEMY.LANES[1], ENEMY.LANES[1] - ENEMY.LANES[2])
   check('L1 the first two of a squad arrive side by side or as a pincer', shapes === 12 && badShape === '', badShape || `${shapes} waves`)
   check('L2 three settled raiders hold three different depth lanes', settled > PHYSICS.HZ * 20 && shared === 0, `settled steps=${settled} shared=${shared}`)
-  check('L3 lanes are more than 10 units apart and outside FIRE_MIN_AHEAD', laneGap > 10 && -ENEMY.LANES[0]! >= ENEMY.FIRE_MIN_AHEAD, `gap=${laneGap} near=${ENEMY.LANES[0]}`)
+  check('L3 lanes are more than 10 units apart and outside FIRE_MIN_AHEAD', laneGap > 10 && -ENEMY.LANES[0] >= ENEMY.FIRE_MIN_AHEAD, `gap=${laneGap} near=${ENEMY.LANES[0]}`)
   check('L4 FIRE_MIN_AHEAD gives a tell of at least 0.80 s', ENEMY.CHARGE_TIME + ENEMY.FIRE_MIN_AHEAD / ENEMY.BULLET_SPEED >= 0.8 - 1e-9, `${(ENEMY.CHARGE_TIME + ENEMY.FIRE_MIN_AHEAD / ENEMY.BULLET_SPEED).toFixed(3)}s`)
-  ENEMY.ENGAGE_TIME = engWas
-})()
-
-// ---- K) hunter: slides to the player's line, fires only when it is on it ----
-;(() => {
-  const firstWas = ENEMY.WAVE.FIRST_DELAY
-  const engWas = ENEMY.ENGAGE_TIME
-  ENEMY.WAVE.FIRST_DELAY = 999
-  ENEMY.ENGAGE_TIME = 999
-  // parked craft: the hunter comes from the side wall and its tells are on the line
-  {
-    let worstTell = 0
-    let tells = 0
-    let bolts = 0
-    const r: Rig = makeRig(() => bolts++)
-    const enemies = createEnemies({
-      spawnEnemyBolt: (t, z, vz) => {
-        bolts++
-        r.projectiles.spawn('enemy', t, z, vz)
-      },
-      onRam: () => false,
-      onKill: () => {},
-      onChargeStart: (theta) => {
-        tells++
-        worstTell = Math.max(worstTell, Math.abs(angleDiff(r.craft.theta, theta)))
-      },
-    })
-    r.enemies = enemies
-    enemies.reset(0)
-    enemies.debugStage(2.0, ENEMY.LANES[1]!, 0, 'hunter')
-    const lives0 = r.game.lives
-    let firstTellAt = -1
-    for (let i = 0; i < PHYSICS.HZ * 8; i++) {
-      step(r, false, { integrate: false }) // parked at theta 0
-      if (tells > 0 && firstTellAt < 0) firstTellAt = i * dt
-    }
-    check('K1 hunter reaches a parked craft and fires down its line', tells >= 2 && worstTell < ENEMY.HUNT_FIRE_ANGLE, `tells=${tells} worst offset=${worstTell.toFixed(2)} first at ${firstTellAt.toFixed(1)}s`)
-    check('K2 a parked craft is hit by the hunter', r.game.lives < lives0, `lives ${lives0} -> ${r.game.lives}`)
-  }
-  // a craft that stays ahead of the hunter's slide is never fired at by it
-  {
-    let tells = 0
-    const r: Rig = makeRig()
-    const enemies = createEnemies({
-      spawnEnemyBolt: (t, z, vz) => r.projectiles.spawn('enemy', t, z, vz),
-      onRam: () => false,
-      onKill: () => {},
-      onChargeStart: () => tells++,
-    })
-    r.enemies = enemies
-    enemies.reset(0)
-    enemies.debugStage(0, ENEMY.LANES[1]!, 0, 'hunter')
-    let minGap = Infinity
-    // 3.5 s: long enough for several cooldowns, short enough that the craft does not
-    // come around the tube and meet the hunter from the other side
-    for (let i = 0; i < PHYSICS.HZ * 3.5; i++) {
-      r.craft.theta = 1.0 + (ENEMY.HUNT_TRACK[0]! + 0.5) * (i * dt) // moves away faster than the hunter slides
-      step(r, false, { integrate: false })
-      enemies.visit((theta) => {
-        minGap = Math.min(minGap, Math.abs(angleDiff(r.craft.theta, theta)))
-      })
-    }
-    check('K3 a craft that stays off the line is not fired at by the hunter', tells === 0 && minGap > ENEMY.HUNT_FIRE_ANGLE, `tells=${tells} closest=${minGap.toFixed(2)} rad`)
-  }
-  // a hard phrase on the wall (pressure 2): the hunter holds fire, no wave starts
-  {
-    let tells = 0
-    ENEMY.WAVE.FIRST_DELAY = 0
-    const r: Rig = makeRig()
-    const enemies = createEnemies({
-      spawnEnemyBolt: (t, z, vz) => r.projectiles.spawn('enemy', t, z, vz),
-      onRam: () => false,
-      onKill: () => {},
-      onChargeStart: () => tells++,
-    })
-    r.enemies = enemies
-    enemies.reset(0)
-    enemies.setPressure(2)
-    enemies.debugStage(0, ENEMY.LANES[1]!, 0, 'hunter')
-    let maxAlive = 0
-    for (let i = 0; i < PHYSICS.HZ * 6; i++) {
-      step(r, false, { integrate: false })
-      let alive = 0
-      enemies.visit(() => alive++)
-      maxAlive = Math.max(maxAlive, alive)
-    }
-    check('K4 pressure 2: the hunter holds fire and no wave starts', tells === 0 && maxAlive === 1 && !enemies.waveActive, `tells=${tells} alive=${maxAlive}`)
-  }
-  // fire hold (a cycle boundary is near): no tell starts while it is on, fire resumes after
-  {
-    let tells = 0
-    const r: Rig = makeRig()
-    const enemies = createEnemies({
-      spawnEnemyBolt: (t, z, vz) => r.projectiles.spawn('enemy', t, z, vz),
-      onRam: () => false,
-      onKill: () => {},
-      onChargeStart: () => tells++,
-    })
-    r.enemies = enemies
-    enemies.reset(0)
-    enemies.debugStage(0, ENEMY.LANES[1]!, 0, 'hunter')
-    enemies.setHoldFire(true)
-    for (let i = 0; i < PHYSICS.HZ * 4; i++) step(r, false, { integrate: false })
-    const held = tells
-    enemies.setHoldFire(false)
-    for (let i = 0; i < PHYSICS.HZ * 3; i++) step(r, false, { integrate: false })
-    check('K5 fire hold: no tell starts while it is on, the hunter fires again after', held === 0 && tells >= 1, `held=${held} after=${tells}`)
-  }
-  ENEMY.WAVE.FIRST_DELAY = firstWas
-  ENEMY.ENGAGE_TIME = engWas
-})()
+})
 
 // ---- M) life shards: the real session (kills drop them, catching a set restores a life)
 ;(() => {
@@ -635,17 +548,16 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   s.reset()
   s.begin()
   const { game, craft, enemies } = s
-  const shards = s.fields[s.fieldKinds.indexOf('shard')]!
-  const idle = { steerTarget: 0, fire: false }
+  const shards = s.fieldByKind.shard
+  // the passive craft is never hurt, so lives change only as the test sets them
+  const advance = driveSession(s, NEUTRAL, { invulnerable: true })
   let hold: number | undefined // craft angle forced each step (undefined: rest at the bottom)
   const tick = (): void => {
-    game.invuln = 1 // the passive craft is never hurt, so lives change only as the test sets them
     if (hold !== undefined) {
       craft.theta = hold
       craft.omega = 0
     }
-    s.preUpdate()
-    s.step(idle, dt)
+    advance()
   }
   const live = (): number => {
     let n = 0
@@ -730,6 +642,10 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   s.reset()
   check('M7 reset clears the shards on the wall and the progress', k4 && before.shards === 1 && before.live === 1 && game.shards === 0 && live() === 0 && game.shardsPerLife === LIFE_SHARD.PER_LIFE, `before: ${before.shards} caught, ${before.live} live; after: ${game.shards} caught, ${live()} live`)
 
+  let crosses = 0
+  s.fieldByKind.life.visit(() => crosses++)
+  check('M8 the distance-timed extra-life cross follows its switch', crosses === (EXTRA_LIFE.ENABLED ? EXTRA_LIFE.COUNT : 0), `crosses=${crosses} enabled=${EXTRA_LIFE.ENABLED}`)
+
   // destroyed squads: every SQUAD_EVERY-th one leaves a whole-life cross
   if (!EXTRA_LIFE.ENABLED) {
     game.lives = LIVES.START - 1
@@ -742,13 +658,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
     for (let i = 0; i < PHYSICS.HZ * 6 && lifeCues === 0; i++) tick()
     hold = undefined
     check('M9 a destroyed squad leaves a cross that restores a whole life', crossDrops === 1 && lifeCues === 1 && game.lives === LIVES.START, `kills=${kills} cross drops=${crossDrops} life cues=${lifeCues} lives=${game.lives} shards=${game.shards}`)
-    s.reset()
   }
-
-  let crosses = 0
-  s.fields[s.fieldKinds.indexOf('life')]!.visit(() => crosses++)
-  check('M8 the distance-timed extra-life cross follows its switch', crosses === (EXTRA_LIFE.ENABLED ? EXTRA_LIFE.COUNT : 0), `crosses=${crosses} enabled=${EXTRA_LIFE.ENABLED}`)
 })()
 
-console.log(failures === 0 ? '\nALL COMBAT SIM CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
-process.exit(failures === 0 ? 0 : 1)
+finish('COMBAT SIM')
