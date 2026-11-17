@@ -13,6 +13,7 @@ import { createFlight, type Flight } from '../src/flight'
 import { createSession } from '../src/session'
 import { createLevelTuning, waveRoster, waveAliveCap, waveHunters, aggression, deepPressure, fireCooldown, bombMult } from '../src/levels'
 import { PHRASES } from '../src/world/phrases'
+import { seedRng } from '../src/util/rng'
 import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, DIFFICULTY, ENEMY, SEQUENCE, GATE, TUBE } from '../src/config'
 import { check, finish, withConfig, driveSession, flyOntoGems } from './sim-kit'
 
@@ -308,6 +309,7 @@ withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
   let gateOpen = false
   let gemsWhileOpen = 0
   let gateDistance = 0
+  seedRng(1)
   let session = createSession()
   const fx = {
     quotaReached: () => {
@@ -335,6 +337,7 @@ withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
       if (session.flight.gateAt !== Infinity) bad += ` L${level + 1}: the gate stayed open`
     },
   }
+  seedRng(2)
   session = createSession(fx)
   session.reset()
   session.begin()
@@ -373,6 +376,7 @@ withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
   let tierUps = 0
   let tierUpsAtGate = 0
   let levelEdge = false // a level-up fired in the frame in progress
+  seedRng(3)
   let session = createSession()
   const frame = 1 / 60 // the hold is refreshed once per frame
   const fx = {
@@ -394,6 +398,7 @@ withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
       else if (f.gateAt === Infinity && passes > 0) tellsLater++
     },
   }
+  seedRng(4)
   session = createSession(fx)
   session.reset()
   session.begin()
