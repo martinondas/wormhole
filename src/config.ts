@@ -869,7 +869,7 @@ export const INPUT = {
 // offline build self-contained and fit the vector look - see audio.ts SYNTHS.
 export const AUDIO = {
   MASTER_VOLUME: 0.9,
-  MUSIC_VOLUME: 0.35,
+  MUSIC_VOLUME: 0.26,
   SFX_VOLUME: 0.85,
   MUTE_RAMP: 0.05,     // seconds to ramp the music gain on the M mute toggle
   // Looping music tracks. 'menu' plays on the title + game-over screens, 'play'
