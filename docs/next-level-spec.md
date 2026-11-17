@@ -152,6 +152,12 @@ a tube made only of lines feels like rails, and the same line too often feels re
   of the tube at the pass.
 - 2026-11 - Fire hold. With the hold only at the gate, the average bot was hit more often than
   before. Chosen: the hold stays at the fast-to-slow boundary as well.
+- 2026-11 - Slalom mines. The slalom phrase placed a mine above each turning point, to punish
+  swinging too far. About a quarter of all mines then sat above the horizontal, where almost
+  nobody flies. The owner noticed mines on the ceiling that were easy to avoid and
+  contradicted the pull toward the bottom. Chosen: the slalom mines sit near the floor under
+  each turn, so staying low is what gets punished. Consequence: mines cost more lives at every
+  skill level, which makes the game harder.
 - 2026-11 - Too few gems per cycle left sections half empty. More rings over the top in fast
   sections made those sections repeat themselves. Chosen: fewer rings. The top of the tube is
   used a little less than with random placement. This is a deliberate trade-off.

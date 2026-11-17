@@ -113,7 +113,8 @@ export const PHRASES: readonly Phrase[] = [
     ],
   },
   {
-    // a slalom: short swings to alternating sides with a mine outside each turn
+    // a slalom: short swings to alternating sides, with a mine near the floor under
+    // each turn, so staying low is what gets punished
     id: 'weave',
     unlock: [0, 0, null],
     weight: [4, 1, 0],
@@ -132,11 +133,11 @@ export const PHRASES: readonly Phrase[] = [
       [3, 0],
     ],
     mines: [
-      { at: [1, 0], deg: 60 },
-      { at: [2, 0], deg: 60 },
-      // none above the first turn: a craft may still be coming down the wall there
+      { at: [1, 0], deg: -60 },
+      { at: [2, 0], deg: -60 },
+      // none under the first turn: a craft may still be coming down the wall there
       // from whatever it flew before
-      { at: [3, 0], deg: 60, minTuned: 3 },
+      { at: [3, 0], deg: -60, minTuned: 3 },
     ],
   },
   {
