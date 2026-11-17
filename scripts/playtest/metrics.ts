@@ -63,12 +63,12 @@ export const SCALAR_KEYS = [
   'gemShare', // collected / offered
   'orbs',
   'orbsOffered',
-  'extraLives', // every life regained: completed shard sets, squad crosses, and extra-life crosses when that field is on
+  'extraLives', // every life regained: completed shard sets, squad crosses and bonus crosses
   'shardsDropped', // life shards left by kills
   'shardsCaught',
   'shardCatchShare', // caught / dropped (NaN with none dropped)
   'livesFromShards', // lives restored by a completed shard set
-  'crossesDropped', // whole-life crosses left by destroyed squads
+  'crossesDropped', // whole-life crosses: left by destroyed squads, and bonus crosses
   'crossesCaught',
   // --- gun
   'emptyGunShare', // share of time with less than one shot of charge

@@ -21,7 +21,7 @@ import { farScale } from './farScale'
 // Raiders come in WAVES. The director arms the members of a wave one by one into a
 // formation around an anchor angle (side by side, or a pincer), each in its own depth
 // lane, never more than the alive cap at once. A wave ends when every member is dead
-// (onWaveClear) or gone, or when its time is up; then there is a breather. A squad
+// or leaving, or when its time is up; then there is a breather. A squad
 // member is a WEAVER (strafes around its formation spot and fires down its own line)
 // or a HUNTER (slides to the player's line and fires only when it is on it), so a
 // parked player is always shot at and a moving one never is by surprise.
@@ -36,7 +36,6 @@ export interface EnemyDeps {
   onKill(theta: number, z: number, last: boolean): void
   onChargeStart?(theta: number, z: number): void // a raider started its firing tell (theta is the line it will fire down)
   onChip?(theta: number, z: number): void // a player bolt hit a raider without killing it
-  onWaveClear?(): void // every member of a wave was destroyed
 }
 
 export interface Enemies {
@@ -89,6 +88,7 @@ interface Slot {
   thetaCenter: number
   strafePhase: number
   engageT: number // seconds left in its lane
+  squad: number // the squad (squadId) it entered with
   fireCd: number // seconds until the next charge starts
   charging: boolean
   chargeT: number // seconds into the current charge
@@ -144,7 +144,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   let waveT = 0 // seconds into the current wave
   let rosterLeft = 0 // members of the current wave still to enter
   let armed = 0 // members of the current wave that have entered
-  let escaped = 0 // members that left alive
+  let squadId = 0 // the current squad; a raider remembers the squad it entered with
+  let squadOpen = 0 // members of the current squad neither killed nor gone yet
+  let squadGotAway = 0 // members of the current squad that got away
   let armT = 0 // seconds until the next member may enter
   let waveHuntersN = 0 // hunters this wave keeps in play
   let formation: Formation = 'spread'
@@ -173,6 +175,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     slot.thetaCenter = 0
     slot.strafePhase = 0
     slot.engageT = 0
+    slot.squad = 0
     slot.fireCd = 0
     slot.charging = false
     slot.chargeT = 0
@@ -216,6 +219,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
   // Arm a slot as the next member of the current wave: a fresh APPROACH run far
   // ahead of the ship, on its formation spot, bound for its depth lane.
   function arm(slot: Slot): void {
+    slot.squad = squadId
     let liveHunters = 0
     for (const s of slots) if (fighting(s) && s.role === 'hunter') liveHunters++
     // the first member of a squad is a weaver, so a hunter never arrives alone
@@ -232,7 +236,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     let leaver: Slot | undefined
     if (k >= formN) {
       for (const s of slots) {
-        if (s === slot || !fighting(s) || s.role === 'hunter' || s.formK < 0) continue
+        if (s === slot || s.phase !== 'engage' || !s.active || s.role === 'hunter' || s.formK < 0) continue
         if (!leaver || s.engageT < leaver.engageT) leaver = s
       }
       k = leaver ? leaver.formK : armed % formN
@@ -285,8 +289,17 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     slot.exitT = 0
     slot.exitZ = z
     slot.enemy.setCharge(0)
-    escaped++
     armT = Math.max(armT, ENEMY.WAVE.REINFORCE_DELAY)
+  }
+
+  // A leaving raider is out of reach: it got away, so its squad is not destroyed.
+  // Until then it can still be shot (tryKill), and that kill counts for the squad.
+  function gotAway(slot: Slot): void {
+    if (slot.squad === squadId) {
+      squadGotAway++
+      squadOpen--
+    }
+    recycle(slot)
   }
 
   function startWave(craft: CraftState): void {
@@ -294,7 +307,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     waveT = 0
     rosterLeft = roster
     armed = 0
-    escaped = 0
+    squadId++
+    squadOpen = roster
+    squadGotAway = 0
     armT = 0
     waveHuntersN = hunters
     formN = Math.max(1, Math.min(roster, maxActive, ENEMY.WAVE.FIGHT_MAX))
@@ -323,6 +338,8 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     if (waveT >= ENEMY.WAVE.TIME) {
       // time is up: whoever is left leaves forward, the rest of the roster stays home
       for (const slot of slots) if (fighting(slot)) leave(slot, 'exit', craftDistance - slot.worldDistance)
+      squadGotAway += rosterLeft
+      squadOpen -= rosterLeft
       endWave()
       return
     }
@@ -347,7 +364,6 @@ export function createEnemies(deps: EnemyDeps): Enemies {
         }
       }
     } else if (inFight === 0) {
-      if (escaped === 0) deps.onWaveClear?.()
       endWave()
       return
     }
@@ -525,7 +541,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       slot.worldDistance += (craft.speed + ENEMY.EXIT_SPEED_DELTA + ENEMY.EXIT_ACCEL * slot.exitT) * dt
       z = craftDistance - slot.worldDistance
       if (z <= -ENEMY.SPAWN_AHEAD) {
-        recycle(slot)
+        gotAway(slot)
         return
       }
       slot.enemy.setOpacity(clamp((z + ENEMY.SPAWN_AHEAD) / (slot.exitZ + ENEMY.SPAWN_AHEAD), 0, 1))
@@ -534,7 +550,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       slot.worldDistance += (craft.speed + ENEMY.DEPART_SPEED_DELTA) * dt
       z = craftDistance - slot.worldDistance
       if (z > ENEMY.RECYCLE_BEHIND) {
-        recycle(slot)
+        gotAway(slot)
         return
       }
     }
@@ -631,9 +647,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
             slot.enemy.setCharge(0)
             killed += 1
             armT = Math.max(armT, ENEMY.WAVE.REINFORCE_DELAY) // a beat before its replacement enters
-            let left = rosterLeft
-            for (const s of slots) if (fighting(s)) left++
-            deps.onKill(slot.theta, enemyZ, waveActive && left === 0 && escaped === 0)
+            const ofSquad = slot.squad === squadId
+            if (ofSquad) squadOpen--
+            deps.onKill(slot.theta, enemyZ, ofSquad && squadOpen === 0 && squadGotAway === 0)
           } else {
             slot.flashT = FLASH_TIME
             deps.onChip?.(slot.theta, enemyZ)
@@ -661,7 +677,9 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       waveT = 0
       rosterLeft = 0
       armed = 0
-      escaped = 0
+      squadId = 0
+      squadOpen = 0
+      squadGotAway = 0
       armT = 0
       waveHuntersN = 0
       formation = 'spread'

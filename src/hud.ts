@@ -358,6 +358,7 @@ export function createHud(): Hud {
   let lastOver = false
   let lastOverScore = -1
   let lastOverLevel = -1
+  let lastOverMode = -1
   let lastOverTime = -1
   let lastOverBest = -1
   let lastDiff = -1
@@ -426,7 +427,7 @@ export function createHud(): Hud {
       if (s.over) {
         if (s.deathCause !== lastCause) { elOverCause.textContent = s.deathCause ? CAUSE_TEXT[s.deathCause] : ''; lastCause = s.deathCause }
         if (score !== lastOverScore) { elOverScore.textContent = 'SCORE ' + pad(score, 7); lastOverScore = score }
-        if (level !== lastOverLevel) { elOverLevel.textContent = 'REACHED LEVEL ' + level + ' - ' + diffMode(s.difficultyIndex).name; lastOverLevel = level }
+        if (level !== lastOverLevel || s.difficultyIndex !== lastOverMode) { elOverLevel.textContent = 'REACHED LEVEL ' + level + ' - ' + diffMode(s.difficultyIndex).name; lastOverLevel = level; lastOverMode = s.difficultyIndex }
         if (timeTenths !== lastOverTime) { elOverTime.textContent = 'TIME ' + fmtTime(s.elapsed); lastOverTime = timeTenths }
         if (best !== lastOverBest) { elOverBest.textContent = 'BEST ' + pad(best, 7); lastOverBest = best }
       }

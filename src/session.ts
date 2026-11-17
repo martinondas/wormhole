@@ -13,6 +13,7 @@ import { createLevelTuning, bombMult, shardsPerLife, squadEvery, type LevelTunin
 import { createSequencer, type Sequencer, type PlacedPhrase } from './world/sequencer'
 import { createGame, type Game } from './game'
 import { createGun, type Gun } from './gun'
+import { randRange } from './util/rng'
 import { SPEED, SHIP, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, LIFE_SHARD, SPAWN_CLEAR, ENERGY, GUN, ENEMY, FEEL } from './config'
 
 // The gameplay session: every system that decides what happens in a run (craft,
@@ -45,7 +46,8 @@ export interface SessionFx {
   shardDropped?(theta: number, z: number): void // a killed raider left a life shard on the wall
   shardCollected?(count: number, restored: boolean): void // count = shards of the current set, this one included (restored: the set is full)
   bonusCollected?(big: boolean): void // a shard (big: a cross) caught at full lives paid score instead
-  crossDropped?(theta: number, z: number): void // the last raider of a destroyed squad left a whole-life cross
+  // a whole-life cross appeared: left by the last raider of a destroyed squad, or (bonus) on its own
+  crossDropped?(theta: number, z: number, bonus: boolean): void
   damaged?(cause: DamageCause, theta: number, z: number): void // a life was lost
   hitBlocked?(cause: DamageCause): void // contact during i-frames: no life lost
   enemyFired?(theta: number, z: number): void
@@ -63,7 +65,7 @@ export interface SessionFx {
   mineNearMiss?(theta: number): void // a mine passed just outside the hit cone while the ship was vulnerable
   enemyChargeStarted?(theta: number, z: number): void // a raider started its firing tell down `theta`
   enemyChipped?(theta: number, z: number): void // a player bolt hit a raider without killing it
-  waveCleared?(): void // every raider of a wave was destroyed; a breather follows
+  waveCleared?(): void // the last raider of a squad was destroyed and none got away
   // Observation only (gem lines): the director placed a phrase on the tube ahead
   // (the object is reused - copy what you keep), and the craft is about to reach one.
   phrasePlaced?(p: PlacedPhrase): void
@@ -225,8 +227,8 @@ export function createSession(fx: SessionFx = {}): Session {
   })
   fields.push(mines)
   // extra life: a bright-green cross worth a whole life. game.addLife() caps at
-  // LIVES.START; at full lives the cross pays score instead. With EXTRA_LIFE.ENABLED
-  // off it is a feed field filled by destroyed squads (dropShard below).
+  // LIVES.START; at full lives the cross pays score instead. A feed field, filled by
+  // destroyed squads (dropShard) and by the bonus cross (dropBonus).
   const crosses = makeField(
     createExtraLife,
     EXTRA_LIFE,
@@ -240,9 +242,7 @@ export function createSession(fx: SessionFx = {}): Session {
       }
       return true
     },
-    EXTRA_LIFE.ENABLED
-      ? { count: EXTRA_LIFE.COUNT, sampleTheta: biasedAngle(EXTRA_LIFE.SPAWN_ANGLE), avoid: nextAvoid() }
-      : { count: EXTRA_LIFE.SQUAD_POOL, feed: true, growTime: EXTRA_LIFE.GROW_TIME },
+    { feed: true, growTime: EXTRA_LIFE.GROW_TIME },
   )
   fields.push(crosses)
   // life shards: a feed field filled by raider kills (dropShard below). A caught
@@ -281,13 +281,35 @@ export function createSession(fx: SessionFx = {}): Session {
     let wd = craft.distance + Math.max(-z, craft.speed * LIFE_SHARD.LEAD_SECONDS)
     for (let i = 0; i < SPAWN_CLEAR.TRIES && mines.occupies(wd, theta); i++) wd += SPAWN_CLEAR.NUDGE
     // the last raider of every Nth destroyed squad leaves a whole-life cross
-    if (last && !EXTRA_LIFE.ENABLED && ++squadsCleared >= squadEvery(levels.tuningLevel(flight.level)) && crosses.spawn(wd, theta)) {
+    if (last && ++squadsCleared >= squadEvery(levels.tuningLevel(flight.level)) && crosses.spawn(wd, theta)) {
       squadsCleared = 0
-      fx.crossDropped?.(theta, craft.distance - wd)
+      fx.crossDropped?.(theta, craft.distance - wd, false)
       return
     }
     if (shards.spawn(wd, theta)) fx.shardDropped?.(theta, craft.distance - wd)
   }
+
+  // The bonus cross: now and then a whole-life cross appears on the wall on its own,
+  // far enough ahead to be seen coming, clear of every other object. It is rare, so
+  // it cannot replace fighting.
+  const bonusAngle = biasedAngle(EXTRA_LIFE.SPAWN_ANGLE)
+  const nextBonus = (): number => game.elapsed + randRange(EXTRA_LIFE.BONUS_EVERY[0], EXTRA_LIFE.BONUS_EVERY[1])
+  let bonusAt = Infinity // run time of the next bonus cross
+  const dropBonus = (): void => {
+    bonusAt = nextBonus()
+    // measured at the level's top speed, so a speed-up on the way never shortens the warning
+    let wd = craft.distance + frameSpeedMax * EXTRA_LIFE.BONUS_LEAD_SECONDS
+    let theta = bonusAngle()
+    const taken = (): boolean => fields.some((f) => f.occupies(wd, theta))
+    // another angle first, then farther down the tube, like any other spawn
+    for (let i = 0; i < SPAWN_CLEAR.TRIES && taken(); i++) theta = bonusAngle()
+    for (let i = 0; i < SPAWN_CLEAR.TRIES && taken(); i++) wd += SPAWN_CLEAR.NUDGE
+    if (crosses.spawn(wd, theta)) fx.crossDropped?.(theta, craft.distance - wd, true)
+  }
+
+  // an orb, a cross or a shard sits there: a phrase item never shares its spot
+  const pickupAt = (wd: number, theta: number): boolean =>
+    orbs.occupies(wd, theta) || crosses.occupies(wd, theta) || shards.occupies(wd, theta)
 
   // --- gem lines: the director feeds the gem and mine fields with phrases ------
   const sequencer = createSequencer({
@@ -296,10 +318,10 @@ export function createSession(fx: SessionFx = {}): Session {
     spawnGem: (wd, theta) => gems.spawn(wd, theta),
     spawnMine: (wd, theta) => mines.spawn(wd, theta),
     // a phrase never lands on an orb, a cross or a shard
-    blocked: (wd, theta) => orbs.occupies(wd, theta) || crosses.occupies(wd, theta) || shards.occupies(wd, theta),
+    blocked: pickupAt,
     rescaleItems: (boundary, ratio) => {
       gems.rescale(boundary, ratio)
-      mines.rescale(boundary, ratio)
+      mines.rescale(boundary, ratio, pickupAt) // a moved mine must not land on a pickup
     },
     clearItems: () => {
       gems.reset(craft.distance)
@@ -331,11 +353,11 @@ export function createSession(fx: SessionFx = {}): Session {
       game.addScore(Math.round(ENEMY.SCORE * flight.scoreMultiplier))
       game.addEnergy(ENEMY.ENERGY_REFUND) // charge refund is NOT score-multiplied
       fx.enemyKilled?.(theta, z)
+      if (last) fx.waveCleared?.()
       dropShard(theta, z, last)
     },
     onChargeStart: (theta, z) => fx.enemyChargeStarted?.(theta, z),
     onChip: (theta, z) => fx.enemyChipped?.(theta, z),
-    onWaveClear: () => fx.waveCleared?.(),
   })
 
   // Hoisted projectile-update context (mutated each step, not re-allocated) so the
@@ -361,10 +383,14 @@ export function createSession(fx: SessionFx = {}): Session {
   let frameGravity = flight.gravityForSpeed(SPEED.NORMAL)
   let frameSpeedMax = SPEED.FAST // upper speed clamp for the current level (grows with the level)
 
-  // Title screen only: lay the gem lines out again when the tube was planned for
-  // other speeds (the difficulty changed).
+  // Title screen only: lay the tube out again when it was planned for another
+  // difficulty. Orbs first, because a phrase keeps clear of them.
   const replan = (): void => {
-    if (craft.distance === 0 && sequencer.stale()) sequencer.reset()
+    if (craft.distance !== 0 || !sequencer.stale()) return
+    laidOut = 0 // the orbs keep clear of nothing: the old plan's gems and mines are about to go
+    orbs.reset(craft.distance)
+    laidOut = Infinity
+    sequencer.reset()
   }
 
   return {
@@ -395,6 +421,7 @@ export function createSession(fx: SessionFx = {}): Session {
       winding = windingOf(craft.theta)
       gemChain = 0
       lastNearT = -Infinity
+      bonusAt = nextBonus()
     },
 
     replan,
@@ -465,11 +492,13 @@ export function createSession(fx: SessionFx = {}): Session {
       projCtx.shipTheta = craft.theta
       projectiles.update(dt, projCtx)
       game.update(dt)
+      if (!game.over && game.elapsed >= bonusAt) dropBonus()
     },
 
     // Game-over -> title: reset the run so the next one starts fresh.
     reset(): void {
       squadsCleared = 0
+      bonusAt = Infinity
       // flight.reset() MUST run before the field reset: field layout() calls the
       // spacingScaleAt hooks, which read flight's stateful level / speed-ratio.
       // Reset flight first so the title-screen and next-run fields lay out at level-0

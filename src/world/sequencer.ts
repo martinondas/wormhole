@@ -93,6 +93,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
   let mode: FlightMode = flight.mode
   let level = 0 // level the tube ahead is planned for
   let plannedSlow = 0 // slow-tier speed it was planned with
+  let plannedEase = 0 // difficulty ease it was planned with (sets the mine budget)
   let cycle = 0
   let secIndex = 0 // section within the cycle, 0..2
   let secTier = 0
@@ -194,6 +195,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     mode = flight.mode
     level = flight.level
     plannedSlow = speedOf(0)
+    plannedEase = flight.ease()
     cycleGems = 0
     plannedBefore = Infinity
     last1 = last2 = -1
@@ -604,7 +606,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       seq.update(0)
     },
 
-    stale: (): boolean => flight.tierSpeedOf(flight.level, 0) !== plannedSlow || flight.mode !== mode,
+    stale: (): boolean => flight.tierSpeedOf(flight.level, 0) !== plannedSlow || flight.ease() !== plannedEase || flight.mode !== mode,
   }
   return seq
 }

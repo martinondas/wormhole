@@ -101,8 +101,9 @@ export interface Field {
   // when the pool has no parked object left (counted in failedSpawns).
   spawn(worldDistance: number, theta: number): boolean
   // Feed mode: move every waiting object beyond `boundary` to
-  // boundary + (worldDistance - boundary) * ratio (the tube ahead changed speed).
-  rescale(boundary: number, ratio: number): void
+  // boundary + (worldDistance - boundary) * ratio (the tube ahead changed speed). An
+  // object whose new spot `drop` rejects is taken off the wall.
+  rescale(boundary: number, ratio: number, drop?: (worldDistance: number, theta: number) => boolean): void
   readonly consumed: number // items consumed this run (debug / feel only)
   readonly failedSpawns: number // spawn() calls that found the pool empty, since the last reset
 }
@@ -331,10 +332,11 @@ export function createField(cfg: FieldConfig): Field {
       failedSpawns++
       return false
     },
-    rescale(boundary: number, ratio: number): void {
+    rescale(boundary: number, ratio: number, drop?: (worldDistance: number, theta: number) => boolean): void {
       for (const slot of slots) {
         if (slot.state === 'idle' && slot.worldDistance > boundary) {
           slot.worldDistance = boundary + (slot.worldDistance - boundary) * ratio
+          if (drop?.(slot.worldDistance, slot.theta)) park(slot)
         }
       }
     },

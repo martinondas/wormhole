@@ -375,17 +375,19 @@ export const HAZARD = {
 // A chunky 3D plus (the universal "+1" icon), shape-distinct from every other wall
 // object despite green being the theme color. Edge-lit solid like the mine. It adds a
 // life only below LIVES.START (game.addLife); at full lives it pays FULL_SCORE.
-// ENABLED is off: lives come back only through fighting. Killed raiders drop life
-// shards (LIFE_SHARD), and the last raider of every Nth fully destroyed squad drops
-// this cross (SQUAD_EVERY). ENABLED true gives the distance-timed cross field instead.
 export const EXTRA_LIFE = {
-  ENABLED: false,     // the distance-timed cross field (off: crosses come only from destroyed squads)
-  // N grows with the tuning level T: SQUAD_EVERY + SQUAD_EVERY_STEP * T, rounded, at
-  // most SQUAD_EVERY_MAX (levels.ts squadEvery): frequent for a beginner, a rare bonus at depth.
+  // A whole-life cross comes two ways. Squad cross: the last raider of every Nth fully
+  // destroyed squad leaves one. N grows with the tuning level T: SQUAD_EVERY +
+  // SQUAD_EVERY_STEP * T, rounded, at most SQUAD_EVERY_MAX (levels.ts squadEvery).
   SQUAD_EVERY: 3,
   SQUAD_EVERY_STEP: 1,
   SQUAD_EVERY_MAX: 12,
-  SQUAD_POOL: 2,      // crosses the squad-fed field can hold on the wall at once
+  // Bonus cross: one appears on the wall on its own after BONUS_EVERY seconds of play
+  // (a random time in that range), at least BONUS_LEAD_SECONDS of flight ahead. Rare by intent:
+  // a surprise, not a way to live without fighting.
+  BONUS_EVERY: [80, 130] as readonly [number, number],
+  BONUS_LEAD_SECONDS: 3,
+  COUNT: 3,           // pool size: crosses the wall can hold at once
   FULL_SCORE: 750,    // points for a cross caught at full lives (x the level multiplier)
   CHARGE: 20,         // weapon charge a caught cross returns
   GROW_TIME: 0.35,    // a dropped cross grows in over this long, like a shard
@@ -402,17 +404,12 @@ export const EXTRA_LIFE = {
   PULSE_SPEED: 4.0,   // throb rad/s (a beckoning pulse)
   PULSE_AMP: 0.10,    // +/- scale breathing (more than the mine: eye-catching)
 
-  // --- field / spawn (COUNT and SPAWN_* describe the distance-timed field: one cross, far apart) ---
-  COUNT: 1,           // a single cross exists at a time; it recycles far ahead after each encounter
-  SPAWN_START: 4500,  // distance ahead of the first cross
-  SPAWN_SPACING: 18000,// nominal distance between crosses
-  SPAWN_JITTER: 4000, // random extra distance, so it never feels metronomic
   RECYCLE_BEHIND: 22, // recycle once it is this far behind the ship
   CAPTURE_Z: 2.6,     // generous ride-into window (a rare reward should be easy to grab once reached)
   CAPTURE_ANGLE: 0.46,// angular catch window (rad)
   POP_TIME: 0.22,     // collect pop duration (s)
   POP_SCALE: 2.2,     // collect pop peak scale
-  // angle-from-bottom bias (deg). Mid-wall, so you still have to swing up for it.
+  // where a bonus cross appears, as an angle-from-bottom bias (deg): mid-wall, so you swing up for it
   SPAWN_ANGLE: { band: [30, 110] as [number, number], bias: 0.75, rest: [0, 180] as [number, number] },
 }
 
@@ -465,8 +462,8 @@ export const SPAWN_CLEAR = {
 // A director (world/sequencer.ts) fills the gem and mine pools with short phrases
 // from world/phrases.ts: a gem phrase follows the path a scripted swing takes (the
 // "ghost"), a mine phrase keeps a clear line marked by gems. Orbs stay a random
-// field; life shards and the squad cross are left by killed raiders (the cross is a
-// random field only with EXTRA_LIFE.ENABLED).
+// field; life shards and the squad cross are left by killed raiders, and the bonus cross
+// appears on its own.
 export const SEQUENCE = {
   HORIZON: 280,                       // units planned ahead of the craft (past the visible rings,
                                       // and shorter than a slow section)

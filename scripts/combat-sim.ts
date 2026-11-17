@@ -5,7 +5,7 @@
 //        leaves, and that passive flight scores nothing;
 //   H-L  the raiders as a group: fire slots, charge tells, waves at several tuning
 //        levels, the hunter, formations and depth lanes;
-//   M    life shards and squad crosses, in the real session.
+//   M-N  life shards, squad crosses and the bonus cross, in the real session.
 import { PHYSICS, SPEED, SHIP, GUN, ENEMY, LEVELS, LIVES, LIFE_SHARD, EXTRA_LIFE } from '../src/config'
 import { createSession } from '../src/session'
 import { createCraft, updateCraft, type CraftState } from '../src/craft'
@@ -355,7 +355,9 @@ quickWaves(() => {
           startLine.push(theta)
           startAt.push(now)
         },
-        onWaveClear: () => clears++,
+        onKill: (_theta, _z, last) => {
+          if (last) clears++
+        },
       },
       T,
     )
@@ -524,7 +526,7 @@ withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
 })
 
 // ---- M) life shards: the real session (kills drop them, catching a set restores a life)
-;(() => {
+withConfig(EXTRA_LIFE, { BONUS_EVERY: [1e9, 1e9] }, () => {
   seedRng(11)
   let dropped = 0
   let caught = 0
@@ -532,6 +534,7 @@ withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
   let lastDropTheta = 0
   let bonus = 0
   let crossDrops = 0
+  let bonusDrops = 0
   const s = createSession({
     shardDropped: (theta) => {
       dropped++
@@ -539,8 +542,9 @@ withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
     },
     shardCollected: () => caught++,
     bonusCollected: () => bonus++,
-    crossDropped: (theta) => {
-      crossDrops++
+    crossDropped: (theta, _z, isBonus) => {
+      if (isBonus) bonusDrops++
+      else crossDrops++
       lastDropTheta = theta
     },
     lifeCollected: () => lifeCues++,
@@ -642,12 +646,8 @@ withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
   s.reset()
   check('M7 reset clears the shards on the wall and the progress', k4 && before.shards === 1 && before.live === 1 && game.shards === 0 && live() === 0 && game.shardsPerLife === LIFE_SHARD.PER_LIFE, `before: ${before.shards} caught, ${before.live} live; after: ${game.shards} caught, ${live()} live`)
 
-  let crosses = 0
-  s.fieldByKind.life.visit(() => crosses++)
-  check('M8 the distance-timed extra-life cross follows its switch', crosses === (EXTRA_LIFE.ENABLED ? EXTRA_LIFE.COUNT : 0), `crosses=${crosses} enabled=${EXTRA_LIFE.ENABLED}`)
-
   // destroyed squads: every SQUAD_EVERY-th one leaves a whole-life cross
-  if (!EXTRA_LIFE.ENABLED) {
+  {
     game.lives = LIVES.START - 1
     game.shards = 0
     lifeCues = 0
@@ -659,6 +659,28 @@ withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
     hold = undefined
     check('M9 a destroyed squad leaves a cross that restores a whole life', crossDrops === 1 && lifeCues === 1 && game.lives === LIVES.START, `kills=${kills} cross drops=${crossDrops} life cues=${lifeCues} lives=${game.lives} shards=${game.shards}`)
   }
-})()
+})
+
+// ---- N) the bonus cross appears on its own, in its time window, ahead of the ship
+withConfig(EXTRA_LIFE, { BONUS_EVERY: [5, 8] }, () => {
+  seedRng(12)
+  let at = NaN
+  let ahead = NaN
+  const s = createSession({
+    crossDropped: (_theta, z, isBonus) => {
+      if (isBonus && Number.isNaN(at)) {
+        at = s.game.elapsed
+        ahead = -z
+      }
+    },
+  })
+  s.reset()
+  s.begin()
+  const tick = driveSession(s, { steerTarget: 0, fire: false }, { invulnerable: true })
+  while (Number.isNaN(at) && s.game.elapsed < 20) tick()
+  let onWall = 0
+  s.fieldByKind.life.visit(() => onWall++)
+  check('N1 a bonus cross appears inside BONUS_EVERY, at least BONUS_LEAD_SECONDS of flight ahead', at >= 5 && at <= 8.1 && onWall === 1 && ahead >= s.craft.speed * EXTRA_LIFE.BONUS_LEAD_SECONDS - 2, `at=${at.toFixed(1)}s ahead=${ahead.toFixed(1)} on the wall=${onWall}`)
+})
 
 finish('COMBAT SIM')
