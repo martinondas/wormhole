@@ -34,8 +34,9 @@ An orientation, not a specification. Read the code for behaviour and `src/config
   right and fires a forward gun.
 - The tube is a sequence of sections in speed tiers. A tier sets the speed and the strength of
   gravity, and the wall colour shows the tier. One pass through the tiers is a cycle.
-- Levels are gem-gated: a level advances at the end of a cycle only when its gem quota is met.
-  Otherwise the same level repeats.
+- Levels are gem-gated: when a level's gem quota is met, a gate ring appears ahead in the tube,
+  and the level changes where the craft flies through it. A level lasts until its gems are
+  collected. The speed sections cycle on their own clock.
 - Gems and mines come as gem lines: authored phrases placed on the path that a simulated pilot
   flies. A director sequences the phrases. Mines sit beside the line, not on it.
 - Raiders arrive as squads. A wave director sets formations, depth lanes and breathers. One
@@ -140,7 +141,6 @@ The craft's position is an angle `theta` around the circular cross-section of th
 - Weapon charge: the bots aim better than a person, so they cannot calibrate it.
 - Camping: a player who never shoots earns no lives and little score, but is hit no more often
   than a fighter.
-- The gem gate can still make a player repeat an early level by a narrow margin. Open if it annoys.
 - Far raiders are small at deep-level speeds.
 - Not judged by a person yet: the halo ring and the arrival cue of the large cross, and the
   cue for a cross caught at full lives. Not tested since the latest work: Safari, and the 5K

@@ -18,7 +18,7 @@ function table(head: string[], rows: string[][]): string {
 export function summaryTable(results: Aggregate[]): string {
   const head = [
     'bot', 'mode', 'runs', 'time med (p10-p90)', 'level med (p10-p90)', 'score med', 'cap%',
-    'hits/min', 'death mine/bolt/ram', 'gem%', 'repeats', 'empty%', 'acc%', 'kills/min',
+    'hits/min', 'death mine/bolt/ram', 'gem%', 's/level', 'empty%', 'acc%', 'kills/min',
     'bolts aimed/tell/hit', 'raiders (4+)', 'dead air', 'flat/quiet', 'lives+', 'bottom/upper', 'loops', 'rev/min',
   ]
   const rows = results.map((a) => {
@@ -34,7 +34,7 @@ export function summaryTable(results: Aggregate[]): string {
       f2(g('hitsPerMin').mean),
       `${pct(a.deathCauses.mine ?? 0)}/${pct(a.deathCauses.bolt ?? 0)}/${pct(a.deathCauses.ram ?? 0)}`,
       pct(g('gemShare').mean),
-      f1(g('levelRepeats').mean),
+      g('secondsPerLevel').n > 0 ? f1(g('secondsPerLevel').mean) : '-',
       pct(g('emptyGunShare').mean),
       pct(g('accuracy').mean),
       f1(g('killsPerMin').mean),
@@ -56,7 +56,7 @@ export function summaryTable(results: Aggregate[]): string {
 export function probeTable(results: Aggregate[]): string {
   const head = [
     'bot', 'mode', 'kill dist med', 'kills >60', 'clump%', 'tell min', 'life balance', 'chain hits',
-    'gate 1st try', 'gem chain med/max', 'near miss/min', 'loops/min', 'waves cleared/min', 'raider-free', 'bolt+mine s/min',
+    'gate wait', 'gem chain med/max', 'near miss/min', 'loops/min', 'waves cleared/min', 'raider-free', 'bolt+mine s/min',
   ]
   const rows = results.map((a) => {
     const g = (k: ScalarKey): Stat => a.stats[k]
@@ -69,7 +69,7 @@ export function probeTable(results: Aggregate[]): string {
       g('tellToArrivalMin').n > 0 ? f2(g('tellToArrivalMin').min) + 's' : '-',
       f2(g('lifeBalance').mean),
       f2(g('chainHits').mean),
-      g('gateFirstTry').n > 0 ? pct(g('gateFirstTry').mean) : '-',
+      g('gateSeconds').n > 0 ? f1(g('gateSeconds').mean) + 's' : '-',
       `${f1(g('gemChainMedian').mean)}/${f1(g('gemChainMax').mean)}`,
       f2(g('nearMissPerMin').mean),
       f2(g('loopsPerMin').mean),
@@ -82,7 +82,7 @@ export function probeTable(results: Aggregate[]): string {
 }
 
 export function levelTable(a: Aggregate, maxRows = 20): string {
-  const head = ['level', 'reached', 'ended here', 'time in level', 'hits/min', 'threats/5s', 'pickups/5s', 'gem%', 'kills/min', 'repeats/run', 'gate 1st try', 'raiders (4+)', 'tells aimed']
+  const head = ['level', 'reached', 'ended here', 'time in level', 'hits/min', 'threats/5s', 'pickups/5s', 'gem%', 'kills/min', 'level time', 'gate wait', 'raiders (4+)', 'tells aimed']
   const rows = a.perLevel.slice(0, maxRows).map((l) => [
     String(l.level),
     pct(l.reachedShare),
@@ -93,8 +93,8 @@ export function levelTable(a: Aggregate, maxRows = 20): string {
     f2(l.pickupsPer5s),
     pct(l.gemShare),
     f1(l.killsPerMin),
-    f2(l.repeatsPerRun),
-    Number.isFinite(l.gateFirstTry) ? pct(l.gateFirstTry) : '-',
+    Number.isFinite(l.passSeconds) ? f1(l.passSeconds) + 's' : '-',
+    Number.isFinite(l.gateSeconds) ? f1(l.gateSeconds) + 's' : '-',
     `${f1(l.raidersMean)} (${pct(l.raiders4PlusShare)})`,
     Number.isFinite(l.tellsAimedShare) ? pct(l.tellsAimedShare) : '-',
   ])
@@ -106,13 +106,13 @@ export function levelTable(a: Aggregate, maxRows = 20): string {
 const COMPARE: [ScalarKey, (x: number) => string][] = [
   ['time', f0], ['level', f1], ['score', f0], ['hitsPerMin', f2], ['timeToFirstHit', f0],
   ['livesLostMine', f2], ['livesLostBolt', f2], ['livesLostRam', f2],
-  ['levelRepeats', f2], ['gemShare', pct], ['emptyGunShare', pct], ['accuracy', pct], ['killsPerMin', f2],
+  ['secondsPerLevel', f1], ['gateSeconds', f1], ['gemShare', pct], ['emptyGunShare', pct], ['accuracy', pct], ['killsPerMin', f2],
   ['boltsAtPlayer', f0], ['boltsAimedShare', pct], ['tellsAimedShare', pct], ['boltsHitShare', pct],
   ['raidersMean', f2], ['raiders4PlusShare', pct], ['deadAirLongest', f1], ['deadAirShare', pct],
   ['threatsPerMin', f1], ['intensityCV', f2], ['quietShare', pct], ['extraLives', f1], ['bottomShare', pct], ['upperShare', pct], ['wallBinsUsed', f1], ['loops', f1],
   ['reversalsPerMin', f0],
   ['killDistanceMedian', f1], ['killsBeyond60Share', pct], ['clumpShare', pct], ['tellToArrivalMin', f2],
-  ['lifeBalance', f2], ['shardsDropped', f1], ['shardsCaught', f1], ['shardCatchShare', pct], ['livesFromShards', f2], ['crossesDropped', f1], ['crossesCaught', f1], ['chainHits', f2], ['gateFirstTry', pct], ['gemChainMedian', f1], ['gemChainMax', f1],
+  ['lifeBalance', f2], ['shardsDropped', f1], ['shardsCaught', f1], ['shardCatchShare', pct], ['livesFromShards', f2], ['crossesDropped', f1], ['crossesCaught', f1], ['chainHits', f2], ['gemChainMedian', f1], ['gemChainMax', f1],
   ['nearMissPerMin', f2], ['loopsPerMin', f2], ['wavesClearedPerMin', f2], ['raiderFreeShare', pct], ['boltMinePerMin', f2],
 ]
 

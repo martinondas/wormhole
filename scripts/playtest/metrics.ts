@@ -31,11 +31,10 @@ export interface LevelStats {
   kills: number
   threats: number // bolts fired at the player + mines passing + raider fly-bys
   pickups: number // gems + orbs + crosses that passed or were collected
-  repeats: number // cycles of this level that ended short of the gem quota
   raiderTime: number // raiders in play, summed over time (divide by time for the mean)
   raider4Time: number // seconds with 4 or more raiders in play
-  cyclesEnded: number // cycles of this level that ended (advance or repeat)
-  firstTryMet: number // 1 if the first cycle of this level ended with the quota met
+  quotaAt: number // seconds into the level at which the gem quota was met (the gate opened)
+  passed: number // 1 if the run flew through this level's gate
   bolts: number // enemy bolts fired in this level
   tellsAimed: number // ... of which had their tell start on the player's line
 }
@@ -57,7 +56,7 @@ export const SCALAR_KEYS = [
   'hitsPerMin',
   'timeToFirstHit', // seconds until the first life was lost (run time if never)
   // --- progression
-  'levelRepeats', // gem-gate failures: cycles that ended without a level-up
+  'secondsPerLevel', // mean seconds a completed level took, from its start to its gate (NaN if none was completed)
   'gems',
   'gemsOffered',
   'gemShare', // collected / offered
@@ -109,7 +108,7 @@ export const SCALAR_KEYS = [
   'tellToArrivalMin', // shortest time from a charge start to its bolt reaching the ship plane (Infinity if none)
   'lifeBalance', // lives regained / lives lost (lives lost floored at 1)
   'chainHits', // lives lost within 1 s after the i-frames of the previous hit ended
-  'gateFirstTry', // share of levels whose first cycle ended with the quota met (NaN if no cycle ended)
+  'gateSeconds', // mean seconds from the quota met to the gate passed, over completed levels (NaN if none)
   'gemChainMedian', // median length of a run of consecutive gems without a miss
   'gemChainMax',
   'nearMissPerMin', // mine near-miss events (session's mineNearMiss)
@@ -169,12 +168,17 @@ export function createRecorder(session: Session): Recorder {
   let lastSteer = 0
   let lastDir = 0
   let winding = 0
-  let lastCycles = 0
   let timeline: number[]
   let timelineLevel: number[]
   let killDist: number[]
   let clumpT = 0
   let lastHitT = -1
+  // completed levels of the run (kept here: the per-level rows stop at MAX_LEVELS)
+  let levelStartT = 0 // run time at which the current level started
+  let quotaT = 0 // run time at which its quota was met
+  let passedLevels = 0
+  let passedSeconds = 0 // summed seconds of the completed levels
+  let gateWait = 0 // of which from the quota met to the gate passed
   let chain = 0
   let chains: number[]
   let nearMisses = 0
@@ -191,7 +195,7 @@ export function createRecorder(session: Session): Recorder {
   const lvlAt = (level: number): LevelStats => {
     const i = Math.max(0, Math.min(level, MAX_LEVELS - 1))
     while (levels.length <= i) {
-      levels.push({ level: levels.length + 1, time: 0, livesLost: 0, gems: 0, gemsOffered: 0, kills: 0, threats: 0, pickups: 0, repeats: 0, raiderTime: 0, raider4Time: 0, cyclesEnded: 0, firstTryMet: 0, bolts: 0, tellsAimed: 0 })
+      levels.push({ level: levels.length + 1, time: 0, livesLost: 0, gems: 0, gemsOffered: 0, kills: 0, threats: 0, pickups: 0, raiderTime: 0, raider4Time: 0, quotaAt: 0, passed: 0, bolts: 0, tellsAimed: 0 })
     }
     return levels[i]!
   }
@@ -266,11 +270,17 @@ export function createRecorder(session: Session): Recorder {
       if (chain > 0) chains.push(chain)
       chain = 0
     },
-    cycleEnded: (advanced) => {
-      // the level that just ended: one below the current one after an advance
-      const l = lvlAt(session.flight.level - (advanced ? 1 : 0))
-      if (l.cyclesEnded === 0 && advanced) l.firstTryMet = 1
-      l.cyclesEnded++
+    quotaReached: () => {
+      const l = lvl()
+      l.quotaAt = l.time
+      quotaT = t
+    },
+    levelUp: (level) => {
+      lvlAt(level - 1).passed = 1 // the level that just ended
+      passedLevels++
+      passedSeconds += t - levelStartT
+      gateWait += t - quotaT
+      levelStartT = t
     },
     mineNearMiss: () => {
       nearMisses++
@@ -331,6 +341,11 @@ export function createRecorder(session: Session): Recorder {
     begin(s: number): void {
       seed = s
       t = 0
+      levelStartT = 0
+      quotaT = 0
+      passedLevels = 0
+      passedSeconds = 0
+      gateWait = 0
       prevDist = session.craft.distance
       firstHit = -1
       lastCause = 'none'
@@ -353,7 +368,6 @@ export function createRecorder(session: Session): Recorder {
       lastSteer = 0
       lastDir = 0
       winding = 0
-      lastCycles = 0
       levels = []
       timeline = []
       timelineLevel = []
@@ -377,7 +391,8 @@ export function createRecorder(session: Session): Recorder {
         level: 1,
         shardCatchShare: NaN,
         tellToArrivalMin: Infinity,
-        gateFirstTry: NaN,
+        secondsPerLevel: NaN,
+        gateSeconds: NaN,
         raiderHist: [], thetaHist: [], perLevel: [], timeline: [], timelineLevel: [],
       }
     },
@@ -393,17 +408,6 @@ export function createRecorder(session: Session): Recorder {
       while (timeline.length <= b) {
         timeline.push(0)
         timelineLevel.push(session.flight.level + 1)
-      }
-
-      // gem-gate failures: a cycle boundary that did not raise the level
-      const cycles = session.flight.cycles
-      if (cycles > lastCycles) {
-        const failed = cycles - session.flight.level - r.levelRepeats
-        if (failed > 0) {
-          r.levelRepeats += failed
-          l.repeats += failed
-        }
-        lastCycles = cycles
       }
 
       perception.capture(snap, t)
@@ -549,8 +553,8 @@ export function createRecorder(session: Session): Recorder {
       r.clumpShare = clumpT / time
       r.lifeBalance = r.extraLives / Math.max(1, r.livesLost)
       r.shardCatchShare = r.shardsDropped ? r.shardsCaught / r.shardsDropped : NaN
-      const firsts = levels.filter((l) => l.cyclesEnded > 0)
-      r.gateFirstTry = firsts.length ? firsts.filter((l) => l.firstTryMet).length / firsts.length : NaN
+      r.secondsPerLevel = passedLevels ? passedSeconds / passedLevels : NaN
+      r.gateSeconds = passedLevels ? gateWait / passedLevels : NaN
       r.gemChainMedian = median(chain > 0 ? [...chains, chain] : chains)
       r.nearMissPerMin = nearMisses / min
       r.loopsPerMin = loopEvents / min
@@ -588,11 +592,11 @@ export interface LevelAggregate {
   pickupsPer5s: number
   gemShare: number
   killsPerMin: number
-  repeatsPerRun: number // gem-gate failures per run that reached it
+  passSeconds: number // mean seconds the level took, over the runs that flew through its gate (NaN if none)
   raidersMean: number // mean raiders in play
   raiders4PlusShare: number // share of the level's time with 4 or more in play
   endedHereShare: number // share of ALL runs that ended in this level
-  gateFirstTry: number // share of first cycles of this level that ended with the quota met (NaN if none ended)
+  gateSeconds: number // of which from the quota met to the gate passed (NaN if none)
   tellsAimedShare: number // share of the level's enemy bolts whose tell started on the player's line (NaN if none)
 }
 
@@ -644,6 +648,7 @@ export function aggregate(bot: string, difficulty: string, maxSeconds: number, r
     const sum = (f: (l: LevelStats) => number): number => rows.reduce((a, l) => a + f(l), 0)
     const time = Math.max(sum((l) => l.time), 1e-6)
     const offered = sum((l) => l.gemsOffered)
+    const done = rows.filter((l) => l.passed)
     perLevel.push({
       level: i + 1,
       reachedShare: rows.length / n,
@@ -653,13 +658,11 @@ export function aggregate(bot: string, difficulty: string, maxSeconds: number, r
       pickupsPer5s: (sum((l) => l.pickups) / time) * BUCKET_SECONDS,
       gemShare: offered > 0 ? sum((l) => l.gems) / offered : 0,
       killsPerMin: (sum((l) => l.kills) / time) * 60,
-      repeatsPerRun: sum((l) => l.repeats) / Math.max(rows.length, 1),
+      passSeconds: done.length ? done.reduce((a, l) => a + l.time, 0) / done.length : NaN,
       raidersMean: sum((l) => l.raiderTime) / time,
       raiders4PlusShare: sum((l) => l.raider4Time) / time,
       endedHereShare: runs.filter((r) => !r.capped && r.level === i + 1).length / n,
-      gateFirstTry: rows.some((l) => l.cyclesEnded > 0)
-        ? rows.filter((l) => l.cyclesEnded > 0 && l.firstTryMet).length / rows.filter((l) => l.cyclesEnded > 0).length
-        : NaN,
+      gateSeconds: done.length ? done.reduce((a, l) => a + l.time - l.quotaAt, 0) / done.length : NaN,
       tellsAimedShare: sum((l) => l.bolts) > 0 ? sum((l) => l.tellsAimed) / sum((l) => l.bolts) : NaN,
     })
   }

@@ -4,6 +4,7 @@ import { createStarfield } from './render/stars'
 import { createTube } from './world/tube'
 import { createShip } from './world/ship'
 import { createBurst } from './world/burst'
+import { createGate } from './world/gate'
 import { Input } from './input'
 import { createSession, type DamageCause, type SessionFx } from './session'
 import { seedRng } from './util/rng'
@@ -14,7 +15,7 @@ import { createPerfOverlay } from './render/perf'
 import { startLoop, createHitStop } from './loop'
 import { createShake } from './render/shake'
 import { angleDiff } from './util/math'
-import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE, GATE } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -46,8 +47,13 @@ const burst = createBurst()
 stage.scene.add(burst.object)
 stage.onResize((w, h) => burst.setResolution(w, h))
 
+// The level gate: the ring that comes out of the fog once the gem quota is met.
+const gate = createGate()
+stage.scene.add(gate.object)
+stage.onResize((w, h) => gate.setResolution(w, h))
+
 const audio = createAudio()
-let readyCueThisGem = false // the quota-meeting gem plays READY, not its chime
+let gateCueThisGem = false // the gem that meets the quota plays the gate cue, not its chime
 let lastLoopCue = -Infinity // game time of the last loop cue
 let deathCause: DamageCause | undefined // cause of the last life lost this run
 
@@ -60,25 +66,24 @@ const fx: SessionFx = {
     ship.flash()
   },
   // the gem chime climbs the ladder with the chain; the gem that meets the quota
-  // plays the READY cue instead
+  // plays the gate cue instead
   gemCollected: (_points, chain) => {
-    if (readyCueThisGem) readyCueThisGem = false
+    if (gateCueThisGem) gateCueThisGem = false
     else audio.play('gem', 0, 1, chain - 1)
   },
   quotaReached: () => {
-    readyCueThisGem = true
-    audio.play('ready')
+    gateCueThisGem = true
+    audio.play('gateOpen')
     hud.pulseGems()
+    hud.showGate()
+    gate.open(flight.gateAt)
   },
-  cycleEnded: (advanced, gems, quota) => {
-    if (advanced) {
-      audio.play('levelup')
-      tube.flash(FEEL.TUBE_FLASH.PEAK)
-      hud.showLevel(flight.level + 1, flight.scoreMultiplier)
-    } else {
-      audio.play('repeat')
-      hud.showRepeat(gems, quota)
-    }
+  // the craft is through the gate: the fanfare, the headline, and the gate opens around the ship
+  levelUp: (level) => {
+    audio.play('levelup')
+    tube.flash(FEEL.TUBE_FLASH.PEAK * GATE.FLASH)
+    gate.pass()
+    hud.showLevel(level + 1, flight.scoreMultiplier)
   },
   loopCompleted: () => {
     // a deliberate loop is a moment; an endless spin is not, so the cue rests between loops
@@ -162,7 +167,7 @@ audio.playMusic(musicTrack()) // 'menu' on the title; queued until the first ges
 // a run. The first run starts on Space from the title; after a game over, Enter
 // returns to the title (intro + instructions) and the next run starts from there.
 let wasOver = false // detects the run-ending edge once in render (sting)
-let gemHintShown = false // the one-time gem-gate reminder fires on the first run of the session
+let gemHintShown = false // the one-time gem reminder fires on the first run of the session
 let lastMusic: 'menu' | 'play' = musicTrack() // cache: switch tracks only on change
 
 // Which music track the current state wants: menu on the title / game-over, the
@@ -191,6 +196,7 @@ function returnToTitle(): void {
   lastLoopCue = -Infinity
   session.reset()
   burst.reset()
+  gate.reset()
   hitStop.reset()
   rig.reset()
 }
@@ -204,6 +210,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (INPUT.modeCycle.includes(e.code)) {
     console.log('[flight] mode =', flight.cycle())
+    gate.reset() // a mode switch closes an open gate
     return
   }
   if (INPUT.perf.includes(e.code)) {
@@ -285,6 +292,7 @@ startLoop(
     // gated on game-over (a final death-burst plays through) or debug.paused (the
     // SHOOT_BURST harness animates staged bursts under it).
     if (!paused) burst.update(frameDt, craft.distance)
+    if (!paused) gate.update(frameDt, craft.distance) // also on game-over, so a gate never freezes mid-fade
     // i-frame flicker: blink the ship while invulnerable so a hit reads clearly
     // (and so losing a life never feels random). Always visible once the run is
     // over, paused, or invulnerability has lapsed (a paused run freezes invuln, so
@@ -310,7 +318,7 @@ startLoop(
       shards: game.shards,
       shardsPerLife: game.shardsPerLife,
       gemsThisLevel: game.gemsThisLevel,
-      // pinned G-key modes have no gate, so report quota 0 there (HUD blanks the pip row)
+      // pinned G-key modes have no levels, so report quota 0 there (HUD blanks the pip row)
       gemQuota: flight.mode === 'sections' ? flight.gemQuota(flight.level) : 0,
       elapsed: game.elapsed,
       over: game.over,
@@ -349,6 +357,7 @@ startLoop(
   enemies,
   projectiles,
   burst,
+  gate, // the level gate ring
   ship, // the player hull (WH.ship.setHull("delta"))
   shake, // view shake (WH.shake.add(0.6) previews a hit jolt)
   hitStop, // hit slow-down (WH.hitStop.trigger())
@@ -364,5 +373,5 @@ startLoop(
     seedRng(seed)
     returnToTitle()
   },
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE, GATE },
 }

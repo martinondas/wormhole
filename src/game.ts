@@ -19,7 +19,7 @@ export interface Game {
   shardsPerLife: number // shards that restore one life at the current level (the session sets it)
   invuln: number // seconds of invulnerability remaining (0 = vulnerable)
   scoreBonus: number // the run score: gem + kill points (each scaled by level at award time)
-  gemsThisLevel: number // gems collected toward the current level's gate quota (reset on level-up)
+  gemsThisLevel: number // gems counted toward the current level's quota (it stops at the quota; zero again past the gate)
   elapsed: number // seconds of active play this run (paused/over freeze it)
   started: boolean // false on the title screen; true once the first run begins (stays true)
   over: boolean
@@ -27,7 +27,7 @@ export interface Game {
   score(): number
   addEnergy(n: number): boolean // true if any charge was added (false if already full)
   addScore(n: number): void
-  addGem(): void // count one collected gem toward the level gate (separate from its score)
+  addGem(): void // count one collected gem toward the level's quota (separate from its score)
   canFire(): boolean // enough charge (and not over) to fire one shot
   spendEnergy(n: number): void // gun cost; clamps at 0, never ends the run
   addLife(): boolean // extra-life pickup; true if a life was actually added (false at full lives / over)
@@ -99,8 +99,8 @@ export function createGame(): Game {
       this.scoreBonus += n
     },
 
-    // Count a collected gem toward the current level's gate. The session resets this to 0
-    // on the level-up edge (when flight advances the level) and toTitle clears it.
+    // Count a collected gem toward the current level's quota. The session sets this to 0
+    // where the craft passes the level gate, and toTitle clears it.
     addGem(): void {
       this.gemsThisLevel += 1
     },

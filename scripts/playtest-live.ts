@@ -14,8 +14,6 @@
 //                         default: $PLAYTEST_LIVE_DIR or <os tmp>/wormhole-playtest-live, plus a timestamp
 //   --width / --height    viewport                                           default 1280 x 720
 //   --software            force software WebGL (SwiftShader); default tries the real GPU
-//   --force-repeat        hold the gem count at 0 in the first cycle's fast section, so
-//                         the first cycle repeats (to see the REPEAT banner)
 import { chromium } from 'playwright'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
@@ -125,7 +123,7 @@ try {
   await page.screenshot({ path: join(out, '000-title.png') })
 
   await page.addScriptTag({ path: agentPath })
-  await page.evaluate(([b, s, cap, fr]) => (globalThis as unknown as Page).__playtest.arm(b, s, cap, { forceRepeat: fr }), [botName, seed, maxSeconds, flag('force-repeat')] as const)
+  await page.evaluate(([b, s, cap]) => (globalThis as unknown as Page).__playtest.arm(b, s, cap), [botName, seed, maxSeconds] as const)
   await page.keyboard.press('Space') // start the run like a player does
 
   const started = Date.now()
@@ -140,8 +138,8 @@ try {
   }
   // Some events show best a moment later: [start of the event's name, delay in ms, name of the second shot]
   const SECOND_SHOTS: [string, number, string][] = [
-    ['levelup', 450, 'banner'], // banners animate in: once they are fully shown
-    ['repeat', 450, 'banner'],
+    ['gate-pass', 450, 'level-banner'], // the headline animates in: once it is fully shown
+    ['gate-open', 450, 'gate-banner'],
     ['charge', 180, 'tell'], // the tell brightens over the charge: when the nose is white
     ['hit', 1000, 'hit-after'], // a hit jolts the view and slows time: once both are over
     ['shard-drop', 300, 'shard-ahead'], // the kill burst covers a fresh shard: once it has cleared

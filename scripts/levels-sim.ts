@@ -1,20 +1,20 @@
 // Headless behavior checks for the level / difficulty system (npm run sim:levels).
-// Exercises src/flight.ts and src/levels.ts directly (no DOM): the gem-gated level
-// progression, per-level tier speeds, the score multiplier, the two gravity modes,
-// the level speed cap, tier/level lookups for tube + field scaling, the raider wave
-// tables, and edge cases (distance 0, negative, pinned modes).
+// Exercises src/flight.ts and src/levels.ts directly (no DOM): the level gate, the
+// per-level tier speeds, the score multiplier, the two gravity modes, the level
+// speed cap, tier/level lookups for tube + field scaling, the raider wave tables,
+// and edge cases (distance 0, negative, pinned modes). The last gate checks drive
+// the real session.
 //
-// The level is gated on gems, so it is not a pure function of distance: update()
-// must be called incrementally with a running gem count. flyTo() flies forward and
-// feeds a fixed gem count per step - a large count is an "active" player who always
-// meets the quota (the level then advances at every cycle boundary, which the speed
-// and gravity checks rely on); a count of 0 is a "passive" player who never advances.
+// A level changes only at a gate, so it is not a pure function of distance. flyTo()
+// flies a flight forward; an "active" flight opens a gate at the end of every
+// section cycle (the level then changes at every cycle boundary, which the speed and
+// gravity checks rely on), a passive one never opens a gate.
 import { createFlight, type Flight } from '../src/flight'
 import { createSession } from '../src/session'
 import { createLevelTuning, waveRoster, waveAliveCap, waveHunters, aggression, deepPressure, fireCooldown, bombMult } from '../src/levels'
 import { PHRASES } from '../src/world/phrases'
-import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, DIFFICULTY, ENEMY, SEQUENCE } from '../src/config'
-import { check, finish, withConfig, driveSession } from './sim-kit'
+import { SPEED, PHYSICS, FLIGHT, LEVELS, PICKUP, DIFFICULTY, ENEMY, SEQUENCE, GATE, TUBE } from '../src/config'
+import { check, finish, withConfig, driveSession, flyOntoGems } from './sim-kit'
 
 const approx = (a: number, b: number, eps = 1e-6): boolean => Math.abs(a - b) <= eps
 
@@ -35,28 +35,37 @@ const speedBonus = (lvl: number): number => {
 const tierSpeed = (lvl: number, t: number): number => base[t]! + speedBonus(lvl)
 const cycleLen = (lvl: number): number => (tierSpeed(lvl, 0) + tierSpeed(lvl, 1) + tierSpeed(lvl, 2)) * secs
 
-// cumulative distance where level L begins, assuming every cycle advanced (active player)
+// cumulative distance where level L begins, with a gate at the end of every cycle (active flight)
 function cumStart(L: number): number {
   let s = 0
   for (let k = 0; k < L; k++) s += cycleLen(k)
   return s
 }
 
-// Fly a fresh flight forward to `distance`, feeding `gems` each step. Small steps
-// keep at most one cycle boundary per update() call (so the per-call gem count is
-// applied to each boundary in turn).
-function flyTo(distance: number, gems: number, stepSize = 20, difficulty?: number): Flight {
+// Fly a fresh flight forward to `distance` in small steps. An active flight opens a
+// gate at the end of the cycle it is in whenever none is open.
+function flyTo(distance: number, active: boolean, stepSize = 20, difficulty?: number): Flight {
   const f = createFlight()
   if (difficulty !== undefined) f.setDifficulty(difficulty)
-  f.update(0, gems)
+  const gate = (d: number): void => {
+    if (!active || f.gateAt < Infinity) return
+    let len = 0
+    for (let t = 0; t < 3; t++) len += f.tierSpeedOf(f.level, t) * secs
+    const at = f.cycleStartAt(d) + len
+    f.openGate(at > d + 1e-6 ? at : at + len) // rounding can put `d` at the very end of the cycle before
+  }
+  f.update(0)
+  gate(0)
   let d = 0
   while (d < distance) {
-    d = Math.min(distance, d + stepSize)
-    f.update(d, gems)
+    d = Math.min(distance, d + stepSize, f.gateAt)
+    f.update(d)
+    gate(d)
   }
   return f
 }
-const ACTIVE = 100000 // gems >> any quota: always meets the gate (advances every cycle)
+const ACTIVE = true
+const PASSIVE = false
 
 // level/speed/multiplier/cap at a distance for an ACTIVE player
 function at(distance: number): { level: number; target: number; mult: number; speedMax: number } {
@@ -64,7 +73,7 @@ function at(distance: number): { level: number; target: number; mult: number; sp
   return { level: f.level, target: f.targetSpeed(), mult: f.scoreMultiplier, speedMax: f.speedMax() }
 }
 
-// ---- A) level boundaries by distance (active player, always meets the quota) ----
+// ---- A) level boundaries by distance (active flight: a gate at the end of every cycle) ----
 ;(() => {
   const c1 = cumStart(1) // 1570 with defaults
   const c2 = cumStart(2)
@@ -159,15 +168,14 @@ withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
   check('L6 speed ratio normalizes vs the untuned base', approx(hard.speedRatioAt(100), hardSlow / SPEED.SLOW), `${hard.speedRatioAt(100)}`)
 })()
 
-// ---- F) tier lookups used by tube coloring + field scaling (GATED) ----
+// ---- F) tier lookups used by tube coloring + field scaling ----
 ;(() => {
-  const f = createFlight() // fresh: gated at level 0 (nothing collected yet)
+  const f = createFlight() // fresh: level 0, no gate open
   // section tiers within level 0
   check('F1 tierIndexAt L0 slow', f.tierIndexAt(0) === 0)
   check('F2 tierIndexAt L0 normal', f.tierIndexAt(400) === 1)
   check('F3 tierIndexAt L0 fast', f.tierIndexAt(1000) === 2)
-  // GATED: past one cycle the colors of the current level repeat (the gate holds the
-  // next level until the quota is met).
+  // with no gate open the sections of the current level repeat
   check('F5 tierIndexAt wraps to slow past one cycle', f.tierIndexAt(cycleLen(0) + 10) === 0)
   check('F6 tierIndexAt wraps the cycle (normal again)', f.tierIndexAt(cycleLen(0) + 400) === 1)
 })()
@@ -176,26 +184,27 @@ withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
 ;(() => {
   const f = createFlight()
   f.mode = 'slow'
-  f.update(99999, 0)
-  check('G1 pinned slow: level stays 0', f.level === 0)
+  f.openGate(500)
+  f.update(99999)
+  check('G1 pinned slow: level stays 0, also past a gate distance', f.level === 0)
   check('G2 pinned slow: multiplier 1', approx(f.scoreMultiplier, 1))
   check('G3 pinned slow: target = base slow', approx(f.targetSpeed(), SPEED.SLOW))
   check('G4 pinned slow: tierIndexAt = 0 everywhere', f.tierIndexAt(0) === 0 && f.tierIndexAt(99999) === 0)
   f.mode = 'fast'
-  f.update(99999, 0)
+  f.update(99999)
   check('G5 pinned fast: target = base fast, level 0', approx(f.targetSpeed(), SPEED.FAST) && f.level === 0)
 })()
 
 // ---- H) speed-normalized orb spacing (orbs flat per second) ----
 ;(() => {
-  const f1 = createFlight() // gated level 0: ratios are 1
+  const f1 = createFlight() // level 0: ratios are 1
   check('H1 speedRatio = 1 at level 1', approx(f1.speedRatioAt(100), 1))
   check('H2 speedRatio = 1 at level 1 (any tier)', approx(f1.speedRatioAt(1000), 1))
   // L5 = 0-based level 4; its normal section sits after its slow section
   const c4 = cumStart(4)
   const slowLenL5 = (base[0]! + speedBonus(4)) * secs
   const dNormalL5 = c4 + slowLenL5 + 50
-  const f5 = flyTo(dNormalL5, ACTIVE) // active player reaches level 4 by this distance
+  const f5 = flyTo(dNormalL5, ACTIVE) // the active flight reaches level 4 by this distance
   check('H3 speedRatio L5 normal tier = (52+20)/52', approx(f5.speedRatioAt(dNormalL5), (base[1]! + speedBonus(4)) / base[1]!), `${f5.speedRatioAt(dNormalL5)}`)
 
   // Encounter rate per second = tierSpeed / (baseSpacing * speedRatio).
@@ -228,68 +237,198 @@ withConfig(LEVELS, { GRAVITY_MODE: 'absolute' }, () => {
   check('K3 floor never goes below config floor', bombMult(99) >= LEVELS.BOMB_MULT_FLOOR - 1e-9)
 })()
 
-// ---- I) gem gate: quota scaling + advance / replay behavior ----
+// ---- I) gem quota and the level gate (flight alone) ----
 ;(() => {
+  const idx = (name: string): number => DIFFICULTY.MODES.findIndex((m) => m.name === name)
   const f = createFlight()
-  let highest = 0 // the largest quota of any level in any mode
-  DIFFICULTY.MODES.forEach((_m, i) => {
-    const g = createFlight()
-    g.setDifficulty(i)
-    for (let l = 0; l <= 40; l++) highest = Math.max(highest, g.gemQuota(l))
-  })
   const quotas = [...Array(41).keys()].map((l) => f.gemQuota(l))
   const nonDecreasing = quotas.every((q, i) => i === 0 || q >= quotas[i - 1]!)
-  const cap = Math.round(SEQUENCE.GEMS_PER_CYCLE * LEVELS.QUOTA_FRACTION_MAX)
-  check('I2 gemQuota never falls, starts at half a cycle of gems, ends at the capped fraction', nonDecreasing && f.gemQuota(0) === Math.round(SEQUENCE.GEMS_PER_CYCLE * LEVELS.GEM_QUOTA_FRACTION) && f.gemQuota(40) === cap, `L1 ${quotas[0]} ... L41 ${quotas[40]} (cap ${cap})`)
-  check('I2b every quota stays at least 3 gems under the fewest a cycle offers', highest <= SEQUENCE.GEMS_PER_CYCLE - 3, `${highest} of at least ${SEQUENCE.GEMS_PER_CYCLE}`)
+  check('I1 ORION quota never falls, starts at GEM_QUOTA_START, ends at GEM_QUOTA_MAX', nonDecreasing && quotas[0] === LEVELS.GEM_QUOTA_START && quotas[40] === LEVELS.GEM_QUOTA_MAX, `L1 ${quotas[0]} ... L41 ${quotas[40]}`)
+  let capsOk = true
+  let line = ''
+  DIFFICULTY.MODES.forEach((m, i) => {
+    const g = createFlight()
+    g.setDifficulty(i)
+    const top = Math.max(...[...Array(61).keys()].map((l) => g.gemQuota(l)))
+    if (top > Math.min(m.quotaCap, LEVELS.GEM_QUOTA_MAX) || g.gemQuota(0) < 1) capsOk = false
+    line += ` ${m.name} ${g.gemQuota(0)}..${top}`
+  })
+  check('I2 no mode asks for more than its quota cap or GEM_QUOTA_MAX, and every quota is at least one gem', capsOk, line)
+  check('I2b the easiest mode has a cap below GEM_QUOTA_MAX', DIFFICULTY.MODES[idx('MILKY WAY')]!.quotaCap < LEVELS.GEM_QUOTA_MAX)
 
-  // passive player (0 gems) never advances, however far they fly; the cycle still
-  // flows (speeds stay level 0, tiers keep cycling) - just no level-up.
-  const passive = flyTo(cumStart(4), 0)
-  check('I3 passive (0 gems) stuck at level 0', passive.level === 0, `level=${passive.level}`)
-  check('I4 passive speedMax stays level 0', approx(passive.speedMax(), tierSpeed(0, 2)))
+  // without a gate the level never changes, however far the craft flies
+  const passive = flyTo(cumStart(4), PASSIVE)
+  check('I3 no gate: the level stays 0 over four cycles', passive.level === 0 && passive.gateAt === Infinity, `level=${passive.level}`)
+  check('I4 no gate: speedMax stays level 0', approx(passive.speedMax(), tierSpeed(0, 2)))
 
-  // meeting the quota advances at the boundary; one short replays the same level
-  const q0 = f.gemQuota(0)
-  check('I5 quota met -> advance to level 1', flyTo(cumStart(1), q0).level === 1, `q0=${q0}`)
-  check('I6 one short -> stays level 0 (replays)', flyTo(cumStart(1), q0 - 1).level === 0)
+  // a gate in the middle of the normal section of level 0
+  const g = createFlight()
+  const slowEnd = tierSpeed(0, 0) * secs
+  const gate = slowEnd + 200
+  g.update(0)
+  g.openGate(gate)
+  g.update(gate - 0.01)
+  const before = g.level
+  const speedBefore = g.targetSpeed()
+  g.update(gate)
+  check('I5 the level changes exactly at the gate, and the gate closes', before === 0 && g.level === 1 && g.gateAt === Infinity && approx(speedBefore, tierSpeed(0, 1)) && approx(g.targetSpeed(), tierSpeed(1, 1)), `before ${before}, at the gate ${g.level}`)
+  check('I5b the score multiplier steps with it', approx(g.scoreMultiplier, 1 + step))
+  // the section that holds the gate keeps its seconds: the part before the gate at
+  // the old speed, the rest at the new one
+  const h = createFlight()
+  h.openGate(gate)
+  const endOf = (from: number, tier: number): number => {
+    let d = from
+    while (h.tierIndexAt(d) === tier) d += 0.01
+    return d
+  }
+  const normalEnd = endOf(gate, 1)
+  const seconds = (gate - slowEnd) / tierSpeed(0, 1) + (normalEnd - gate) / tierSpeed(1, 1)
+  check('I6 the section around the gate lasts SECTION_SECONDS', h.tierIndexAt(gate - 0.01) === 1 && h.tierIndexAt(gate) === 1 && Math.abs(seconds - secs) < 0.01, `${seconds.toFixed(3)} s`)
+  const fastEnd = endOf(normalEnd, 2)
+  const slowEnd2 = endOf(fastEnd, 0)
+  check('I7 the sections beyond the gate have the next level\'s lengths', Math.abs(fastEnd - normalEnd - tierSpeed(1, 2) * secs) < 0.05 && Math.abs(slowEnd2 - fastEnd - tierSpeed(1, 0) * secs) < 0.05, `fast ${(fastEnd - normalEnd).toFixed(1)}, slow ${(slowEnd2 - fastEnd).toFixed(1)}`)
+  check('I8 the speed ratio is the current level\'s before the gate and the next level\'s beyond it', approx(h.speedRatioAt(gate - 1), 1) && approx(h.speedRatioAt(gate + 1), tierSpeed(1, 1) / base[1]!), `${h.speedRatioAt(gate + 1)}`)
+  // the fast-to-slow boundary (the raiders hold fire there): with a gate inside the
+  // cycle it is where the next level's fast section ends
+  check('I8b cycleEndAt is the end of the fast section, also across an open gate', Math.abs(h.cycleEndAt(10) - fastEnd) < 0.05 && Math.abs(h.cycleEndAt(gate + 1) - fastEnd) < 0.05 && approx(passive.cycleEndAt(10), cycleLen(0)), `${h.cycleEndAt(10).toFixed(1)} against ${fastEnd.toFixed(1)}`)
+  h.reset()
+  check('I9 reset closes an open gate', h.gateAt === Infinity && h.level === 0 && h.tierIndexAt(gate + 400) === passive.tierIndexAt(gate + 400))
 })()
 
-// ---- M) session cycle events: cycleEnded once per cycle, advanced iff the level rose ----
-// Drives the real session (no renderer) with the craft resting at the bottom and
-// i-frames held on so a mine never ends the run. The gem count is forced each frame
-// from a script: a cycle meets its quota or falls short exactly as scripted.
+// ---- M) the gate in the real session ----
+// Drives the real session (no renderer) with i-frames held on. The craft is put on
+// every gem, so quotas are met by collecting, as in play.
 ;(() => {
-  const plan = [true, false, false, true, false, true, true, false] // quota met per cycle
-  let ended = 0
-  let advancedCount = 0
-  let repeats = 0
-  let levelUps = 0
-  let mismatch = 0
-  let gemsShort = 0
-  const session = createSession({
-    cycleEnded: (advanced, gems, quota) => {
-      if (advanced !== plan[ended]) mismatch++
-      if (advanced !== gems >= quota) mismatch++
-      if (!advanced && gems < quota) gemsShort++
-      ended++
-      if (advanced) advancedCount++
-      else repeats++
+  const LEVELS_TO_PLAY = 8
+  const frameTravel = (speed: number): number => (speed / 60) * 1.01 + 1e-6 // the level is refreshed once per frame
+  let opened = 0
+  let passed = 0
+  let bad = ''
+  let gateOpen = false
+  let gemsWhileOpen = 0
+  let gateDistance = 0
+  let session = createSession()
+  const fx = {
+    quotaReached: () => {
+      const f = session.flight
+      opened++
+      if (gateOpen) bad += ` L${f.level + 1}: a second gate opened`
+      gateOpen = true
+      gateDistance = f.gateAt
+      if (Math.abs(f.gateAt - session.craft.distance - GATE.AHEAD) > 1e-6) bad += ` L${f.level + 1}: gate ${(f.gateAt - session.craft.distance).toFixed(1)} ahead`
+      if (session.game.gemsThisLevel !== f.gemQuota(f.level)) bad += ` L${f.level + 1}: opened at ${session.game.gemsThisLevel} gems`
     },
-    levelUp: () => levelUps++,
-  })
+    gemCollected: () => {
+      if (!gateOpen) return
+      gemsWhileOpen++
+      const f = session.flight
+      if (session.game.gemsThisLevel !== f.gemQuota(f.level)) bad += ` L${f.level + 1}: the count moved while the gate was open`
+    },
+    levelUp: (level: number) => {
+      passed++
+      if (!gateOpen) bad += ` L${level + 1}: level-up without a gate`
+      gateOpen = false
+      const past = session.craft.distance - gateDistance
+      if (past < 0 || past > frameTravel(session.craft.speed)) bad += ` L${level + 1}: changed ${past.toFixed(2)} past the gate`
+      if (session.game.gemsThisLevel !== 0) bad += ` L${level + 1}: starts with ${session.game.gemsThisLevel} gems`
+      if (session.flight.gateAt !== Infinity) bad += ` L${level + 1}: the gate stayed open`
+    },
+  }
+  session = createSession(fx)
   session.reset()
   session.begin()
+  const advance = driveSession(session, { steerTarget: 0, fire: false }, { invulnerable: true, beforeFrame: flyOntoGems(session) })
+  for (let steps = 0; passed < LEVELS_TO_PLAY && steps < PHYSICS.HZ * 900; steps++) advance()
+  const f = session.flight
+  check('M1 every gate opens GATE.AHEAD in front of the craft at exactly the quota, one at a time', opened >= LEVELS_TO_PLAY && bad === '', bad || `${opened} gates`)
+  check('M2 the level changes at the gate and nowhere else; the new level starts with zero gems', passed === LEVELS_TO_PLAY && f.level === LEVELS_TO_PLAY && bad === '', `level ${f.level + 1} after ${passed} gates`)
+  check('M3 gems collected while the gate is open do not count', gemsWhileOpen > 0 && bad === '', `${gemsWhileOpen} gems`)
+  check('M4 GATE.AHEAD is past the drawn rings and the planning horizon', GATE.AHEAD >= SEQUENCE.HORIZON && GATE.AHEAD >= TUBE.RINGS_VISIBLE * TUBE.RING_SPACING, `${GATE.AHEAD} against ${SEQUENCE.HORIZON} and ${TUBE.RINGS_VISIBLE * TUBE.RING_SPACING}`)
+
+  // a restart with a gate open: fly until the next gate opens, then reset
+  for (let steps = 0; !gateOpen && steps < PHYSICS.HZ * 120; steps++) advance()
+  const wasOpen = gateOpen && f.gateAt < Infinity
+  session.reset()
+  gateOpen = false
+  check('M5 a restart closes the gate and starts level 1 with zero gems', wasOpen && f.gateAt === Infinity && f.level === 0 && session.game.gemsThisLevel === 0)
+
+  // a pinned mode has no levels: collecting opens no gate
+  const before = opened
+  f.mode = 'slow'
+  session.begin()
+  for (let steps = 0; steps < PHYSICS.HZ * 60; steps++) advance()
+  check('M6 a pinned mode opens no gate and stays at level 1', opened === before && f.gateAt === Infinity && f.level === 0 && session.fieldByKind.gem.consumed > 0, `${session.fieldByKind.gem.consumed} gems collected`)
+  f.mode = 'sections'
+})()
+
+// ---- P) around the gate: the fire hold, no tier cue, a flight-mode switch ----
+;(() => {
+  let now = 0 // seconds of play
+  let passedAt = -Infinity
+  let passes = 0
+  let tells = 0
+  let tellsHeld = 0 // firing tells that started inside the hold around a gate
+  let tellsLater = 0 // ... and after the hold, before the next gate opened
+  let tierUps = 0
+  let tierUpsAtGate = 0
+  let levelEdge = false // a level-up fired in the frame in progress
+  let session = createSession()
+  const frame = 1 / 60 // the hold is refreshed once per frame
+  const fx = {
+    levelUp: () => {
+      passes++
+      passedAt = now
+      levelEdge = true
+    },
+    tierUp: () => {
+      tierUps++
+      if (levelEdge) tierUpsAtGate++
+    },
+    enemyChargeStarted: () => {
+      tells++
+      const f = session.flight
+      const toGate = (f.gateAt - session.craft.distance) / session.craft.speed
+      const since = now - passedAt
+      if (toGate < ENEMY.HOLD_FIRE.BEFORE - frame || since < ENEMY.HOLD_FIRE.AFTER - frame) tellsHeld++
+      else if (f.gateAt === Infinity && passes > 0) tellsLater++
+    },
+  }
+  session = createSession(fx)
+  session.reset()
+  session.begin()
+  const onGems = flyOntoGems(session)
   const advance = driveSession(session, { steerTarget: 0, fire: false }, {
     invulnerable: true,
-    // the cycle in progress is number `cycles`: force its gem count from the plan
-    beforeFrame: () => (session.game.gemsThisLevel = plan[session.flight.cycles] ? session.flight.gemQuota(session.flight.level) : 0),
+    beforeFrame: () => {
+      levelEdge = false
+      onGems()
+    },
   })
-  for (let steps = 0; session.flight.cycles < plan.length && steps < PHYSICS.HZ * 900; steps++) advance()
+  const fly = (until: () => boolean, seconds: number): void => {
+    for (let steps = 0; !until() && steps < PHYSICS.HZ * seconds; steps++) {
+      advance()
+      now += 1 / PHYSICS.HZ
+    }
+  }
+  fly(() => passes >= 10, 900)
+  check('P1 no firing tell starts from HOLD_FIRE.BEFORE ahead of a gate until HOLD_FIRE.AFTER past it, and the fire returns after', passes >= 10 && tellsHeld === 0 && tellsLater > 0, `${tells} tells over ${passes} gates, ${tellsHeld} inside the hold, ${tellsLater} after it`)
+  check('P2 the speed step at a gate fires no tierUp; the section changes still do', tierUpsAtGate === 0 && tierUps > passes, `${tierUps} tierUp events, ${tierUpsAtGate} at a gate`)
+
+  // a flight-mode switch (the testing key) while a gate is open
   const f = session.flight
-  check('M1 cycleEnded fires once per cycle', ended === f.cycles && ended === plan.length, `events=${ended} cycles=${f.cycles}`)
-  check('M2 advanced is true exactly when the level rose', mismatch === 0 && advancedCount === f.level && levelUps === f.level, `mismatches=${mismatch} advanced=${advancedCount} level=${f.level} levelUps=${levelUps}`)
-  check('M3 repeats = cycles - level in a quota-short run', repeats === f.cycles - f.level && gemsShort === repeats, `repeats=${repeats} cycles-level=${f.cycles - f.level}`)
+  fly(() => f.gateAt < Infinity, 120)
+  const open = f.gateAt < Infinity
+  const level = f.level
+  const before = passes
+  f.cycle() // sections -> a pinned mode
+  const closed = f.gateAt === Infinity
+  fly(() => false, 12) // well past where the gate stood
+  while (f.mode !== 'sections') f.cycle()
+  fly(() => false, 0.5)
+  check('P3 leaving the sections mode closes an open gate, and the round trip changes no level', open && closed && passes === before && f.level === level, `gate open ${open}, closed ${closed}, level ${level + 1} -> ${f.level + 1}`)
+  fly(() => passes > before, 120)
+  check('P4 back in the sections mode the next gem opens a new gate, and the level rises by one there', passes === before + 1 && f.level === level + 1)
 })()
 
 // ---- N) raider waves: roster, alive cap, hunters per tuning level and per mode ----

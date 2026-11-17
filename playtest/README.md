@@ -46,16 +46,16 @@ Options of `npm run playtest`:
 
 Options of `npm run playtest:live`: `--bot`, `--difficulty`, `--seed`, `--max-seconds`,
 `--shot-every <n>` (seconds of game time between screenshots), `--out <dir>`, `--width`,
-`--height`, `--software` (software WebGL), `--force-repeat` (the first cycle repeats, to see
-the REPEAT banner). The defaults are in the header of `scripts/playtest.ts` and
-`scripts/playtest-live.ts`.
+`--height`, `--software` (software WebGL). The defaults are in the header of
+`scripts/playtest.ts` and `scripts/playtest-live.ts`.
 
 Reading a comparison: a row marked `CHANGED` moved by more than the run-to-run noise (two
 standard errors). Other deltas can be chance. A metric added after the stored file was
 recorded shows 0 in that file's column.
 
 The live harness starts its own dev server and stops it at the end. Besides timed screenshots
-it saves screenshots of feedback events, named after the event. It refuses an `--out`
+it saves screenshots of feedback events, named after the event: among them the level gate
+when it opens, when it is near and when the craft passes it. It refuses an `--out`
 directory inside the repository. Without `--out` it writes to `$PLAYTEST_LIVE_DIR`, or to the
 system temp directory.
 
@@ -126,8 +126,8 @@ Per run, then mean, median, p10 and p90 over the runs of one bot and mode. `SCAL
   `livesLostRam`),
   `timeToFirstHit`, `chainHits` (a life lost right after the invulnerability of the previous
   hit ended).
-- **Progression**: `levelRepeats` (cycles that ended without a level-up), `gateFirstTry` (share
-  of levels passed on the first cycle), `gems` / `gemsOffered` / `gemShare`, `orbs` /
+- **Progression**: `secondsPerLevel` (mean seconds a completed level took), `gateSeconds` (of
+  which from the quota met to the gate passed), `gems` / `gemsOffered` / `gemShare`, `orbs` /
   `orbsOffered`, `gemChainMedian` / `gemChainMax` (gems in a row without a miss).
 - **Lives regained**: `extraLives` (every life regained), `shardsDropped` / `shardsCaught` /
   `shardCatchShare` / `livesFromShards` (the small crosses left by kills), `crossesDropped` /
@@ -148,8 +148,9 @@ Per run, then mean, median, p10 and p90 over the runs of one bot and mode. `SCAL
   (time more than 105 degrees from the bottom), `wallBinsUsed`, `loops`, `loopsPerMin`.
 - **Input**: `reversalsPerMin`, `pressesPerMin`, `steerDuty`.
 - **Mines**: `mineCloseCalls`, `nearMissPerMin`.
-- **Per level** (`--levels`): for each level, how many runs reached it and ended there, and the
-  main measures above at that level.
+- **Per level** (`--levels`): for each level, how many runs reached it and ended there, the
+  main measures above at that level, `level time` (seconds the level took, over the runs that
+  passed its gate) and `gate wait` (of which after the quota was met).
 
 ## Sims
 
@@ -158,7 +159,7 @@ Each sim is a fast headless check of one part of the game.
 | Command | What it checks |
 |---|---|
 | `npm run sim` | Combat: gun, raiders, waves, the cap on simultaneous fire, tells, bolts, crosses from kills, the bonus cross, lives |
-| `npm run sim:levels` | Level math: speeds, the gem gate and quota, waves per mode |
+| `npm run sim:levels` | Level math: speeds, the gem quota and the level gate, waves per mode |
 | `npm run sim:fields` | Wall fields: placement, separation between kinds, miss and near-miss events |
 | `npm run sim:sequence` | Gem lines: every phrase can be flown and its mines stay clear of the line, budgets, section boundaries, input jitter, a difficulty change on the title |
 | `npm run sim:feel` | The visual feel layer: shake, speed field of view, hull attitude, hit-stop, far-object scale. Also that the steering torque has no step around the tube |
@@ -171,7 +172,8 @@ Each sim is a fast headless check of one part of the game.
   world only through them.
 - Gameplay randomness goes through `src/util/rng.ts`, never `Math.random`.
 - A new kind of object or threat must be added to `scripts/playtest/perception.ts` and to the
-  bot's event list in `scripts/playtest/bot.ts`. Otherwise the bots cannot see it.
+  bot's event list in `scripts/playtest/bot.ts`. Otherwise the bots cannot see it. The level
+  gate is not listed: it is harmless and cannot be missed, so the bots do not need to see it.
 - The bots read hit windows and speeds from `src/config.ts`. A mechanic that config does not
   describe must be taught to the bot.
 - A raider's role is not reported. A hunter looks like any raider, and the bots know it only

@@ -45,11 +45,11 @@ You only steer and shoot. Everything else flows from the swing.
   shows the swing that collects it. Hold the key as the line climbs, let go where it
   turns, and gravity carries you through the rest. In blue sections a ring of gems
   runs right over the top. Each gem in a row chimes one note higher.
-- Each level has a **gem quota** (the pip row top-left). When it is met the row reads
-  READY and the next level starts at the end of the cycle. Fall short and the level
-  repeats (an amber REPEAT banner says how many gems are still missing; the gems you
-  already have carry over), so you cannot coast through on dodging alone. A cycle
-  offers more gems than the quota asks for, so a few misses are allowed.
+- Collect the level's gems and the next level comes. Each level has a **gem quota**
+  (the pip row top-left). When it is met, a **gate** ring appears ahead in the
+  tunnel. The next level starts where you fly through it, and its gem count starts
+  from zero there. A level lasts until its gems are collected, so you cannot coast
+  through on dodging alone.
 - Avoid **red spiky mines** - a hit costs one of your ships, with brief
   invulnerability after. Mines sit beside the gem lines, never on them: the gems mark
   the clear way through. A run opens with a short stretch without mines.

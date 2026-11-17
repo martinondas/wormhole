@@ -14,7 +14,7 @@ import { createSequencer, type Sequencer, type PlacedPhrase } from './world/sequ
 import { createGame, type Game } from './game'
 import { createGun, type Gun } from './gun'
 import { randRange } from './util/rng'
-import { SPEED, SHIP, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, LIFE_SHARD, SPAWN_CLEAR, ENERGY, GUN, ENEMY, FEEL } from './config'
+import { SPEED, SHIP, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, LIFE_SHARD, SPAWN_CLEAR, ENERGY, GUN, ENEMY, FEEL, GATE } from './config'
 
 // The gameplay session: every system that decides what happens in a run (craft,
 // flight/levels, the wall fields, the gem-line director, gun, raiders, bolts, run state) wired
@@ -41,7 +41,9 @@ export interface SessionFx {
   orbCollected?(): void
   gemCollected?(points: number, chain: number): void // chain = consecutive gems without a miss, this one included
   gemMissed?(): void // a gem passed the ship uncollected; the chain is 0 after it
-  quotaReached?(): void // the level's gem quota was just met (fires before that gem's gemCollected)
+  // the level's gem quota was just met and the level gate is open at flight.gateAt
+  // (fires before that gem's gemCollected)
+  quotaReached?(): void
   lifeCollected?(): void // a life was restored (the last shard of a set, or an extra-life cross)
   shardDropped?(theta: number, z: number): void // a killed raider left a life shard on the wall
   shardCollected?(count: number, restored: boolean): void // count = shards of the current set, this one included (restored: the set is full)
@@ -55,12 +57,8 @@ export interface SessionFx {
   playerFired?(theta: number): void
   playerBoltHit?(): void // a player bolt struck a raider (a chip or the kill)
   dryFired?(): void // trigger pulled with no charge
-  tierUp?(): void // the flight tier stepped up (target speed increased)
-  // A cycle (slow -> normal -> fast) ended: advanced says whether the gem gate let
-  // the level rise; gems / quota are the count and target of the cycle that ended.
-  // Fires before levelUp.
-  cycleEnded?(advanced: boolean, gems: number, quota: number): void
-  levelUp?(level: number): void // gem gate cleared; `level` is the new 0-based level
+  tierUp?(): void // the craft entered a faster section (not fired for the speed step at a level gate)
+  levelUp?(level: number): void // the craft passed the level gate; `level` is the new 0-based level
   loopCompleted?(): void // the craft went over the top of the tube (either way)
   mineNearMiss?(theta: number): void // a mine passed just outside the hit cone while the ship was vulnerable
   enemyChargeStarted?(theta: number, z: number): void // a raider started its firing tell down `theta`
@@ -139,7 +137,7 @@ export function createSession(fx: SessionFx = {}): Session {
   const flight = createFlight()
   // the speed of the tier the run starts in (the first section at level 1)
   const startSpeed = (): number => {
-    flight.update(0, 0)
+    flight.update(0)
     return flight.targetSpeed()
   }
   const craft = createCraft(startSpeed())
@@ -189,16 +187,24 @@ export function createSession(fx: SessionFx = {}): Session {
   )
   fields.push(orbs)
   // gems: the level multiplier scales the points at award time (frequency is constant).
-  // addGem() also counts it toward the level gate (collect the quota to advance).
+  // addGem() also counts it toward the level's quota. The gem that meets the quota
+  // opens the level gate ahead; the tube beyond the gate is re-timed for the next
+  // level at once. A gem collected while the gate is open pays score only.
   const gems = makeField(
     createTreasure,
     TREASURE,
     () => {
       const points = Math.round(TREASURE.SCORE * flight.scoreMultiplier)
       game.addScore(points)
-      game.addGem()
       gemChain++
-      if (flight.mode === 'sections' && game.gemsThisLevel === flight.gemQuota(flight.level)) fx.quotaReached?.()
+      if (flight.mode === 'sections' && flight.gateAt === Infinity) {
+        game.addGem()
+        if (game.gemsThisLevel >= flight.gemQuota(flight.level)) {
+          flight.openGate(craft.distance + GATE.AHEAD)
+          sequencer.gateOpened()
+          fx.quotaReached?.()
+        }
+      }
       fx.gemCollected?.(points, gemChain)
       return true
     },
@@ -297,7 +303,7 @@ export function createSession(fx: SessionFx = {}): Session {
   let bonusAt = Infinity // run time of the next bonus cross
   const dropBonus = (): void => {
     bonusAt = nextBonus()
-    // measured at the level's top speed, so a speed-up on the way never shortens the warning
+    // measured at the level's top speed, so a tier speed-up on the way never shortens the warning
     let wd = craft.distance + frameSpeedMax * EXTRA_LIFE.BONUS_LEAD_SECONDS
     let theta = bonusAngle()
     const taken = (): boolean => fields.some((f) => f.occupies(wd, theta))
@@ -319,9 +325,9 @@ export function createSession(fx: SessionFx = {}): Session {
     spawnMine: (wd, theta) => mines.spawn(wd, theta),
     // a phrase never lands on an orb, a cross or a shard
     blocked: pickupAt,
-    rescaleItems: (boundary, ratio) => {
-      gems.rescale(boundary, ratio)
-      mines.rescale(boundary, ratio, pickupAt) // a moved mine must not land on a pickup
+    rescaleItems: (from, ratio) => {
+      gems.rescale(from, ratio)
+      mines.rescale(from, ratio, pickupAt) // a moved mine must not land on a pickup
     },
     clearItems: () => {
       gems.reset(craft.distance)
@@ -372,10 +378,11 @@ export function createSession(fx: SessionFx = {}): Session {
     onShipHit: (): boolean => takeHit('bolt', craft.theta, SHIP.Z),
   }
 
-  let lastTargetSpeed = SPEED.NORMAL // detects flight-tier step-ups -> tierUp
-  let lastFlightLevel = 0 // detects the gem-gated level-up edge -> reset the per-level gem counter
-  let lastCycles = 0 // detects a cycle boundary -> cycleEnded
-  let sinceBoundary = Infinity // seconds of play since the last cycle boundary
+  let lastTargetSpeed = SPEED.NORMAL // detects a step up to a faster section -> tierUp
+  let lastMode = flight.mode // detects a flight-mode switch (a testing key)
+  let lastFlightLevel = 0 // detects the level-up edge (the craft passed the gate)
+  let sinceStep = Infinity // seconds of play since the last gate or fast-to-slow boundary was passed
+  let lastTier = 0 // detects the fast-to-slow boundary
   let winding = 0 // floor((theta + PI) / 2PI): changes once per trip over the top
   // Flight inputs are stable within a frame, so preUpdate computes them once per
   // frame and the fixed substeps reuse these.
@@ -410,14 +417,15 @@ export function createSession(fx: SessionFx = {}): Session {
 
     begin(): void {
       game.start()
-      flight.update(craft.distance, game.gemsThisLevel)
+      flight.update(craft.distance)
       // the difficulty may have changed on the title screen since the reset
       if (craft.distance === 0) craft.speed = flight.targetSpeed()
       replan()
       lastTargetSpeed = flight.targetSpeed() // no tierUp on the first step
-      lastFlightLevel = flight.level // start tracking the gem-gate level edge from level 0
-      lastCycles = flight.cycles
-      sinceBoundary = Infinity
+      lastFlightLevel = flight.level // start tracking the level edge from level 0
+      lastMode = flight.mode
+      sinceStep = Infinity
+      lastTier = flight.tierIndexAt(craft.distance)
       winding = windingOf(craft.theta)
       gemChain = 0
       lastNearT = -Infinity
@@ -431,18 +439,18 @@ export function createSession(fx: SessionFx = {}): Session {
     // stable across a frame, so they are not recomputed every substep). The raider
     // waves follow the level here too (level changes slowly, once per frame is fine).
     preUpdate(): void {
-      // flight gates the level-up on the gem quota, so it needs the live count; on a
-      // level-up edge reset the counter so the next level starts its quota from zero.
-      flight.update(craft.distance, game.gemsThisLevel)
-      const advanced = flight.level > lastFlightLevel
-      if (flight.cycles > lastCycles) {
-        fx.cycleEnded?.(advanced, game.gemsThisLevel, flight.gemQuota(lastFlightLevel))
-        lastCycles = flight.cycles
-        sinceBoundary = 0
+      // the level rises where the craft passes the gate: the new level's gem count
+      // starts from zero there
+      flight.update(craft.distance)
+      if (flight.mode !== lastMode) {
+        // a pinned mode reports level 1: switching modes is no level change
+        lastMode = flight.mode
+        lastFlightLevel = flight.level
       }
-      if (advanced) {
+      if (flight.level > lastFlightLevel) {
         game.gemsThisLevel = 0
-        sequencer.levelUp() // the tube beyond the boundary was planned for the old level's speeds
+        sinceStep = 0
+        lastTargetSpeed = flight.targetSpeed() // the speed step at the gate is no tier change
         fx.levelUp?.(flight.level)
       }
       sequencer.update(craft.distance)
@@ -459,16 +467,20 @@ export function createSession(fx: SessionFx = {}): Session {
       enemies.setLevel(levels.tuningLevel(flight.level), flight.ease())
       // a busy phrase under the craft makes the raiders ease off
       enemies.setPressure(sequencer.pressureAt(craft.distance))
-      // the raiders hold their fire across a cycle boundary (config ENEMY.BOUNDARY_HOLD)
-      const toBoundary = (flight.cycleEnd() - craft.distance) / craft.speed
-      enemies.setHoldFire(toBoundary < ENEMY.BOUNDARY_HOLD.BEFORE || sinceBoundary < ENEMY.BOUNDARY_HOLD.AFTER)
+      // the raiders hold their fire around the level gate and around the fast-to-slow
+      // boundary (config ENEMY.HOLD_FIRE)
+      const tier = flight.tierIndexAt(craft.distance)
+      if (tier < lastTier) sinceStep = 0 // the section cycle started again
+      lastTier = tier
+      const toStep = (Math.min(flight.gateAt, flight.cycleEndAt(craft.distance)) - craft.distance) / craft.speed
+      enemies.setHoldFire(toStep < ENEMY.HOLD_FIRE.BEFORE || sinceStep < ENEMY.HOLD_FIRE.AFTER)
     },
 
     step(input: InputState, dt: number): void {
       // targetSpeed + speed-tied gravity + the level's speed cap are computed once
       // per frame (preUpdate) and reused across this frame's substeps.
       updateCraft(craft, input, frameTargetSpeed, frameGravity, frameSpeedMax, dt)
-      sinceBoundary += dt
+      sinceStep += dt
       const w = windingOf(craft.theta)
       if (w !== winding) {
         winding = w
@@ -506,8 +518,9 @@ export function createSession(fx: SessionFx = {}): Session {
       flight.reset() // back to level 0 at distance 0 so the HUD reads LEVEL 1
       resetCraft(craft, startSpeed())
       lastFlightLevel = 0
-      lastCycles = 0
-      sinceBoundary = Infinity
+      lastMode = flight.mode
+      sinceStep = Infinity
+      lastTier = 0
       winding = 0
       gemChain = 0
       for (let i = 0; i < fields.length; i++) {

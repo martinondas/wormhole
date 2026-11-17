@@ -49,7 +49,7 @@ export interface Enemies {
   // How busy the wall ahead is: at load 2 no wave starts, hunters hold fire and only
   // one fire slot is open.
   setPressure(p: Load): void
-  setHoldFire(hold: boolean): void // while true no raider starts a firing tell (a cycle boundary is near)
+  setHoldFire(hold: boolean): void // while true no raider starts a firing tell (a level gate or the fast-to-slow boundary is near)
   tryKill(theta: number, z: number): boolean // a player bolt at (theta,z) - true if it struck an enemy
   setResolution(w: number, h: number): void
   reset(atDistance: number): void
@@ -621,7 +621,7 @@ export function createEnemies(deps: EnemyDeps): Enemies {
       if (holdFire && !hold) {
         for (const slot of slots) {
           if (slot.active && slot.phase === 'engage' && !slot.charging) {
-            slot.fireCd = Math.max(slot.fireCd, fireCooldown() * randRange(ENEMY.BOUNDARY_HOLD.RESUME[0], ENEMY.BOUNDARY_HOLD.RESUME[1]))
+            slot.fireCd = Math.max(slot.fireCd, fireCooldown() * randRange(ENEMY.HOLD_FIRE.RESUME[0], ENEMY.HOLD_FIRE.RESUME[1]))
           }
         }
       }

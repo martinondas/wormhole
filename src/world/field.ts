@@ -101,7 +101,7 @@ export interface Field {
   // when the pool has no parked object left (counted in failedSpawns).
   spawn(worldDistance: number, theta: number): boolean
   // Feed mode: move every waiting object beyond `boundary` to
-  // boundary + (worldDistance - boundary) * ratio (the tube ahead changed speed). An
+  // boundary + (worldDistance - boundary) * ratio (the tube beyond it changed speed). An
   // object whose new spot `drop` rejects is taken off the wall.
   rescale(boundary: number, ratio: number, drop?: (worldDistance: number, theta: number) => boolean): void
   readonly consumed: number // items consumed this run (debug / feel only)

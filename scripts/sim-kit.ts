@@ -1,6 +1,6 @@
 // Shared pieces of the headless scripts: the check counter of the sims, temporary
 // config overrides, and the loop that steps a real session.
-import { PHYSICS } from '../src/config'
+import { PHYSICS, TREASURE } from '../src/config'
 import { type Session } from '../src/session'
 import { type InputState } from '../src/input'
 
@@ -26,6 +26,27 @@ export function withConfig<T extends object>(target: T, overrides: Partial<T>, f
     fn()
   } finally {
     Object.assign(target, saved)
+  }
+}
+
+/**
+ * Returns a `beforeFrame` that puts the craft on the angle of the next gem ahead, so
+ * the session collects every gem the tube offers (a way to meet gem quotas in a sim).
+ */
+export function flyOntoGems(session: Session): () => void {
+  return () => {
+    const craft = session.craft
+    let nearest = Infinity
+    let theta = craft.theta
+    session.fieldByKind.gem.visit((gemTheta, worldDistance) => {
+      const ahead = worldDistance - craft.distance
+      if (ahead > -TREASURE.CAPTURE_Z && ahead < nearest) {
+        nearest = ahead
+        theta = gemTheta
+      }
+    })
+    craft.theta = theta
+    craft.omega = 0
   }
 }
 

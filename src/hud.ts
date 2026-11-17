@@ -12,8 +12,8 @@ export interface HudState {
   lives: number
   shards: number // life shards caught toward the next life
   shardsPerLife: number // shards that restore one life at the current level
-  gemsThisLevel: number // gems collected toward the current level's gate
-  gemQuota: number // gems needed to clear the current level
+  gemsThisLevel: number // gems counted toward the current level's quota
+  gemQuota: number // gems that open the current level's gate
   elapsed: number // seconds of active play this run (run timer)
   over: boolean
   started: boolean // false on the title screen (before the first run begins)
@@ -30,7 +30,7 @@ export interface Hud {
   update(s: HudState): void
   flashGemHint(): void // one-time "collect gems to advance" reminder on the first run
   showLevel(level: number, multiplier: number): void // big LEVEL N banner with the score multiplier (1-based level)
-  showRepeat(got: number, quota: number): void // amber banner: the cycle ended short of the quota, the level repeats
+  showGate(): void // short banner: the quota is met and the level gate is ahead
   pulseGems(): void // the gem row pulses once (quota met)
   // Render the title-screen selector rows. Called on init and on a menu keypress
   // (not per frame): row 0 = SHIP active, 1 = DIFFICULTY active; the active row
@@ -54,7 +54,7 @@ const CSS = `
 #hud .dim { opacity:0.6; }
 #hud .gems { font-size:16px; letter-spacing:3px; color:#f1c34a; text-shadow:0 0 6px rgba(255,200,70,0.5); }
 #hud .gems .rem { opacity:0.3; }
-#hud .gems .ready { color:#9affc0; letter-spacing:2px; }
+#hud .gems .open { color:#9affc0; letter-spacing:2px; }
 #hud .lives { position:absolute; left:20px; bottom:78px; font-size:21px; letter-spacing:6px; }
 #hud .lives .lost { opacity:0.22; }
 #hud .lives .filling { color:#5dff7a; text-shadow:0 0 8px rgba(70,255,110,0.9); }
@@ -118,7 +118,7 @@ const CSS = `
   opacity:0; pointer-events:none; }
 #hud .gemhint.show { animation:wh-gemhint 4.5s ease-out forwards; }
 @keyframes wh-gemhint { 0%{opacity:0;} 12%{opacity:0.95;} 75%{opacity:0.95;} 100%{opacity:0;} }
-/* The level and repeat banners sit in the upper part of the view, above the tube's
+/* The level and gate banners sit in the upper part of the view, above the tube's
    vanishing point: raiders and their firing tells appear there at a level change. */
 #hud .levelup { position:absolute; top:11%; left:0; right:0; text-align:center;
   font-size:77px; letter-spacing:12px; font-weight:bold; color:#9affc0;
@@ -127,14 +127,13 @@ const CSS = `
 #hud .levelup.show { animation:wh-levelup 2.2s ease-out forwards; }
 #hud .levelup .sub { font-size:28px; letter-spacing:8px; color:#ffe2a0;
   text-shadow:0 0 3px #000, 0 0 8px rgba(0,0,0,0.9), 0 0 16px rgba(255,200,70,0.7); margin-top:6px; }
-#hud .repeat { position:absolute; top:15%; left:0; right:0; text-align:center;
-  font-size:34px; letter-spacing:7px; font-weight:bold; color:#ffd08a;
-  text-shadow:0 0 3px #000, 0 0 8px rgba(0,0,0,0.9), 0 0 16px rgba(255,150,40,0.7);
+#hud .gatecue { position:absolute; top:15%; left:0; right:0; text-align:center;
+  font-size:34px; letter-spacing:7px; font-weight:bold; color:#ffe9a8;
+  text-shadow:0 0 3px #000, 0 0 8px rgba(0,0,0,0.9), 0 0 16px rgba(255,210,90,0.7);
   opacity:0; will-change:opacity,transform; }
-#hud .repeat .sub { font-size:15px; letter-spacing:4px; opacity:0.8; margin-top:8px; }
-#hud .repeat.show { animation:wh-repeat 1.6s ease-out forwards; }
-#hud.paused .levelup, #hud.paused .repeat { animation-play-state:paused; }
-@keyframes wh-repeat {
+#hud .gatecue.show { animation:wh-gatecue 1.6s ease-out forwards; }
+#hud.paused .levelup, #hud.paused .gatecue { animation-play-state:paused; }
+@keyframes wh-gatecue {
   0%   { opacity:0; transform:translateY(-8px); }
   12%  { opacity:1; transform:translateY(0); }
   78%  { opacity:1; }
@@ -218,7 +217,7 @@ export function createHud(): Hud {
     <div class="mute" id="wh-mute">&#9836; MUSIC OFF</div>
     <div class="gemhint" id="wh-gemhint">COLLECT GEMS TO ADVANCE</div>
     <div class="levelup" id="wh-levelup">LEVEL 2</div>
-    <div class="repeat" id="wh-repeat">REPEAT</div>
+    <div class="gatecue" id="wh-gatecue">GATE AHEAD</div>
     <div class="over" id="wh-over">
       <h1 id="wh-over-title">SHIP DESTROYED</h1>
       <div class="cause" id="wh-over-cause"></div>
@@ -269,7 +268,7 @@ export function createHud(): Hud {
   const elOverTime = $('wh-over-time')
   const elOverBest = $('wh-over-best')
   const elLevelUp = $('wh-levelup')
-  const elRepeat = $('wh-repeat')
+  const elGateCue = $('wh-gatecue')
   const elOverCause = $('wh-over-cause')
   const elGemHint = $('wh-gemhint')
   const elDiff = $('wh-diff')
@@ -308,16 +307,14 @@ export function createHud(): Hud {
     elLives.innerHTML = 'SHIPS ' + glyphs
   }
 
-  // gem-gate pips: filled gold diamond per collected gem, dim outline per remaining,
+  // gem quota pips: filled gold diamond per collected gem, dim outline per remaining,
   // with a numeric tail so it stays readable as the quota climbs. At the quota it
-  // flips to READY (the next level opens at the upcoming cycle boundary). Rebuilt
-  // only when the count or quota changes (a few times per level), like renderLives.
+  // flips to GATE (the level gate is ahead; the row stays full until the craft is
+  // through it). Rebuilt only when the count or quota changes (a few times per
+  // level), like renderLives.
   let lastGot = -1
   let lastQuota = -1
   function renderGems(gems: number, quota: number): void {
-    // Cache the CLAMPED count, not the raw one: collecting past the quota (the
-    // over-quota window before the boundary) keeps gems rising but the row is
-    // saturated, so caching raw `gems` would rebuild an identical string each time.
     const got = Math.min(Math.max(0, gems), Math.max(0, quota))
     if (got === lastGot && quota === lastQuota) return
     lastGot = got
@@ -333,7 +330,7 @@ export function createHud(): Hud {
     const filled = got >= quota ? shown : Math.min(shown - 1, Math.ceil((got * shown) / quota))
     let pips = ''
     for (let i = 0; i < shown; i++) pips += i < filled ? '&#9670;' : '<span class="rem">&#9671;</span>'
-    const tail = got >= quota ? ' <span class="ready">READY &#9656;</span>' : ` ${got}/${quota}`
+    const tail = got >= quota ? ' <span class="open">GATE &#9656;</span>' : ` ${got}/${quota}`
     elGems.innerHTML = 'GEMS ' + pips + tail
   }
 
@@ -374,7 +371,7 @@ export function createHud(): Hud {
       if (s.over !== lastOver && s.over) {
         // banners do not linger over the game-over panel
         elLevelUp.classList.remove('show')
-        elRepeat.classList.remove('show')
+        elGateCue.classList.remove('show')
       }
       const best = Math.max(0, Math.floor(s.best))
       if (best !== lastBest) { elBest.textContent = 'BEST ' + pad(best, 7); lastBest = best }
@@ -433,23 +430,21 @@ export function createHud(): Hud {
       }
     },
 
-    // Play the one-time gem-gate reminder (fades in then out). The reflow restarts
+    // Play the one-time gem reminder (fades in then out). The reflow restarts
     // the CSS animation; main calls this once, on the first run of the session.
     flashGemHint(): void {
       replay(elGemHint, 'show')
     },
 
     showLevel(level: number, multiplier: number): void {
-      elRepeat.classList.remove('show')
+      elGateCue.classList.remove('show')
       elLevelUp.innerHTML = `LEVEL ${Math.floor(level)}<div class="sub">SCORE x${fmtMult(multiplier)}</div>`
       replay(elLevelUp, 'show')
     },
 
-    showRepeat(got: number, quota: number): void {
-      // collected gems carry over into the repeated cycle, so the banner names what is still missing
-      const more = Math.max(1, quota - got)
-      elRepeat.innerHTML = `REPEAT - ${got}/${quota} GEMS<div class="sub">${more} MORE ${more === 1 ? 'GEM' : 'GEMS'} TO ADVANCE</div>`
-      replay(elRepeat, 'show')
+    showGate(): void {
+      elGemHint.classList.remove('show') // both sit in the same place
+      replay(elGateCue, 'show')
     },
 
     pulseGems(): void {

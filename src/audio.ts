@@ -147,7 +147,7 @@ export function createAudio(): Audio {
       blip(out, now + 0.07, 'triangle', top, top, 0.14, 0.7)
     },
     // quota met: three quick rising blips that end above the gem ladder
-    ready(out, now) {
+    gateOpen(out, now) {
       const notes = [1568, 2093, 3136] // G6 C7 G7
       for (let i = 0; i < notes.length; i++) blip(out, now + i * 0.075, 'triangle', notes[i]!, notes[i]!, i === 2 ? 0.3 : 0.1, 0.65)
     },
@@ -163,11 +163,6 @@ export function createAudio(): Audio {
         blip(out, now + i * step, 'square', notes[i]! / 2, notes[i]! / 2, dur, 0.16)
       }
       blip(out, now + 3 * step, 'triangle', 784, 784, 0.75, 0.3) // G5 under the held C6
-    },
-    // quota missed: two soft falling notes - informs, does not punish
-    repeat(out, now) {
-      blip(out, now, 'sine', 659, 659, 0.2, 0.45)
-      blip(out, now + 0.17, 'sine', 494, 494, 0.32, 0.45)
     },
     // a raider's firing tell: a saw whine rising over the charge, cut when it fires.
     // It is audible from the first 30 ms (a tell that swells only at the end warns too late).

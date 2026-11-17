@@ -54,13 +54,13 @@ export const SPEED = {
   EASE: 28,   // accel/decel toward the active tier's speed (units/s^2)
 }
 
-// --- levels (gem-gated difficulty ramp; one level = one slow->normal->fast cycle) --
-// A cycle lasts (number of tiers) x FLIGHT.SECTION_SECONDS. At a cycle boundary the
-// level advances only if the level's gem quota was collected; otherwise the same
-// cycle repeats (flight.ts). Each level raises every tier speed and the score
-// multiplier; the raider waves and the mine density follow the tuning level
-// (levels.ts). Levels only progress in FLIGHT.MODE 'sections'; the pinned modes stay
-// at level 1 with no gate.
+// --- levels (gem-gated difficulty ramp) ---------------------------------------
+// A level lasts until its gem quota is collected. A level gate then appears ahead in
+// the tube (GATE), and the level changes where the craft flies through it (flight.ts).
+// Each level raises every tier speed and the score multiplier; the raider waves and
+// the mine density follow the tuning level (levels.ts). The speed sections keep
+// cycling on their own clock. Levels only progress in FLIGHT.MODE 'sections'; the
+// pinned modes stay at level 1 with no gate.
 export const LEVELS = {
   // Per-level speed bonus added to EVERY tier, in three bands by display level: EARLY
   // up to EARLY_UNTIL, MID up to MID_UNTIL, LATE beyond. The step decays but is never
@@ -69,14 +69,12 @@ export const LEVELS = {
   SPEED_STEP: { EARLY: 5, MID: 3, LATE: 1.5 },    // u/s added per level in each band
   SPEED_BAND: { EARLY_UNTIL: 10, MID_UNTIL: 15 }, // display level the EARLY / MID band ends at
   SCORE_MULT_STEP: 0.5, // score multiplier = 1 + tuning level * this; scales gem and kill points
-  // Gem gate: quota = round(SEQUENCE.GEMS_PER_CYCLE * fraction). The fraction starts at
-  // GEM_QUOTA_FRACTION and rises by QUOTA_FRACTION_STEP per tuning level up to
-  // QUOTA_FRACTION_MAX (flight.gemQuota); a difficulty mode may cap it lower
-  // (DIFFICULTY quotaMax). The quota stays below the fewest gems a cycle offers, so a
-  // player who collects nearly everything never repeats a level.
-  GEM_QUOTA_FRACTION: 0.48,
-  QUOTA_FRACTION_STEP: 0.12,
-  QUOTA_FRACTION_MAX: 0.85,
+  // Gem quota of a level, in gems: GEM_QUOTA_START at tuning level 0, GEM_QUOTA_STEP
+  // more per tuning level, at most GEM_QUOTA_MAX (flight.gemQuota). A difficulty mode
+  // may cap it lower (DIFFICULTY quotaCap).
+  GEM_QUOTA_START: 8,  // small, so a new player meets the first gate early
+  GEM_QUOTA_STEP: 5,   // the levels lengthen while the player learns to collect
+  GEM_QUOTA_MAX: 30,   // sets how long a deep level lasts for a player who collects most gems
   // Reference span of the slow->fast gravity fade (FLIGHT.GRAVITY_FLOOR / GRAVITY_CURVE):
   //   'tier'     - full gravity at the level's OWN slow speed, the floor at its own
   //                fast speed, so each section keeps its feel as speeds climb.
@@ -137,16 +135,33 @@ export const LEVELS = {
 // `ease` multiplies the raider fire cooldown and the breather between waves and
 // divides the mine budget of the gem lines, so a mode can be gentler from level 1,
 // where the level mapping alone changes nothing (MILKY WAY is the mode for children).
-// `quotaMax` caps the gem-quota fraction (1 = only LEVELS.QUOTA_FRACTION_MAX applies).
+// `quotaCap` caps the gem quota in gems (Infinity = only LEVELS.GEM_QUOTA_MAX applies).
 // `color` is the mode's threat color in the title selector and the HUD readout; the
 // threat pips render in hud.ts from the mode index.
 export const DIFFICULTY = {
   MODES: [
-    { name: 'MILKY WAY', slope: 0.4, offset: 0, ease: 2.2, quotaMax: 0.7, color: '#7dffa6' },
-    { name: 'ORION', slope: 1.0, offset: 0, ease: 1.0, quotaMax: 1, color: '#ffd24d' },
-    { name: 'QUASAR', slope: 1.0, offset: 2.5, ease: 1.0, quotaMax: 1, color: '#ff5a5a' },
+    { name: 'MILKY WAY', slope: 0.4, offset: 0, ease: 2.2, quotaCap: 24, color: '#7dffa6' },
+    { name: 'ORION', slope: 1.0, offset: 0, ease: 1.0, quotaCap: Infinity, color: '#ffd24d' },
+    { name: 'QUASAR', slope: 1.0, offset: 2.5, ease: 1.0, quotaCap: Infinity, color: '#ff5a5a' },
   ],
   DEFAULT: 1, // index into MODES (ORION: the tuning with no mapping)
+}
+
+// --- level gate (the ring the craft flies through to change level) ------------
+// The gate is placed when the level's gem quota is met (session.ts) and drawn by
+// world/gate.ts: a thin frame that hugs the tube wall, so the middle of the view
+// stays open and whatever flies behind the gate stays readable.
+export const GATE = {
+  AHEAD: 290,          // units ahead of the craft: past the last drawn ring and SEQUENCE.HORIZON, so it comes out of the fog
+  RADIUS: 0.985,       // outer ring radius as a share of TUBE.RADIUS (on the wall, clear of the wall lines)
+  INNER: 0.95,         // inner ring radius as a share of TUBE.RADIUS (a narrow band: wall objects ride well inside it)
+  SEGMENTS: 64,        // straight segments per ring (smooth at full screen size)
+  LINE_WIDTH: 1.5,     // px, thinner than a wall object's edges: the gate frames the view and covers nothing
+  RGB: [1.1, 0.9, 0.4] as [number, number, number], // white-gold, a little brighter than the tube rings so the bloom stays small; not the red of mines or the magenta of raiders
+  SPIN: 0.5,           // rad/s the gate turns about the tube axis, so it differs from the still tube rings
+  PASS_TIME: 0.35,     // s the gate takes to fade once the craft is through
+  PASS_SCALE: 1.15,    // the gate widens to this size while it fades (outward, away from the view)
+  FLASH: 0.5,          // tube flash at the pass, as a multiple of FEEL.TUBE_FLASH.PEAK (a pulse, not a white-out)
 }
 
 // --- tube geometry ----------------------------------------------------------
@@ -535,7 +550,7 @@ export const FEEL = {
 
 // --- HUD ----------------------------------------------------------------------
 export const HUD = {
-  GEM_PIPS_MAX: 12, // most pips the gem-gate row draws; a larger quota fills them in proportion
+  GEM_PIPS_MAX: 12, // most pips the gem quota row draws; a larger quota fills them in proportion
 }
 
 // --- lives (hazards cost a life; brief i-frames after a hit) ----------------
@@ -661,12 +676,13 @@ export const ENEMY = {
                       // fire slot re-tries; the jitter keeps a fixed pool order
                       // from always winning the next free slot
   CHARGE_TIME: 0.45,  // nose brightens toward white-hot for this long before each shot (the tell)
-  // No firing tell starts from BEFORE seconds ahead of a cycle boundary until AFTER
-  // seconds past it: the speed and gravity change there and the level banner shows,
-  // so no bolt is in flight through the change (a tell that started earlier still fires).
-  // When the hold ends each waiting raider takes RESUME (a random share) of a fresh fire
-  // cooldown, so the fire returns one tell at a time, not as a volley.
-  BOUNDARY_HOLD: { BEFORE: 1.1, AFTER: 1.5, RESUME: [0.3, 1.0] as readonly [number, number] },
+  // No firing tell starts from BEFORE seconds ahead of a level gate or of the
+  // fast-to-slow boundary until AFTER seconds past it: the speed steps there (and at
+  // the gate the level headline shows), so no bolt is in flight through the change (a
+  // tell that started earlier still fires). When the hold ends each waiting raider
+  // takes RESUME (a random share) of a fresh fire cooldown, so the fire returns one
+  // tell at a time, not as a volley.
+  HOLD_FIRE: { BEFORE: 1.1, AFTER: 1.5, RESUME: [0.3, 1.0] as readonly [number, number] },
   BULLET_SPEED: 90,   // enemy bolt speed toward +Z (units/s, ship-relative)
   RAM_ANGLE: 0.55,    // ram hit window (rad): the ship's wing half-width + the raider's body
   RAM_Z: 2.8,         // ram hit window (units); mirrors HAZARD.CAPTURE_Z
@@ -792,9 +808,8 @@ export const AUDIO = {
     shard:     { synth: 'shard',     volume: 0.85 }, // one rising pair of the 1-up arpeggio per caught life shard
     hit:       { synth: 'hit',       volume: 1.8 },  // explosion (big + loud - a life lost should land like a bomb)
     gameover:  { synth: 'gameover',  volume: 0.85 }, // slow descending tone
-    ready:     { synth: 'ready',     volume: 0.75 }, // gem quota met: three rising blips
+    gateOpen:  { synth: 'gateOpen',  volume: 0.75 }, // gem quota met, the level gate is ahead: three rising blips
     levelup:   { synth: 'levelup',   volume: 0.9 },  // level up fanfare (square + triangle, held last note)
-    repeat:    { synth: 'repeat',    volume: 0.7 },  // quota missed, the level repeats: two soft falling notes
     charge:    { synth: 'charge',    volume: 0.5 },  // a raider's firing tell (panned; audible under gunfire, softer than the shot)
     chip:      { synth: 'chip',      volume: 0.5 },  // a hit that did not kill the raider
     loop:      { synth: 'loop',      volume: 1.1 },  // a loop over the top

@@ -25,6 +25,7 @@ interface FrameStats {
 
 const wh = (globalThis as unknown as { WH: WH }).WH
 const TICK = 1 / TICK_HZ
+const GATE_SHOT_AHEAD = 90 // units before the gate at which its approach is shot
 
 let bot: Bot | undefined
 let recorder: Recorder | undefined
@@ -33,7 +34,7 @@ let lastTickT = 0
 let maxSeconds = Infinity
 let done = false
 let result: RunResult | undefined
-let forceRepeat = false
+let gateShot = Infinity // distance of the open gate whose approach is still to be shot
 // Feedback events worth a screenshot: the Node side polls, takes one shot per
 // queued event and names the file after it. At most EVENT_SHOTS per kind.
 const EVENT_SHOTS = 3
@@ -57,10 +58,11 @@ function frame(now: number): void {
   }
   if (lastFrame > 0) frameMs.push(now - lastFrame)
   lastFrame = now
-  // --force-repeat: hold the gem count at 0 through the fast section of the first
-  // cycle, so it ends short of the quota and the REPEAT banner can be seen
-  const f = wh.session.flight
-  if (forceRepeat && f.cycles === 0 && f.tierIndexAt(wh.session.craft.distance) === 2) game.gemsThisLevel = 0
+  // the gate is far away when it opens: a second shot once it is close enough to read
+  if (gateShot - wh.session.craft.distance < GATE_SHOT_AHEAD) {
+    gateShot = Infinity
+    queueShot('gate-near')
+  }
   const t = game.elapsed
   if (t >= nextTick) {
     bot.tick(t)
@@ -94,8 +96,8 @@ function frameStats(): FrameStats {
 const api = {
   // Call on the title screen: seeds the run, hooks the recorder into the session's
   // events, and arms the bot. The run itself starts when Space is pressed.
-  arm(botName: string, seed: number, capSeconds: number, opts: { forceRepeat?: boolean } = {}): void {
-    forceRepeat = opts.forceRepeat ?? false
+  arm(botName: string, seed: number, capSeconds: number): void {
+    gateShot = Infinity
     const profile = PROFILES[botName]
     if (!profile) throw new Error(`unknown bot ${botName}`)
     wh.reseed(seed)
@@ -115,12 +117,15 @@ const api = {
         if (!done) tap(...a) // the game runs on after the capture ends; the result must not
       }
     }
-    // event screenshots: READY, the level / repeat banners, a loop, a hit, a raider's
+    // event screenshots: the gate opening, near and passed (with the level headline), a loop, a hit, a raider's
     // firing tell, a cleared wave, a life shard dropped / caught / completing a life,
     // each kind of gem line in each tier
     const shotOn: Record<string, (...a: unknown[]) => string> = {
-      quotaReached: () => 'ready',
-      cycleEnded: (advanced) => (advanced ? 'levelup' : 'repeat'),
+      quotaReached: () => {
+        gateShot = wh.session.flight.gateAt
+        return 'gate-open'
+      },
+      levelUp: () => 'gate-pass',
       loopCompleted: () => 'loop',
       damaged: (cause) => `hit-${String(cause)}`,
       mineNearMiss: () => 'nearmiss',

@@ -10,8 +10,9 @@
 //      appears in, and arc and pump reach above the horizontal;
 //   B) the director over 200 cycles per mode in the real session: no phrase crosses
 //      a section boundary or starts inside BOUNDARY_CLEAR, the gem budget holds, the
-//      mine budget holds in nearly every section, no spawn fails, and after a
-//      level-up the waiting phrases still fit a replay at the new speed;
+//      mine budget holds in nearly every section, no spawn fails, and when a level
+//      gate opens the tube beyond it is timed for the next level: the waiting
+//      phrases still fit a replay, and later phrases are laid out at its speeds;
 //   C) an open-loop input-jitter model on arc and pump (a grade of the phrases
 //      against each other, not a prediction of human catch rates);
 //   D) the title screen, the pressure signal, and a difficulty or flight-mode change.
@@ -21,8 +22,8 @@ import { stepSwing, type SwingState } from '../src/craft'
 import { PHRASES, buildTrace, segmentSeconds, type Phrase, type Trace } from '../src/world/phrases'
 import { createRng, seedRng } from '../src/util/rng'
 import { angleDiff, DEG } from '../src/util/math'
-import { DIFFICULTY, HAZARD, LEVELS, PHYSICS, SEQUENCE, TREASURE } from '../src/config'
-import { check, finish, driveSession, STEP_DT as DT } from './sim-kit'
+import { DIFFICULTY, HAZARD, LEVELS, PHYSICS, SEQUENCE, SPEED, TREASURE } from '../src/config'
+import { check, finish, driveSession, flyOntoGems, STEP_DT as DT } from './sim-kit'
 
 const IDLE = { steerTarget: 0, fire: false } // the craft rests at the bottom
 const scripted = PHRASES.filter((p) => p.script.length > 0)
@@ -173,8 +174,8 @@ const levelFor = (f: Flight, mode: number, T: number): number | null => {
 })()
 
 // ---- B) the director in the real session: 200 cycles per mode ----
-// The craft rests at the bottom with i-frames held on; the gem count is forced so
-// two cycles of three end with a level-up (and one repeats).
+// I-frames are held on and the craft is put on every gem, so the quotas are met by
+// collecting and the level gates open at every place in the section cycle.
 interface Rec {
   id: Phrase['id']
   tier: number
@@ -191,12 +192,22 @@ function runDirector(mode: number, cycles: number, seed: number) {
     phrases: 0, crossing: 0, inClear: 0, wrongTier: 0, repeats3: 0,
     cycleGems: [] as number[], sections: 0, mineOff: 0, mineWorst: 0, worstMine: '',
     perTier: [new Map<string, number>(), new Map<string, number>(), new Map<string, number>()],
-    levelUps: 0, rescaleChecked: 0, rescaleMissed: 0, restMin: Infinity, quietMax: 0,
+    gates: 0, rescaleChecked: 0, rescaleMissed: 0, straddling: 0, wrongSpeed: 0, restMin: Infinity, quietMax: 0,
     failedSpawns: 0, gemsLive: 0, minesLive: 0, restSum: 0, rests: 0, restsOver4: 0,
     warmupMines: 0,
   }
   let lastEnd = -1
-  let lastSpeed = 0
+  let knownGate = Infinity // the open gate this sim has heard of (quotaReached)
+  // The tube's tier speed at a distance ahead of the craft (the next level's beyond an
+  // open gate), and the seconds of steady flight between two such distances.
+  const BASE = [SPEED.SLOW, SPEED.NORMAL, SPEED.FAST]
+  const speedAt = (d: number): number => session.flight.speedRatioAt(d) * BASE[session.flight.tierIndexAt(d)]!
+  const REST_STEP = 0.25
+  const secondsBetween = (from: number, to: number): number => {
+    let s = 0
+    for (let d = from; d < to; d += REST_STEP) s += Math.min(REST_STEP, to - d) / speedAt(d)
+    return s
+  }
   let warmupInSection = false
   let prevId = ''
   let prevPrevId = ''
@@ -220,10 +231,13 @@ function runDirector(mode: number, cycles: number, seed: number) {
       prevId = p.id
       const m = stats.perTier[p.tier]!
       m.set(p.id, (m.get(p.id) ?? 0) + 1)
+      // A phrase is laid out at the speed of its tier at the level of the tube there.
+      // One placed while a gate is opening still has the current level's speed: its
+      // items move to the next level's timing right after (checked by the replay below).
+      const opening = f.gateAt < Infinity && f.gateAt !== knownGate
+      if (Math.abs(p.speed - (opening ? f.tierSpeedOf(f.level, p.tier) : speedAt(p.start + 1e-3))) > 1e-6) stats.wrongSpeed++
       if (lastEnd >= 0) {
-        // seconds from the last phrase to this one (steady tier speeds; the speed ease
-        // after a boundary is short against the rests measured here)
-        const rest = p.sectionStart > lastEnd ? (p.sectionStart - lastEnd) / lastSpeed + (p.start - p.sectionStart) / p.speed : (p.start - lastEnd) / p.speed
+        const rest = secondsBetween(lastEnd, p.start)
         stats.restSum += rest
         stats.rests++
         if (rest > 4) stats.restsOver4++
@@ -231,7 +245,6 @@ function runDirector(mode: number, cycles: number, seed: number) {
         if (rest > stats.quietMax) stats.quietMax = rest
       }
       lastEnd = p.end
-      lastSpeed = p.speed
       recs.push({ id: p.id, tier: p.tier, mirror: p.mirror, start: p.start, end: p.end, speed: p.speed, gems: p.gems, cycle: p.cycle })
       if (recs.length > 12) recs.shift()
     },
@@ -253,30 +266,38 @@ function runDirector(mode: number, cycles: number, seed: number) {
     cyclePlanned: (_cycle, gems) => {
       if (session) stats.cycleGems.push(gems)
     },
-    levelUp: () => {
-      stats.levelUps++
-      // Every scripted phrase waiting beyond the boundary was moved to the new slow
-      // speed: a replay at that speed must still collect all its gems.
+    quotaReached: () => {
+      stats.gates++
+      // The gate just opened. Every phrase waiting beyond it was moved to keep its
+      // times at the next level's speed: a replay must still collect all its gems. A
+      // phrase the gate cuts through is replayed with the time each gem takes to reach.
       const f = session.flight
-      const boundary = f.cycleStart()
-      const speed = f.tierSpeedOf(f.level, 0)
-      const gravity = f.gravityOf(f.level, speed)
+      const gate = f.gateAt
+      knownGate = gate
+      const ratio = speedAt(gate + 1e-3) / speedAt(gate - 1e-3)
+      const move = (d: number): number => (d > gate ? gate + (d - gate) * ratio : d)
+      if (lastEnd > gate) lastEnd = move(lastEnd)
       for (const r of recs) {
-        if (r.start <= boundary) continue
+        if (r.end <= gate) continue
+        const cut = r.start < gate
+        r.start = move(r.start)
+        r.end = move(r.end)
         const phrase = PHRASES.find((p) => p.id === r.id)!
-        if (phrase.script.length === 0) continue
-        const start = boundary + ((r.start - boundary) * speed) / r.speed
-        const end = boundary + ((r.end - boundary) * speed) / r.speed
+        // a phrase the craft is already in has lost gems to it: not a waiting phrase
+        if (phrase.script.length === 0 || r.start < session.craft.distance + TREASURE.CAPTURE_Z) continue
+        if (cut) stats.straddling++
+        const speed = speedAt(r.start + 1e-3)
+        const gravity = f.gravityOf(f.level, f.tierSpeedOf(f.level, r.tier))
         const gT: number[] = []
         const gTheta: number[] = []
         const mirror = r.mirror ? -1 : 1
         session.fieldByKind.gem.visit((theta, wd) => {
-          if (wd >= start - 0.5 && wd <= end + 0.5) {
-            gT.push((wd - start) / speed)
+          if (wd >= r.start - 0.5 && wd <= r.end + 0.5) {
+            gT.push(secondsBetween(r.start, wd))
             gTheta.push(mirror * theta) // back to the unmirrored phrase; the replay mirrors it again
           }
         })
-        const got = replay(phrase, 0, gT, gTheta, gT.length, [], [], 0, speed, gravity, mirror).collected
+        const got = replay(phrase, r.tier, gT, gTheta, gT.length, [], [], 0, speed, gravity, mirror).collected
         stats.rescaleChecked++
         if (gT.length !== r.gems || got !== r.gems) stats.rescaleMissed++
       }
@@ -289,12 +310,9 @@ function runDirector(mode: number, cycles: number, seed: number) {
   session.begin()
   const advance = driveSession(session, IDLE, {
     invulnerable: true,
-    beforeFrame: () => {
-      const levelUp = session.flight.cycles % 3 !== 2
-      session.game.gemsThisLevel = levelUp ? session.flight.gemQuota(session.flight.level) : 0
-    },
+    beforeFrame: flyOntoGems(session),
   })
-  for (let steps = 0; session.flight.cycles < cycles && steps < PHYSICS.HZ * 60 * cycles; steps++) advance()
+  for (let steps = 0; stats.cycleGems.length < cycles && steps < PHYSICS.HZ * 60 * cycles; steps++) advance()
   stats.failedSpawns = session.fieldByKind.gem.failedSpawns + session.fieldByKind.mine.failedSpawns
   session.fieldByKind.gem.visit(() => stats.gemsLive++)
   session.fieldByKind.mine.visit(() => stats.minesLive++)
@@ -332,8 +350,9 @@ for (let mode = 0; mode < DIFFICULTY.MODES.length; mode++) {
   )
   check(`B5 ${name}: no failed spawn`, stats.failedSpawns === 0, `${stats.failedSpawns}`)
   check(`B5b ${name}: the first ${SEQUENCE.WARMUP_PHRASES} phrases of a run carry no mines`, stats.warmupMines === 0, `${stats.warmupMines}`)
-  check(`B6 ${name}: after a level-up the waiting phrases still collect every gem`, stats.levelUps > CYCLES / 2 && stats.rescaleChecked > 0 && stats.rescaleMissed === 0, `${stats.levelUps} level-ups, ${stats.rescaleChecked} phrases replayed, ${stats.rescaleMissed} short`)
-  check(`B7 ${name}: no phrase comes back sooner than its spacing allows, rest between phrases at least GAP`, stats.repeats3 === 0 && stats.restMin >= SEQUENCE.GAP[1] - 1e-6, `repeats=${stats.repeats3} shortest rest ${stats.restMin.toFixed(2)}s, mean ${(stats.restSum / stats.rests).toFixed(2)}s, longest ${stats.quietMax.toFixed(2)}s, over 4 s: ${stats.restsOver4}`)
+  check(`B6 ${name}: when a gate opens, the phrases waiting beyond it still collect every gem`, stats.gates > CYCLES / 2 && stats.straddling > 0 && stats.rescaleMissed === 0, `${stats.gates} gates, ${stats.rescaleChecked} phrases replayed (${stats.straddling} cut by the gate), ${stats.rescaleMissed} short`)
+  check(`B6b ${name}: every phrase is laid out at the speed of the tube where it starts, the next level's beyond a gate`, stats.wrongSpeed === 0, `${stats.wrongSpeed} of ${stats.phrases}`)
+  check(`B7 ${name}: no phrase comes back sooner than its spacing allows, rest between phrases at least GAP`, stats.repeats3 === 0 && stats.restMin >= SEQUENCE.GAP[1] - 0.02, `repeats=${stats.repeats3} shortest rest ${stats.restMin.toFixed(2)}s, mean ${(stats.restSum / stats.rests).toFixed(2)}s, longest ${stats.quietMax.toFixed(2)}s, over 4 s: ${stats.restsOver4}`)
 }
 
 // ---- C) open-loop input jitter on arc and pump ----

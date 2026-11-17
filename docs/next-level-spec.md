@@ -11,8 +11,8 @@ mode (ORION).
 
 ## Feedback and feel
 
-**Experience.** The game explains itself. The player hears and sees when the gem quota is met,
-when a level advances and why a level repeats. A threat is heard before it is seen. Fast feels
+**Experience.** The game explains itself. The player hears and sees when the gem quota is met
+and when a level changes. A threat is heard before it is seen. Fast feels
 fast, and a hit is readable: the player sees what caused it.
 
 **Trade-off.** More feedback makes the game easier to read, but every extra signal competes
@@ -20,7 +20,8 @@ for the same small view around the ship, and the handling must stay as tuned.
 
 **Current choice.**
 - Level events are banners with a sound. The banners sit above the vanishing point of the tube,
-  so they do not cover raiders or their firing tells.
+  so they do not cover raiders or their firing tells. The level gate is a thin frame on the
+  tube wall, so what flies behind it stays readable.
 - Gems in a row play rising tones. A raider's firing tell is a rising sound from its side that
   stays audible under gunfire. A loop, a mine near miss and a cleared wave have their own cues.
   The game-over panel names the cause.
@@ -66,8 +67,8 @@ raiders at once are hard to manage, and fire from all of them reads as luck, not
   it. It holds its angle while it shows the tell, so the tell marks the exact line.
 - A cap limits how many raiders show a tell or fire at once. Every shot is announced, with a
   minimum time between the tell and the arrival of the bolt.
-- Raiders hold their fire around a level boundary, while speed and gravity change and the
-  banner shows.
+- Raiders hold their fire around the level gate and around the fast-to-slow boundary, while
+  the speed changes and the level headline shows.
 - Raiders that outlast their wave leave forward, never back through the ship.
 - Deeper levels raise the fire rate in steps. The cap on simultaneous fire and the announced
   shot stay the same at every level.
@@ -127,17 +128,30 @@ a tube made only of lines feels like rails, and the same line too often feels re
 - Some phrases are loose scatters, so the tube does not feel like rails.
 - No phrase crosses a section boundary, and the air is calm right after one.
 - A run opens with warm-up phrases that carry no mines.
-- The gem gate: the quota is known at the start of a level and does not depend on what
-  appeared. A cycle offers more gems than the highest quota, so a few misses are allowed.
+- The gem gate: collect the level's gems and the next level comes. The quota is a gem count
+  known at the start of a level. The moment it is met, a gate ring is placed ahead in the
+  tube, far enough to come out of the fog, and the level changes where the craft flies
+  through it. A level lasts until its gems are collected. Gems collected while the gate is
+  open pay score and do not count toward the next level, which starts from zero at the gate.
+- The tube beyond an open gate belongs to the next level: gem lines, mines and sections there
+  are timed for its speeds. The speed sections keep cycling on their own clock, so a gate can
+  stand anywhere in a section.
 - Orbs are scattered finds, not part of the lines. Different kinds of objects never appear on
   top of each other.
 
 **Notes.**
 - 2026-11 - The owner asked for objects "not random but in playable sequences", and later said
   he loves "the gem progression with tones and their placements in lines".
-- 2026-11 - A quota close to the number of gems on offer made near-perfect players repeat a
-  level by two or three gems. Chosen: more gems on offer than the highest quota. An early
-  level can still be repeated by a narrow margin. Open if it annoys.
+- 2026-11 - The gate. The level used to be checked at the end of a full cycle of sections and
+  repeated when the player was short of the quota. The owner found the REPEAT message
+  unreadable and confusing. Chosen: the level changes at a gate that appears as soon as the
+  gems are collected, so the rule needs no explanation. Consequence: skilled players move
+  through levels faster.
+- 2026-11 - The first gate was a wide, bright ring, and the owner lost sight of raiders and
+  mines behind it. Chosen: a thin frame on the tube wall with little glow, and a small flash
+  of the tube at the pass.
+- 2026-11 - Fire hold. With the hold only at the gate, the average bot was hit more often than
+  before. Chosen: the hold stays at the fast-to-slow boundary as well.
 - 2026-11 - Too few gems per cycle left sections half empty. More rings over the top in fast
   sections made those sections repeat themselves. Chosen: fewer rings. The top of the tube is
   used a little less than with random placement. This is a deliberate trade-off.
@@ -224,8 +238,9 @@ lever, but speed alone ends in a wall of pure reflex.
 - The three modes are one mapping from the played level to a tuning level, plus an ease factor
   per mode (`DIFFICULTY.MODES`). The mapping alone changes little at the first level, so the
   gentle mode also eases raider fire, breathers and mines from the start, and caps its gem
-  quota. The score multiplier follows the tuning level, so a harder mode pays more and one
-  best score stays honest.
+  quota, so that a beginner is never asked for more gems than they can collect in a
+  reasonable time. The score multiplier follows the tuning level, so a harder mode pays more
+  and one best score stays honest.
 
 **Notes.**
 - 2026-11 - Under every setting we tried, the skilled bot is hit far less often than the

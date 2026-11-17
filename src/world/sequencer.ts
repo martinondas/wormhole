@@ -11,17 +11,18 @@ import { PHRASES, MAX_ITEMS, buildTrace, type Load, type Phrase, type Trace } fr
 // director picks that section's phrases - by tier, tuning level and weight, never
 // one of the last two unless the phrase allows it (Phrase.spacing) - against two budgets:
 //   - gems per cycle: at least GEMS_PER_CYCLE and at most GEMS_EXTRA_MAX more, so
-//     the gem gate's quota is always on offer;
+//     every stretch of the tube offers a steady supply for the gem quota;
 //   - mines per section: MINES_PER_SECTION, rising with the tuning level.
 // Then it spreads them evenly over the section with at least GAP seconds of rest in
 // between. No phrase crosses a section boundary or starts in the first
-// BOUNDARY_CLEAR seconds of a section, so the speed change and the level banner
-// happen in calm air and the craft flies a phrase at the steady speed the ghost
-// assumed. The phrases are placed on the wall as the horizon reaches them.
+// BOUNDARY_CLEAR seconds of a section, so the tier's speed change happens in calm
+// air and the craft flies a phrase at the steady speed the ghost assumed. The
+// phrases are placed on the wall as the horizon reaches them.
 //
-// An item at ghost time t sits at phraseStart + tierSpeed * t. The tube ahead is
-// planned for the current level; when the level rises at a cycle boundary, every
-// waiting item beyond the boundary is moved to keep its time (levelUp).
+// An item at ghost time t sits at phraseStart + tierSpeed * t. When a level gate
+// opens, the tube beyond it belongs to the next level: every item beyond the gate
+// is moved to keep its time at the next level's speed, and the planning continues
+// at that level (gateOpened).
 
 const SECS = FLIGHT.SECTION_SECONDS
 const LOG = 16 // phrases remembered for pressureAt
@@ -58,7 +59,7 @@ export interface SequencerDeps {
   spawnGem(worldDistance: number, theta: number): boolean
   spawnMine(worldDistance: number, theta: number): boolean
   blocked(worldDistance: number, theta: number): boolean // an orb or an extra life sits there
-  rescaleItems(boundary: number, ratio: number): void // move the waiting gems and mines
+  rescaleItems(from: number, ratio: number): void // move the gems and mines beyond `from`
   clearItems(): void // park every gem and mine
   onPhrase?(p: PlacedPhrase): void
   onPhraseAhead?(id: Phrase['id'], tier: number): void // the craft is PHRASE_CUE seconds before a phrase
@@ -70,7 +71,7 @@ export interface SequencerDeps {
 
 export interface Sequencer {
   update(craftDistance: number): void // place what the horizon has reached (once per frame)
-  levelUp(): void // the level rose at the boundary flight.cycleStart(): re-time the tube beyond it
+  gateOpened(): void // a level gate opened at flight.gateAt: re-time the tube beyond it for the next level
   pressureAt(distance: number): Load // load of the phrase covering a distance, else 0
   reset(): void // plan from distance 0 (title screen and run start)
   stale(): boolean // the tube was planned for other speeds than flight now gives (difficulty changed)
@@ -100,6 +101,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
   let secStart = 0
   let secEnd = 0
   let clearEnd = 0 // first distance a phrase may start in the section
+  let planFrom = 0 // distance the plan's start times count from (clearEnd, until a gate opens in the section)
   let cycleGems = 0
   let secMines = 0
   let secBudget = 0
@@ -108,7 +110,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
   let first = true // the next phrase is the first of the run
   let plannedBefore = Infinity // phrases of this run planned in earlier sections (Infinity: no warm-up)
 
-  // the current section's phrases: index, start (s after clearEnd), gems and mines
+  // the current section's phrases: index, start (s after planFrom), gems and mines
   const planPhrase = new Int8Array(MAX_PLAN)
   const planAt = new Float64Array(MAX_PLAN)
   const planDur = new Float64Array(MAX_PLAN)
@@ -189,8 +191,9 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     planSection()
   }
 
-  // Forget everything planned and start over for the current mode and level.
-  function restart(): void {
+  // Forget everything planned and start over for the current mode and level, in the
+  // section cycle that holds `from`.
+  function restart(from: number): void {
     deps.clearItems()
     mode = flight.mode
     level = flight.level
@@ -202,7 +205,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     logHead = 0
     logEnd.fill(-1)
     logCue.fill(Infinity)
-    frameSection(0, flight.cycleStart())
+    frameSection(0, flight.cycleStartAt(from))
   }
 
   // --- what a phrase holds --------------------------------------------------------
@@ -265,6 +268,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     const speed = speedOf(secTier)
     const rest = gap()
     const usable = (secEnd - clearEnd) / speed
+    planFrom = clearEnd
     const lastSection = secIndex === N_TIERS - 1
     const gems0 = cycleGems
     const l1 = last1
@@ -276,7 +280,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       last2 = l2
       secMines = 0
       planN = 0
-      let t = 0 // s after clearEnd where the next phrase could start
+      let t = 0 // s after planFrom where the next phrase could start
       while (planN < MAX_PLAN && pick(usable - t, attempt === PLAN_TRIES - 1)) {
         t += planDur[planN - 1]! + rest
       }
@@ -360,7 +364,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       for (let k = 0; k < n; k++) if (choice < 0 || pickGems(cand[k]!) > pickGems(choice)) choice = cand[k]!
     }
     // Keep the candidates that can still meet the gem goal and the mine budget; when
-    // none can do both, the gem goal alone (the gem gate depends on it).
+    // none can do both, the gem goal alone (the gem quota depends on the supply).
     const gemFloor = Math.min(gemNeed, bestGems)
     const mineFloor = Math.min(mineNeed, bestMines)
     for (let pass = 0; pass < 2 && choice < 0; pass++) {
@@ -481,11 +485,11 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
         nMines++
       }
     }
-    let start = clearEnd + planAt[index]! * speed
+    let start = planFrom + planAt[index]! * speed
     if (trace) {
       // an orb or an extra life in the way of a scripted phrase: move on a little
       // (into the rest that follows), then leave out the mines that still sit on one
-      const room = index + 1 < planN ? clearEnd + (planAt[index + 1]! - SEQUENCE.GAP[1]) * speed : secEnd
+      const room = index + 1 < planN ? planFrom + (planAt[index + 1]! - SEQUENCE.GAP[1]) * speed : secEnd
       for (let k = 0; k < PLACE_TRIES; k++) {
         if (!itemsBlocked(start, speed) || start + SPAWN_CLEAR.NUDGE + planDur[index]! * speed > room) break
         start += SPAWN_CLEAR.NUDGE
@@ -531,28 +535,32 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     }
   }
 
+  // Place every phrase that starts before `horizon`, planning further sections as needed.
+  function placeUpTo(horizon: number): void {
+    for (;;) {
+      if (planNext < planN) {
+        // a phrase is placed whole, so it may reach past the horizon
+        if (planFrom + planAt[planNext]! * speedOf(secTier) >= horizon) break
+        place(planNext++)
+      } else {
+        if (secEnd >= horizon) break
+        nextSection()
+      }
+    }
+  }
+
   const seq: Sequencer = {
     update(craftDistance: number): void {
       if (flight.mode !== mode) {
         // the flight mode was switched mid-run (a testing key): start over, in the
         // section that holds the first distance worth planning
         const from = craftDistance + SEQUENCE.FIRST_AT
-        restart()
+        restart(craftDistance)
         while (secEnd <= from) frameSection((secIndex + 1) % N_TIERS, secEnd)
         if (clearEnd < from) clearEnd = from
         planSection()
       }
-      const horizon = craftDistance + SEQUENCE.HORIZON
-      for (;;) {
-        if (planNext < planN) {
-          // a phrase is placed whole, so it may reach past the horizon
-          if (clearEnd + planAt[planNext]! * speedOf(secTier) >= horizon) break
-          place(planNext++)
-        } else {
-          if (secEnd >= horizon) break
-          nextSection()
-        }
-      }
+      placeUpTo(craftDistance + SEQUENCE.HORIZON)
       if (deps.onPhraseAhead) {
         for (let i = 0; i < LOG; i++) {
           if (craftDistance < logCue[i]!) continue
@@ -562,31 +570,32 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       }
     },
 
-    levelUp(): void {
-      const boundary = flight.cycleStart()
-      const old = plannedSlow
-      level = flight.level
+    gateOpened(): void {
+      const gate = flight.gateAt
+      // Everything that starts before the gate is placed at the current level first,
+      // so the section that holds the gate is the one being planned.
+      placeUpTo(gate)
+      const old = speedOf(secTier)
+      level++
       plannedSlow = speedOf(0)
-      const ratio = old > 0 ? plannedSlow / old : 1
-      // The horizon is shorter than a slow section, so everything waiting beyond the
-      // boundary is in the slow section that starts there. Its placed items move with
-      // the fields; its phrases still to place keep their times and follow clearEnd.
-      const move = (d: number): number => (d > boundary ? boundary + (d - boundary) * ratio : d)
-      deps.rescaleItems(boundary, ratio)
+      const ratio = speedOf(secTier) / old
+      // A distance beyond the gate keeps its time from the gate at the next level's speed.
+      const move = (d: number): number => gate + (d - gate) * ratio
+      // The placed items beyond the gate (the end of a phrase that reaches past it)
+      // move with the fields. The rest of this section runs at the next level's speed
+      // for the same seconds. Its phrases still to place all start beyond the gate and
+      // keep their times: planFrom becomes the distance those times count from at the
+      // new speed. The section keeps the mine budget its phrases were picked against.
+      deps.rescaleItems(gate, ratio)
       for (let i = 0; i < LOG; i++) {
         if (logEnd[i]! < 0) continue
-        logStart[i] = move(logStart[i]!)
-        logEnd[i] = move(logEnd[i]!)
-        if (logCue[i]! < Infinity) logCue[i] = move(logCue[i]!)
+        if (logStart[i]! > gate) logStart[i] = move(logStart[i]!)
+        if (logEnd[i]! > gate) logEnd[i] = move(logEnd[i]!)
+        if (logCue[i]! < Infinity && logCue[i]! > gate) logCue[i] = move(logCue[i]!)
       }
-      if (secStart >= boundary - 1e-6) {
-        // the section keeps the mine budget its phrases were picked against
-        const clear = move(clearEnd)
-        const budget = secBudget
-        frameSection(0, boundary)
-        clearEnd = clear
-        secBudget = budget
-      }
+      secEnd = move(secEnd)
+      planFrom = move(planFrom)
+      if (clearEnd > gate) clearEnd = move(clearEnd)
     },
 
     pressureAt(distance: number): Load {
@@ -597,7 +606,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
     },
 
     reset(): void {
-      restart()
+      restart(0)
       cycle = 0
       plannedBefore = 0
       first = true
@@ -606,7 +615,7 @@ export function createSequencer(deps: SequencerDeps): Sequencer {
       seq.update(0)
     },
 
-    stale: (): boolean => flight.tierSpeedOf(flight.level, 0) !== plannedSlow || flight.ease() !== plannedEase || flight.mode !== mode,
+    stale: (): boolean => flight.tierSpeedOf(level, 0) !== plannedSlow || flight.ease() !== plannedEase || flight.mode !== mode,
   }
   return seq
 }

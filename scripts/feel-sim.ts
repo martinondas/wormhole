@@ -144,7 +144,7 @@ const DT = 1 / 60
 // --- speed01 -------------------------------------------------------------------
 {
   const f = createFlight()
-  f.update(0, 0)
+  f.update(0)
   const lo = f.tierSpeedOf(0, 0)
   const hi = f.tierSpeedOf(0, 2)
   check('E1 speed01: 0 at the slow tier, 1 at the fast tier, clamped outside',

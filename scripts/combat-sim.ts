@@ -458,7 +458,7 @@ withConfig(ENEMY, { ENGAGE_TIME: 999 }, () => {
       }
       check('K4 pressure 2: the hunter holds fire and no wave starts', tells === 0 && maxAlive === 1 && !r.enemies.waveActive, `tells=${tells} alive=${maxAlive}`)
     }
-    // fire hold (a cycle boundary is near): no tell starts while it is on, fire resumes after
+    // fire hold (a level gate or the fast-to-slow boundary is near): no tell starts while it is on, fire resumes after
     {
       let tells = 0
       const r = makeRig({ ...HARMLESS, onChargeStart: () => tells++ }, 0)
