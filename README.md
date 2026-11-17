@@ -53,6 +53,9 @@ You only steer and shoot. Everything else flows from the swing.
 - Avoid **red spiky mines** - a hit costs one of your ships, with brief
   invulnerability after. Mines sit beside the gem lines, never on them: the gems mark
   the clear way through. A run opens with a short stretch without mines.
+  You can also shoot a mine: it explodes and destroys everything near it - raiders,
+  other mines, gems, orbs and crosses - and costs you a ship if you are too close.
+  A blast pays nothing, so shoot a mine early, or steer around it.
 - Lost ships are won back by fighting. Every raider you destroy leaves a **small green
   cross** on the wall ahead. Ride into it; a cross you miss is gone. While a ship is
   missing, each cross fills a segment of the green bar next to your ships, and a full
