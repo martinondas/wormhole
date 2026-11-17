@@ -140,7 +140,7 @@ function buildDeltaHull(): BufferGeometry {
   // main wing: a 3-sided prism (triangle in plan view), nose vertex forward
   const wing = new CylinderGeometry(2.1, 2.1, 0.24, 3)
   wing.rotateY(Math.PI) // put the leading vertex on -Z
-  wing.scale(1, 1, 1.6) // stretch nose-to-tail into a slim arrow
+  wing.scale(1.19, 1, 1.6) // as wide as the other hulls (shared hit windows), stretched nose-to-tail into an arrow
   parts.push(wing)
 
   // central spine (raised fuselage ridge) + cockpit bubble
@@ -157,7 +157,7 @@ function buildDeltaHull(): BufferGeometry {
     const fin = new BoxGeometry(0.07, 0.9, 1.05)
     fin.translate(0, 0.5, 0)
     fin.rotateZ(-side * 0.2)
-    fin.translate(side * 1.15, 0.12, 1.25)
+    fin.translate(side * 1.37, 0.12, 1.25)
     parts.push(fin)
   }
 
@@ -165,7 +165,7 @@ function buildDeltaHull(): BufferGeometry {
   for (const side of [-1, 1]) {
     const engine = new CylinderGeometry(0.24, 0.21, 1.4, 8)
     engine.rotateX(Math.PI / 2)
-    engine.translate(side * 0.85, -0.06, 1.55)
+    engine.translate(side * 1.0, -0.06, 1.55)
     parts.push(engine)
   }
 
