@@ -57,7 +57,7 @@ You only steer and shoot. Everything else flows from the swing.
   cross** on the wall ahead. Ride into it; a cross you miss is gone. While a ship is
   missing, each cross fills a segment of the green bar next to your ships, and a full
   bar gives a ship back. With all ships intact a cross pays score instead. The last
-  raider of some fully destroyed squads leaves a **large green cross** that restores a
+  raider of some fully destroyed squads leaves a **large green cross with a ring around it** that restores a
   whole ship at once. Now and then a rare large green cross also appears on its own,
   far enough ahead to see it coming. Any green cross also tops up the weapon a little. The bar is
   short in the first levels and grows longer in deeper ones.

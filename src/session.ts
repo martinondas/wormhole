@@ -230,7 +230,7 @@ export function createSession(fx: SessionFx = {}): Session {
   // LIVES.START; at full lives the cross pays score instead. A feed field, filled by
   // destroyed squads (dropShard) and by the bonus cross (dropBonus).
   const crosses = makeField(
-    createExtraLife,
+    () => createExtraLife(EXTRA_LIFE.SCALE, true),
     EXTRA_LIFE,
     () => {
       if (game.over) return false

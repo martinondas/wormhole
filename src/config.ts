@@ -391,6 +391,10 @@ export const EXTRA_LIFE = {
   FULL_SCORE: 750,    // points for a cross caught at full lives (x the level multiplier)
   CHARGE: 20,         // weapon charge a caught cross returns
   GROW_TIME: 0.35,    // a dropped cross grows in over this long, like a shard
+  SCALE: 1.4,         // size of the whole-life cross (the life shard is the same cross at LIFE_SHARD.SCALE)
+  // A halo ring around the whole-life cross, so it is told apart from a shard at a
+  // glance: inner and outer radius in arm lengths, and how far it breathes in and out.
+  RING: { INNER: 1.5, OUTER: 1.75, PULSE_AMP: 0.14, LINE_WIDTH: 3.2 },
   ARM: 0.85,          // half-length of each cross arm (world units)
   THICK: 0.30,        // half-thickness of the arm bars
   DEPTH: 0.30,        // half-depth along z (a chunky 3D cross, not a flat sign)
@@ -429,7 +433,7 @@ export const LIFE_SHARD = {
   PER_LIFE_HOLD: 2,   // tuning levels that keep the base set before it grows
   PER_LIFE_STEP: 1.5, // extra shards per tuning level past the hold
   PER_LIFE_MAX: 20,   // the set never grows past this, so one catch stays a visible step of the bar
-  SCALE: 0.6,         // size relative to the extra-life cross
+  SCALE: 0.6,         // size of a shard: the extra-life cross geometry at this scale
   COUNT: 8,           // pool size; a kill with the pool empty drops nothing
   LEAD_SECONDS: 1.2,  // a shard never appears closer than this much flight time ahead, so there is time to swing back for it
   FULL_SCORE: 110,    // points for a shard caught at full lives (x the level multiplier)
@@ -762,7 +766,7 @@ export const INPUT = {
 // offline build self-contained and fit the vector look - see audio.ts SYNTHS.
 export const AUDIO = {
   MASTER_VOLUME: 0.9,
-  MUSIC_VOLUME: 0.5,
+  MUSIC_VOLUME: 0.35,
   SFX_VOLUME: 0.85,
   MUTE_RAMP: 0.05,     // seconds to ramp the music gain on the M mute toggle
   // Looping music tracks. 'menu' plays on the title + game-over screens, 'play'
@@ -796,5 +800,6 @@ export const AUDIO = {
     loop:      { synth: 'loop',      volume: 1.1 },  // a loop over the top
     whoosh:    { synth: 'whoosh',    volume: 0.6 },  // a mine near miss (panned)
     waveClear: { synth: 'waveClear', volume: 0.6 },  // a raider wave cleared
+    cross:     { synth: 'cross',     volume: 0.8 },  // a whole-life cross appeared ahead (panned)
   },
 }

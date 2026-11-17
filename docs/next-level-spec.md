@@ -195,7 +195,11 @@ aims less well than a bot with an empty gun.
   squads. Now both exist. The bonus cross is the rare form of the timed life above, too rare to
   live on. We measured several intervals with the bot that never shoots and with bots of three
   skill levels. Chosen: the shortest interval at which the never-shooting bot still cannot live
-  on it and the skilled bot is not harder to kill. Open: no person has played it yet.
+  on it and the skilled bot is not harder to kill.
+- 2026-11 - Telling the two crosses apart. The large cross was the same shape as the small one,
+  only bigger, and the owner could not tell which was coming until after the catch. Chosen: the
+  large cross has a halo ring that breathes around it and plays a short rising cue when it
+  appears, so the player knows to go for it.
 - 2026-11 - One fixed number of crosses per life could not serve both the average and the
   skilled bot: either the skilled bot became close to unkillable or the average bot got
   nothing. Chosen: the set grows with the level. The owner asked for the early set to stay small.

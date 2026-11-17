@@ -142,8 +142,9 @@ The craft's position is an angle `theta` around the circular cross-section of th
   than a fighter.
 - The gem gate can still make a player repeat an early level by a narrow margin. Open if it annoys.
 - Far raiders are small at deep-level speeds.
-- Not judged by a person yet: the bonus cross, and the newer sound cues (a cross caught at full
-  lives, the large cross). Not tested since the latest work: Safari, and the 5K iMac target.
+- Not judged by a person yet: the halo ring and the arrival cue of the large cross, and the
+  cue for a cross caught at full lives. Not tested since the latest work: Safari, and the 5K
+  iMac target.
 - `@types/node` is not installed, because this worktree shares `node_modules` with the main
   checkout. `scripts/node-shim.d.ts` stands in for it.
 - Backlog ideas, none decided: a CRT scanline toggle, a continuous engine hum, full-loop tube

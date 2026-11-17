@@ -110,6 +110,7 @@ const fx: SessionFx = {
   },
   // a shard or cross caught at full lives paid score: the top step of the shard tone
   bonusCollected: () => audio.play('shard', 0, 1, 1),
+  crossDropped: (theta) => audio.play('cross', sideOf(theta)),
   // a life was lost (never fires during i-frames, so a graze stays silent): the
   // explosion cue, a red hull flash, and a red burst at the impact point (the mine's
   // own position, or the ship for a ram / enemy bolt).

@@ -197,6 +197,13 @@ export function createAudio(): Audio {
       blip(out, now, 'sine', 1047, 1047, 0.22, 0.5)
       blip(out, now + 0.14, 'sine', 1568, 1568, 0.38, 0.5)
     },
+    // a whole-life cross appeared ahead: three soft rising notes (G5 C6 E6), a call
+    // to go and get it, softer than the 1-up that catching it plays
+    cross(out, now) {
+      blip(out, now, 'sine', 784, 784, 0.12, 0.5)
+      blip(out, now + 0.1, 'sine', 1047, 1047, 0.12, 0.5)
+      blip(out, now + 0.2, 'sine', 1319, 1319, 0.3, 0.5)
+    },
     enemyFire(out, now) { blip(out, now, 'sawtooth', 620, 180, 0.13, 0.6) },
     kill(out, now) { blip(out, now, 'square', 720, 110, 0.22, 0.7) },
     // dull dry-fire "tock": a short low square drop, no pitch reward - reads as an
