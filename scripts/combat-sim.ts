@@ -5,9 +5,10 @@
 //        leaves, and that passive flight scores nothing;
 //   H-L  the raiders as a group: fire slots, charge tells, waves at several tuning
 //        levels, the hunter, formations and depth lanes;
-//   M-N  life shards, squad crosses and the bonus cross, in the real session.
-import { PHYSICS, SPEED, SHIP, GUN, ENEMY, LEVELS, LIVES, LIFE_SHARD, EXTRA_LIFE } from '../src/config'
-import { createSession } from '../src/session'
+//   M-N  life shards, squad crosses and the bonus cross, in the real session;
+//   O    mines that explode when shot: the blast rule, chains, and the squad count.
+import { PHYSICS, SPEED, SHIP, GUN, ENEMY, LEVELS, LIVES, LIFE_SHARD, EXTRA_LIFE, BLAST, HAZARD } from '../src/config'
+import { createSession, type FieldKind, type SessionFx } from '../src/session'
 import { createCraft, updateCraft, type CraftState } from '../src/craft'
 import { createGame, type Game } from '../src/game'
 import { createGun, type Gun } from '../src/gun'
@@ -62,7 +63,7 @@ function step(r: Rig, fireHeld: boolean, opts: { integrate?: boolean } = {}): vo
   if (shot.fire) r.projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)
   r.enemies.update(r.craft, dt)
   r.projectiles.update(dt, {
-    tryKillEnemy: (t, z) => r.enemies.tryKill(t, z),
+    strike: (t, z) => r.enemies.tryKill(t, z),
     shipTheta: r.craft.theta,
     onShipHit: () => r.game.hitHazard(),
   })
@@ -298,7 +299,7 @@ quickWaves(() => {
     const shot = gun.tryFire(craft, game, dt, i % (PHYSICS.HZ * 4) < PHYSICS.HZ / 2) // fire 0.5 s in every 4 s
     if (shot.fire) projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)
     enemies.update(craft, dt)
-    projectiles.update(dt, { tryKillEnemy: (t, z) => enemies.tryKill(t, z), shipTheta: 9, onShipHit: () => false })
+    projectiles.update(dt, { strike: (t, z) => enemies.tryKill(t, z), shipTheta: 9, onShipHit: () => false })
     charging.length = 0
     enemies.visit((theta, _z, _phase, charge01) => {
       if (charge01 > 0) charging.push(theta)
@@ -376,7 +377,7 @@ quickWaves(() => {
       const shot = r.gun.tryFire(r.craft, r.game, dt, i % (PHYSICS.HZ * 3) < PHYSICS.HZ * 1.5)
       if (shot.fire) r.projectiles.spawn('player', shot.theta, SHIP.Z, -GUN.BOLT_SPEED)
       r.enemies.update(r.craft, dt)
-      r.projectiles.update(dt, { tryKillEnemy: (t, z) => r.enemies.tryKill(t, z), shipTheta: r.craft.theta, onShipHit: () => false })
+      r.projectiles.update(dt, { strike: (t, z) => r.enemies.tryKill(t, z), shipTheta: r.craft.theta, onShipHit: () => false })
       let alive = 0
       r.enemies.visit((_theta, z) => {
         alive++
@@ -682,5 +683,366 @@ withConfig(EXTRA_LIFE, { BONUS_EVERY: [5, 8] }, () => {
   s.fieldByKind.life.visit(() => onWall++)
   check('N1 a bonus cross appears inside BONUS_EVERY, at least BONUS_LEAD_SECONDS of flight ahead', at >= 5 && at <= 8.1 && onWall === 1 && ahead >= s.craft.speed * EXTRA_LIFE.BONUS_LEAD_SECONDS - 2, `at=${at.toFixed(1)}s ahead=${ahead.toFixed(1)} on the wall=${onWall}`)
 })
+
+// ---- O) mines that explode when shot (config BLAST), in the real session ----
+// No wave and no bonus cross during the checks (FIRST_DELAY 999, BONUS_EVERY 1e9);
+// staged raiders hold their place and their fire (STRAFE_AMP 0, FIRE_COOLDOWN 999).
+// Each case starts from a fresh run with the gem lines taken off the wall, then
+// places its own objects. The craft rests at the bottom (theta 0) unless `hold` is set.
+interface BlastRig {
+  s: ReturnType<typeof createSession>
+  input: { steerTarget: number; fire: boolean }
+  detonations: { z: number; link: number; at: number }[]
+  blasted: Partial<Record<FieldKind, number>>
+  count: { raidersBlasted: number; kills: number; shards: number; crosses: number; gemsMissed: number; mineHits: number; blastHits: number; blastBlocked: number }
+  hold: number
+  tick(): void
+  shoot(): void // one bolt down the craft's line; returns once it set a mine off (or after 1 s)
+  run(seconds: number): void
+  mineAhead(theta: number, ahead: number): void
+  live(kind: FieldKind): number
+}
+function blastRig(): BlastRig {
+  const detonations: BlastRig['detonations'] = []
+  const blasted: BlastRig['blasted'] = {}
+  const count = { raidersBlasted: 0, kills: 0, shards: 0, crosses: 0, gemsMissed: 0, mineHits: 0, blastHits: 0, blastBlocked: 0 }
+  const fx: SessionFx = {
+    mineDetonated: (_theta, z, link) => detonations.push({ z, link, at: s.game.elapsed }),
+    raiderBlasted: () => count.raidersBlasted++,
+    pickupBlasted: (kind) => (blasted[kind] = (blasted[kind] ?? 0) + 1),
+    enemyKilled: () => count.kills++,
+    shardDropped: () => count.shards++,
+    crossDropped: () => count.crosses++,
+    gemMissed: () => count.gemsMissed++,
+    damaged: (cause) => {
+      if (cause === 'mine') count.mineHits++
+      if (cause === 'blast') count.blastHits++
+    },
+    hitBlocked: (cause) => {
+      if (cause === 'blast') count.blastBlocked++
+    },
+  }
+  const s = createSession(fx)
+  s.reset()
+  s.begin()
+  s.fieldByKind.gem.reset(s.craft.distance)
+  s.fieldByKind.mine.reset(s.craft.distance)
+  const input = { steerTarget: 0, fire: false }
+  const advance = driveSession(s, input)
+  const rig: BlastRig = {
+    s,
+    input,
+    detonations,
+    blasted,
+    count,
+    hold: 0,
+    tick: () => {
+      s.craft.theta = rig.hold
+      s.craft.omega = 0
+      advance()
+    },
+    shoot: () => {
+      const before = detonations.length
+      input.fire = true
+      rig.tick()
+      input.fire = false
+      for (let i = 0; i < PHYSICS.HZ && detonations.length === before && !s.game.over; i++) rig.tick()
+    },
+    run: (seconds) => {
+      for (let i = 0; i < PHYSICS.HZ * seconds && !s.game.over; i++) rig.tick()
+    },
+    mineAhead: (theta, ahead) => {
+      s.fieldByKind.mine.spawn(s.craft.distance + ahead, theta)
+    },
+    live: (kind) => {
+      let n = 0
+      s.fieldByKind[kind].visit(() => n++)
+      return n
+    },
+  }
+  return rig
+}
+const playerBolts = (r: BlastRig): number => {
+  let n = 0
+  r.s.projectiles.visit((side) => {
+    if (side === 'player') n++
+  })
+  return n
+}
+withConfig(EXTRA_LIFE, { BONUS_EVERY: [1e9, 1e9] }, () => withConfig(ENEMY, { STRAFE_AMP: 0, FIRE_COOLDOWN: 999 }, () => withConfig(ENEMY.WAVE, { FIRST_DELAY: 999 }, () => {
+  seedRng(31)
+  const AHEAD = 40 // a mine shot from here goes off well outside the blast radius
+  const NEAR = 5 // ... and from here inside it, before the ship touches the mine
+  let zDet = 0 // where a mine shot from AHEAD goes off (ship-relative)
+
+  // a shot detonates a mine, the bolt is used up, nothing is paid, the far ship is safe
+  {
+    const r = blastRig()
+    const { game } = r.s
+    r.mineAhead(0, AHEAD)
+    const energy0 = game.energy
+    r.shoot()
+    const boltsLeft = playerBolts(r)
+    zDet = r.detonations[0]?.z ?? 0
+    check('O1 a player bolt detonates a mine and is used up', r.detonations.length === 1 && r.detonations[0]!.link === 0 && r.live('mine') === 0 && boltsLeft === 0, `detonations=${r.detonations.length} z=${zDet.toFixed(1)} mines left=${r.live('mine')} bolts left=${boltsLeft}`)
+    check('O2 a shot mine pays nothing, and a blast outside the radius does not hurt the ship', game.score() === 0 && game.energy === energy0 - GUN.COST && game.lives === LIVES.START && -zDet > BLAST.RADIUS, `score=${game.score()} charge ${energy0} -> ${game.energy} lives=${game.lives}`)
+  }
+
+  // raiders: inside the radius destroyed and unpaid, outside (along the tube, or around the wall) untouched
+  {
+    const r = blastRig()
+    const { game, enemies } = r.s
+    r.mineAhead(0, AHEAD)
+    r.tick() // the raiders are staged relative to the craft of this step
+    enemies.debugStage(0.6, zDet, 0) // inside: 0.6 rad of arc beside the mine
+    enemies.debugStage(0.6, zDet - BLAST.RADIUS - 4, 1) // outside along the tube
+    enemies.debugStage(Math.PI, zDet, 2) // outside around the wall
+    const energy0 = game.energy
+    r.shoot()
+    r.run(0.5)
+    let left = 0
+    enemies.visit(() => left++)
+    check('O3 a blast destroys the raider inside the radius and no raider outside it', r.detonations.length === 1 && r.count.raidersBlasted === 1 && left === 2, `detonations=${r.detonations.length} blasted=${r.count.raidersBlasted} raiders left=${left}`)
+    check('O4 a raider destroyed by a blast pays no score, no charge, no shard and no cross', game.score() === 0 && game.energy === energy0 - GUN.COST && r.count.kills === 0 && enemies.killed === 0 && r.count.shards === 0 && r.count.crosses === 0, `score=${game.score()} charge ${energy0} -> ${game.energy} kills=${r.count.kills} shards=${r.count.shards} crosses=${r.count.crosses}`)
+  }
+
+  // a chain: every link goes off in the step of the shot
+  {
+    const r = blastRig()
+    r.mineAhead(0, AHEAD)
+    r.mineAhead(0.6, AHEAD + 4) // inside the blast of the first
+    r.mineAhead(1.2, AHEAD + 8) // inside the blast of the second only
+    r.mineAhead(Math.PI, AHEAD) // out of reach of all three
+    r.shoot()
+    const atShot = r.detonations.length
+    r.run(1)
+    const d = r.detonations
+    check(
+      'O5 a shot sets off the whole chain in the same step, link by link, and no mine beyond',
+      atShot === 3 && d.length === 3 && d.map((x) => x.link).join() === '0,1,2' && d.every((x) => x.at === d[0]!.at) && r.live('mine') === 1,
+      `detonations at the shot=${atShot} later=${d.length - atShot} links=${d.map((x) => x.link).join()} mines left=${r.live('mine')}`,
+    )
+  }
+
+  // pickups: inside destroyed (a gem counts as missed), outside untouched
+  {
+    const r = blastRig()
+    const { craft, game, fieldByKind } = r.s
+    const wd = craft.distance + AHEAD
+    r.mineAhead(0, AHEAD)
+    fieldByKind.gem.spawn(wd + 2, 0.5)
+    fieldByKind.gem.spawn(wd + BLAST.RADIUS + 6, 0.5)
+    fieldByKind.shard.spawn(wd - 2, -0.5)
+    fieldByKind.life.spawn(wd, 0.9)
+    fieldByKind.life.spawn(wd, Math.PI)
+    r.shoot()
+    check(
+      'O6 a blast destroys the gem, shard and cross inside its radius and none outside',
+      r.blasted.gem === 1 && r.blasted.shard === 1 && r.blasted.life === 1 && r.live('gem') === 1 && r.live('shard') === 0 && r.live('life') === 1,
+      `blasted gem/shard/cross=${r.blasted.gem}/${r.blasted.shard}/${r.blasted.life} left=${r.live('gem')}/${r.live('shard')}/${r.live('life')}`,
+    )
+    check('O7 a gem destroyed by a blast is a missed gem and pays nothing', r.count.gemsMissed === 1 && game.score() === 0 && game.gemsThisLevel === 0, `missed=${r.count.gemsMissed} score=${game.score()}`)
+  }
+
+  // an orb (a random field: a destroyed orb is laid out again at the far end)
+  {
+    const r = blastRig()
+    const { craft, fieldByKind } = r.s
+    let orbTheta = 0
+    let orbWd = Infinity
+    fieldByKind.orb.visit((theta, wd) => {
+      if (wd - craft.distance > 30 && wd < orbWd) {
+        orbWd = wd
+        orbTheta = theta
+      }
+    })
+    const orbThere = (): boolean => {
+      let there = false
+      fieldByKind.orb.visit((theta, wd) => {
+        if (wd === orbWd && theta === orbTheta) there = true
+      })
+      return there
+    }
+    const before = orbThere()
+    r.hold = orbTheta + 0.5
+    r.mineAhead(r.hold, orbWd - craft.distance)
+    r.shoot()
+    check('O8 a blast destroys an orb inside its radius', before && r.blasted.orb === 1 && !orbThere(), `there before=${before} blasted=${r.blasted.orb} there after=${orbThere()}`)
+  }
+
+  // the ship inside the radius loses a life; i-frames block the next blast
+  {
+    const r = blastRig()
+    const { game } = r.s
+    r.mineAhead(0, NEAR)
+    r.shoot()
+    const first = { hits: r.count.blastHits, lives: game.lives, z: r.detonations[0]?.z ?? 0 }
+    r.run(GUN.COOLDOWN)
+    r.mineAhead(0, NEAR)
+    r.shoot()
+    check('O9 a mine shot at point-blank range costs a life (cause: blast)', first.hits === 1 && first.lives === LIVES.START - 1 && -first.z < BLAST.RADIUS && r.count.mineHits === 0, `z=${first.z.toFixed(1)} blast hits=${first.hits} lives=${first.lives}`)
+    check('O10 a second blast inside the i-frames costs nothing', r.detonations.length === 2 && r.count.blastBlocked === 1 && game.lives === LIVES.START - 1, `detonations=${r.detonations.length} blocked=${r.count.blastBlocked} lives=${game.lives}`)
+  }
+
+  // An enemy bolt passes through a mine. The bolt starts 5 u beyond the mine on its
+  // line and overtakes it within the run (ENEMY.BULLET_SPEED is above the craft's
+  // speed), so this fails if enemy bolts are ever wired to the mines' strike.
+  // Riding into a mine is a plain mine hit.
+  {
+    const r = blastRig()
+    const { projectiles, game } = r.s
+    r.mineAhead(1.5, 25)
+    projectiles.spawn('enemy', 1.5, -30, ENEMY.BULLET_SPEED)
+    r.run(0.4)
+    check('O11 an enemy bolt does not detonate a mine', r.detonations.length === 0 && game.lives === LIVES.START, `detonations=${r.detonations.length}`)
+    r.mineAhead(0, 10)
+    r.run(0.4)
+    check('O12 riding into a mine costs a life without a blast', r.detonations.length === 0 && r.count.mineHits === 1 && r.count.blastHits === 0, `detonations=${r.detonations.length} mine hits=${r.count.mineHits}`)
+  }
+
+  // the mines of a chain are off the wall in the step of the shot: their pool slots
+  // and their places are free at once (how long the blast is drawn is not the game's business)
+  {
+    const r = blastRig()
+    const { craft, fieldByKind } = r.s
+    r.mineAhead(0, AHEAD)
+    r.mineAhead(0.6, AHEAD + 4)
+    r.mineAhead(1.2, AHEAD + 8)
+    r.shoot()
+    const left = r.live('mine')
+    const taken = fieldByKind.mine.occupies(craft.distance + AHEAD, 0)
+    let spawned = 0
+    for (let i = 0; i < HAZARD.COUNT; i++) if (fieldByKind.mine.spawn(craft.distance + 60 + i * 20, Math.PI)) spawned++
+    check('O13 detonated mines free their places and pool slots in the step of the shot', left === 0 && !taken && spawned === HAZARD.COUNT, `mines left=${left} place taken=${taken} spawned=${spawned}/${HAZARD.COUNT}`)
+  }
+  {
+    const r = blastRig()
+    const { game } = r.s
+    game.lives = 1
+    r.mineAhead(0, NEAR)
+    r.shoot() // the blast ends the run
+    const over = game.over
+    const before = r.detonations.length
+    r.s.reset()
+    r.s.begin()
+    r.run(1)
+    check('O14 a run ended by a blast resets to a clean run', over && before === 1 && r.detonations.length === 1 && game.lives === LIVES.START, `over=${over} detonations ${before} -> ${r.detonations.length}`)
+  }
+
+  // A chain is judged where the ship is when the bolt lands. A chain that runs
+  // toward the ship from a safe shot costs nothing ...
+  {
+    const r = blastRig()
+    const { game } = r.s
+    r.mineAhead(0, 26)
+    r.mineAhead(0.9, 21) // 5 u nearer, inside the blast of the first, outside the ship's reach
+    r.shoot()
+    r.run(1)
+    const d = r.detonations
+    check('O15 a chain toward the ship after a safe shot costs no life', d.length === 2 && d[1]!.link === 1 && r.count.blastHits === 0 && game.lives === LIVES.START, `detonations=${d.length} z=${d.map((x) => x.z.toFixed(1)).join('/')} lives=${game.lives}`)
+  }
+  // ... and one with a link inside the ship's reach at the shot costs one life, never two
+  {
+    const r = blastRig()
+    const { game } = r.s
+    r.mineAhead(0, 12)
+    r.mineAhead(0.6, 7) // a link 5 u nearer: inside the ship's reach when the bolt lands
+    r.mineAhead(-0.6, 7) // and a second one
+    r.shoot()
+    const d = r.detonations
+    const firstOutside = d.length > 0 && -d[0]!.z > BLAST.RADIUS
+    check('O16 a chain with links inside the radius of the ship at the shot costs exactly one life', d.length === 3 && firstOutside && r.count.blastHits === 1 && r.count.blastBlocked === 1 && game.lives === LIVES.START - 1, `detonations=${d.length} z=${d.map((x) => x.z.toFixed(1)).join('/')} blast hits=${r.count.blastHits} blocked=${r.count.blastBlocked} lives=${game.lives}`)
+  }
+
+  // bolt order: a raider is tested before a mine in the same step, so a raider right
+  // behind a mine takes the bolt; a mine clearly in front of a raider detonates
+  {
+    const r = blastRig()
+    r.mineAhead(0, AHEAD)
+    r.tick()
+    r.s.enemies.debugStage(0, zDet - 0.5, 0) // half a unit behind where the bolt meets the mine
+    r.shoot()
+    check('O17 a raider right behind a mine takes the bolt', r.count.kills === 1 && r.detonations.length === 0 && r.live('mine') === 1, `kills=${r.count.kills} detonations=${r.detonations.length}`)
+  }
+  {
+    const r = blastRig()
+    r.mineAhead(0, AHEAD)
+    r.tick()
+    r.s.enemies.debugStage(0, zDet - BLAST.RADIUS - 2, 0) // well behind the mine, outside its blast
+    r.shoot()
+    let left = 0
+    r.s.enemies.visit(() => left++)
+    check('O18 a mine clearly in front of a raider detonates and shields it', r.detonations.length === 1 && r.count.kills === 0 && r.count.raidersBlasted === 0 && left === 1, `detonations=${r.detonations.length} kills=${r.count.kills} blasted=${r.count.raidersBlasted} raiders left=${left}`)
+  }
+})))
+
+// The squad count: a raider destroyed by a blast is lost to its squad like one that
+// got away, so the squad is not "destroyed" (no last kill), and the wave still ends.
+// The next squad, killed by the gun alone, is.
+quickWaves(() => {
+  seedRng(32)
+  let kills = 0
+  let lastKills = 0
+  let blasted = 0
+  const r = makeRig(
+    {
+      ...HARMLESS,
+      spawnEnemyBolt: () => {},
+      onKill: (_theta, _z, last) => {
+        kills++
+        if (last) lastKills++
+      },
+      onBlasted: () => blasted++,
+    },
+    2,
+  )
+  r.enemies.setMaxActive(waveAliveCap(2))
+  // Destroys every member of the next wave as it appears: the first one with a blast
+  // (if asked), the others with a dead-center bolt hit. True once the wave has ended.
+  const clearWave = (blastFirst: boolean): boolean => {
+    let started = false
+    let useBlast = blastFirst
+    for (let i = 0; i < PHYSICS.HZ * 60; i++) {
+      step(r, false, { integrate: false })
+      if (r.enemies.waveActive) started = true
+      else if (started) return true
+      let kt = NaN
+      let kz = NaN
+      r.enemies.visit((theta, z) => {
+        if (z < -8 && Number.isNaN(kt)) {
+          kt = theta
+          kz = z
+        }
+      })
+      if (Number.isNaN(kt)) continue
+      if (useBlast) r.enemies.blast(kt, kz)
+      else r.enemies.tryKill(kt, kz)
+      useBlast = false
+    }
+    return false
+  }
+  const ended1 = clearWave(true)
+  const wave1 = { kills, lastKills, blasted }
+  const ended2 = clearWave(false)
+  check('O19 a squad that lost a member to a blast is not a destroyed squad, and its wave ends', ended1 && wave1.blasted === 1 && wave1.kills === waveRoster(2) - 1 && wave1.lastKills === 0, `ended=${ended1} blasted=${wave1.blasted} kills=${wave1.kills} last kills=${wave1.lastKills}`)
+  check('O20 the next squad, killed by the gun alone, is destroyed', ended2 && lastKills === 1 && r.enemies.killed === kills, `ended=${ended2} last kills=${lastKills} kills=${kills}`)
+})
+
+// A blast reaches only what has not passed the ship: a raider behind the ship's
+// contact window (ENEMY.RAM_Z) survives a blast that destroys one just ahead.
+withConfig(ENEMY, { STRAFE_AMP: 0, FIRE_COOLDOWN: 999 }, () => withConfig(ENEMY.WAVE, { FIRST_DELAY: 999 }, () => {
+  let blasted = 0
+  const r = makeRig({ ...HARMLESS, onBlasted: () => blasted++ })
+  r.enemies.debugStage(1.5, ENEMY.RAM_Z + 0.4, 0) // behind the ship, off its line
+  r.enemies.debugStage(1.5, -2, 1) // ahead
+  r.enemies.blast(1.5, 0) // both are inside the radius
+  let left = 0
+  let leftZ = NaN
+  r.enemies.visit((_theta, z) => {
+    left++
+    leftZ = z
+  })
+  check('O21 a blast does not destroy a raider that has passed the ship', blasted === 1 && left === 1 && leftZ > 0, `blasted=${blasted} left=${left} at z=${leftZ.toFixed(1)}`)
+}))
 
 finish('COMBAT SIM')

@@ -18,7 +18,7 @@ function table(head: string[], rows: string[][]): string {
 export function summaryTable(results: Aggregate[]): string {
   const head = [
     'bot', 'mode', 'runs', 'time med (p10-p90)', 'level med (p10-p90)', 'score med', 'cap%',
-    'hits/min', 'death mine/bolt/ram', 'gem%', 's/level', 'empty%', 'acc%', 'kills/min',
+    'hits/min', 'death mine/bolt/ram/blast', 'gem%', 's/level', 'empty%', 'acc%', 'kills/min',
     'bolts aimed/tell/hit', 'raiders (4+)', 'dead air', 'flat/quiet', 'lives+', 'bottom/upper', 'loops', 'rev/min',
   ]
   const rows = results.map((a) => {
@@ -32,7 +32,7 @@ export function summaryTable(results: Aggregate[]): string {
       f0(g('score').median),
       pct(g('capped').mean),
       f2(g('hitsPerMin').mean),
-      `${pct(a.deathCauses.mine ?? 0)}/${pct(a.deathCauses.bolt ?? 0)}/${pct(a.deathCauses.ram ?? 0)}`,
+      `${pct(a.deathCauses.mine ?? 0)}/${pct(a.deathCauses.bolt ?? 0)}/${pct(a.deathCauses.ram ?? 0)}/${pct(a.deathCauses.blast ?? 0)}`,
       pct(g('gemShare').mean),
       g('secondsPerLevel').n > 0 ? f1(g('secondsPerLevel').mean) : '-',
       pct(g('emptyGunShare').mean),
@@ -105,7 +105,7 @@ export function levelTable(a: Aggregate, maxRows = 20): string {
 // bad: the reader decides, since easier is not always better).
 const COMPARE: [ScalarKey, (x: number) => string][] = [
   ['time', f0], ['level', f1], ['score', f0], ['hitsPerMin', f2], ['timeToFirstHit', f0],
-  ['livesLostMine', f2], ['livesLostBolt', f2], ['livesLostRam', f2],
+  ['livesLostMine', f2], ['livesLostBolt', f2], ['livesLostRam', f2], ['livesLostBlast', f2],
   ['secondsPerLevel', f1], ['gateSeconds', f1], ['gemShare', pct], ['emptyGunShare', pct], ['accuracy', pct], ['killsPerMin', f2],
   ['boltsAtPlayer', f0], ['boltsAimedShare', pct], ['tellsAimedShare', pct], ['boltsHitShare', pct],
   ['raidersMean', f2], ['raiders4PlusShare', pct], ['deadAirLongest', f1], ['deadAirShare', pct],
@@ -114,6 +114,7 @@ const COMPARE: [ScalarKey, (x: number) => string][] = [
   ['killDistanceMedian', f1], ['killsBeyond60Share', pct], ['clumpShare', pct], ['tellToArrivalMin', f2],
   ['lifeBalance', f2], ['shardsDropped', f1], ['shardsCaught', f1], ['shardCatchShare', pct], ['livesFromShards', f2], ['crossesDropped', f1], ['crossesCaught', f1], ['chainHits', f2], ['gemChainMedian', f1], ['gemChainMax', f1],
   ['nearMissPerMin', f2], ['loopsPerMin', f2], ['wavesClearedPerMin', f2], ['raiderFreeShare', pct], ['boltMinePerMin', f2],
+  ['minesShot', f1], ['minesChained', f1], ['raidersBlasted', f1], ['gemsBlasted', f1],
 ]
 
 export function compareTable(baseline: Aggregate[], current: Aggregate[]): string {

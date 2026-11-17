@@ -4,9 +4,10 @@ import { createStarfield } from './render/stars'
 import { createTube } from './world/tube'
 import { createShip } from './world/ship'
 import { createBurst } from './world/burst'
+import { createBlastFx, type RGB } from './world/blastFx'
 import { createGate } from './world/gate'
 import { Input } from './input'
-import { createSession, type DamageCause, type SessionFx } from './session'
+import { createSession, type DamageCause, type PickupKind, type SessionFx } from './session'
 import { seedRng } from './util/rng'
 import { createHud } from './hud'
 import { createMenu } from './menu'
@@ -15,7 +16,7 @@ import { createPerfOverlay } from './render/perf'
 import { startLoop, createHitStop } from './loop'
 import { createShake } from './render/shake'
 import { angleDiff } from './util/math'
-import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE, GATE } from './config'
+import { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BLAST, BLAST_FX, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE, GATE } from './config'
 
 const container = document.getElementById('app')
 if (!container) throw new Error('#app container not found')
@@ -46,6 +47,11 @@ const hud = createHud()
 const burst = createBurst()
 stage.scene.add(burst.object)
 stage.onResize((w, h) => burst.setResolution(w, h))
+
+// The look of a mine blast: rim, wave, mine shards, debris of what it destroyed.
+const blastFx = createBlastFx()
+stage.scene.add(blastFx.object)
+stage.onResize((w, h) => blastFx.setResolution(w, h))
 
 // The level gate: the ring that comes out of the fog once the gem quota is met.
 const gate = createGate()
@@ -133,10 +139,31 @@ const fx: SessionFx = {
     burst.spawn('kill', theta, z, craft.distance) // magenta detonation where the raider died
     shake.add(FEEL.SHAKE.KILL)
   },
+  // A mine went off (every link of a chain reports in the same step; blastFx and the
+  // sound hold each link back by its turn in the ripple).
+  mineDetonated: (theta, z, link) => {
+    blastFx.detonate(theta, craft.distance - z, link)
+    audio.play('blast', sideOf(theta), 1, link)
+    shake.add(link === 0 ? FEEL.SHAKE.BLAST : FEEL.SHAKE.BLAST_LINK)
+    if (link === 0) tube.flash(FEEL.TUBE_FLASH.PEAK * FEEL.BLAST_FLASH)
+  },
+  // a pickup the blast destroyed breaks into streaks of its own colour
+  pickupBlasted: (kind, theta, z) => blastFx.debris(theta, craft.distance - z, DEBRIS_RGB[kind], BLAST_FX.DEBRIS_PIECES),
+  // destroyed by the blast, not shot: dim streaks, no kill burst, no kill sound
+  raiderBlasted: (theta, z) => blastFx.debris(theta, craft.distance - z, RAIDER_DEBRIS_RGB, BLAST_FX.DEBRIS_RAIDER_PIECES),
   playerFired: () => audio.play('shoot'),
   dryFired: () => audio.play('empty'), // dull click: no charge to fire
   tierUp: () => audio.playAccel(),
 }
+// The colour of the streaks a blasted object breaks into: its own edge colour.
+const lit = (rgb: RGB, k: number): RGB => [rgb[0] * k, rgb[1] * k, rgb[2] * k]
+const DEBRIS_RGB: Record<PickupKind, RGB> = {
+  orb: lit(PICKUP.EDGE_RGB, BLAST_FX.DEBRIS_ORB_GAIN),
+  gem: lit(TREASURE.EDGE_RGB, BLAST_FX.DEBRIS_GAIN),
+  life: EXTRA_LIFE.EDGE_RGB, // already HDR green
+  shard: EXTRA_LIFE.EDGE_RGB,
+}
+const RAIDER_DEBRIS_RGB = lit(ENEMY.EDGE_RGB, BLAST_FX.DEBRIS_RAIDER_DIM)
 // Stereo side of something at `theta` relative to the craft: -1 left .. 1 right.
 const sideOf = (theta: number): number => Math.sin(angleDiff(theta, craft.theta))
 // Step of the shard tone for the `count`-th shard of a set: 0 for the first, 1 for
@@ -196,6 +223,7 @@ function returnToTitle(): void {
   lastLoopCue = -Infinity
   session.reset()
   burst.reset()
+  blastFx.reset()
   gate.reset()
   hitStop.reset()
   rig.reset()
@@ -292,6 +320,7 @@ startLoop(
     // gated on game-over (a final death-burst plays through) or debug.paused (the
     // SHOOT_BURST harness animates staged bursts under it).
     if (!paused) burst.update(frameDt, craft.distance)
+    if (!paused) blastFx.update(frameDt, craft.distance)
     if (!paused) gate.update(frameDt, craft.distance) // also on game-over, so a gate never freezes mid-fade
     // i-frame flicker: blink the ship while invulnerable so a hit reads clearly
     // (and so losing a life never feels random). Always visible once the run is
@@ -357,6 +386,7 @@ startLoop(
   enemies,
   projectiles,
   burst,
+  blastFx, // the mine blast look (WH.blastFx.detonate(theta, worldDistance, 0))
   gate, // the level gate ring
   ship, // the player hull (WH.ship.setHull("delta"))
   shake, // view shake (WH.shake.add(0.6) previews a hit jolt)
@@ -373,5 +403,5 @@ startLoop(
     seedRng(seed)
     returnToTitle()
   },
-  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE, GATE },
+  config: { PHYSICS, SPEED, FLIGHT, LEVELS, CAMERA, TUBE, SHIP, RENDER, PICKUP, TREASURE, HAZARD, BLAST, BLAST_FX, EXTRA_LIFE, BACKGROUND, ENERGY, LIVES, GUN, ENEMY, PROJECTILE, BURST, INPUT, AUDIO, DIFFICULTY, FEEL, SEQUENCE, GATE },
 }

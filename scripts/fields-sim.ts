@@ -47,8 +47,7 @@ function mk(opts: {
 // Violation probe: reconstruct field A's live object positions from its scene
 // graph (theta from x/y on the ride radius, worldDistance from the ship-relative
 // z), then ask field B whether it occupies that spot. Positions more than 15u
-// behind are skipped: a just-recycled slot's transform is stale for one step
-// (place() runs on its next update), and everything back there is out of play.
+// behind are skipped: everything back there is out of play.
 function violations(a: Field, b: Field, craftDistance: number): number {
   let n = 0
   for (const o of a.object.children) {

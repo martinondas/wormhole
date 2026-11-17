@@ -28,6 +28,8 @@ export interface Snapshot {
   t: number // sim time (s) the snapshot was taken
   dist: number // craft distance at that time
   speed: number // craft forward speed at that time
+  theta: number // craft angle at that time ...
+  omega: number // ... and its angular speed
   nObj: number
   objKind: Uint8Array
   objTheta: Float64Array
@@ -42,6 +44,9 @@ export interface Snapshot {
   boltTheta: Float64Array
   boltZ: Float64Array
   boltVz: Float64Array
+  nShot: number // the player's own bolts in flight (they detonate mines)
+  shotTheta: Float64Array
+  shotZ: Float64Array // ship-relative, negative = ahead
 }
 
 export function createSnapshot(): Snapshot {
@@ -49,6 +54,8 @@ export function createSnapshot(): Snapshot {
     t: 0,
     dist: 0,
     speed: 0,
+    theta: 0,
+    omega: 0,
     nObj: 0,
     objKind: new Uint8Array(MAX_OBJECTS),
     objTheta: new Float64Array(MAX_OBJECTS),
@@ -63,6 +70,9 @@ export function createSnapshot(): Snapshot {
     boltTheta: new Float64Array(MAX_BOLTS),
     boltZ: new Float64Array(MAX_BOLTS),
     boltVz: new Float64Array(MAX_BOLTS),
+    nShot: 0,
+    shotTheta: new Float64Array(MAX_BOLTS),
+    shotZ: new Float64Array(MAX_BOLTS),
   }
 }
 
@@ -92,7 +102,14 @@ export function createPerception(session: Session): Perception {
     cur.nEn++
   }
   const onBolt = (side: string, theta: number, z: number, vz: number): void => {
-    if (side !== 'enemy' || cur.nBolt >= MAX_BOLTS) return
+    if (side === 'player') {
+      if (cur.nShot >= MAX_BOLTS) return
+      cur.shotTheta[cur.nShot] = theta
+      cur.shotZ[cur.nShot] = z
+      cur.nShot++
+      return
+    }
+    if (cur.nBolt >= MAX_BOLTS) return
     cur.boltTheta[cur.nBolt] = theta
     cur.boltZ[cur.nBolt] = z
     cur.boltVz[cur.nBolt] = vz
@@ -104,9 +121,12 @@ export function createPerception(session: Session): Perception {
       out.t = t
       out.dist = session.craft.distance
       out.speed = session.craft.speed
+      out.theta = session.craft.theta
+      out.omega = session.craft.omega
       out.nObj = 0
       out.nEn = 0
       out.nBolt = 0
+      out.nShot = 0
       for (let i = 0; i < session.fields.length; i++) {
         kind = KIND_CODE[session.fieldKinds[i] ?? 'gem']
         session.fields[i]!.visit(onObj)

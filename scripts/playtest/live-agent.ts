@@ -117,7 +117,7 @@ const api = {
         if (!done) tap(...a) // the game runs on after the capture ends; the result must not
       }
     }
-    // event screenshots: the gate opening, near and passed (with the level headline), a loop, a hit, a raider's
+    // event screenshots: the gate opening, near and passed (with the level headline), a loop, a hit, a mine blast, a raider's
     // firing tell, a cleared wave, a life shard dropped / caught / completing a life,
     // each kind of gem line in each tier
     const shotOn: Record<string, (...a: unknown[]) => string> = {
@@ -129,6 +129,7 @@ const api = {
       loopCompleted: () => 'loop',
       damaged: (cause) => `hit-${String(cause)}`,
       mineNearMiss: () => 'nearmiss',
+      mineDetonated: (_theta, _z, link) => (Number(link) > 0 ? 'blast-chain' : 'blast'),
       enemyChargeStarted: () => 'charge',
       waveCleared: () => 'waveclear',
       shardDropped: () => 'shard-drop', // a killed raider left a life shard

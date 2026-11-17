@@ -22,7 +22,7 @@ export interface Gate {
 }
 
 export function createGate(): Gate {
-  const outer = TUBE.RADIUS * GATE.RADIUS
+  const outer = TUBE.RADIUS * TUBE.ON_WALL
   const inner = TUBE.RADIUS * GATE.INNER
   const positions: number[] = []
   const point = (r: number, a: number): void => {

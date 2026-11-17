@@ -7,6 +7,7 @@ import { rand, randRange } from '../util/rng'
 import { createEnemy, type Enemy } from './enemy'
 import { type Load } from './phrases'
 import { farScale } from './farScale'
+import { inBlast } from './blast'
 
 // The enemy pool, the per-enemy state machine and the wave director. NOT a Field: a
 // Field scrolls objects past at exactly the player's speed (fixed worldDistance), but
@@ -36,6 +37,7 @@ export interface EnemyDeps {
   onKill(theta: number, z: number, last: boolean): void
   onChargeStart?(theta: number, z: number): void // a raider started its firing tell (theta is the line it will fire down)
   onChip?(theta: number, z: number): void // a player bolt hit a raider without killing it
+  onBlasted?(theta: number, z: number): void // a mine blast destroyed a raider (no kill is paid)
 }
 
 export interface Enemies {
@@ -51,6 +53,10 @@ export interface Enemies {
   setPressure(p: Load): void
   setHoldFire(hold: boolean): void // while true no raider starts a firing tell (a level gate or the fast-to-slow boundary is near)
   tryKill(theta: number, z: number): boolean // a player bolt at (theta,z) - true if it struck an enemy
+  // The blast of a mine at (theta, z) destroys every live raider inside it that has
+  // not passed the ship. It is not a kill (no onKill), and for its squad the raider
+  // counts as one that got away, so a blast never completes a destroyed squad.
+  blast(theta: number, z: number): void
   setResolution(w: number, h: number): void
   reset(atDistance: number): void
   // harness: stage an engaged raider at a fixed pose. It holds that depth and weaves
@@ -113,6 +119,10 @@ function formationOffset(kind: Formation, n: number, k: number): number {
   if (n <= 3) return 0
   return (k === 2 ? -1 : 1) * ENEMY.PINCER_INNER
 }
+
+// The outer hit window (rad) of a raider at ship-relative z: it follows the drawn
+// size, so a bolt through the visible wing counts.
+export const raiderHitAngle = (z: number): number => GUN.HIT_ANGLE * farScale(z, RENDER.FAR_SCALE.RAIDER_GAIN)
 
 export function createEnemies(deps: EnemyDeps): Enemies {
   const group = new Group()
@@ -292,14 +302,30 @@ export function createEnemies(deps: EnemyDeps): Enemies {
     armT = Math.max(armT, ENEMY.WAVE.REINFORCE_DELAY)
   }
 
-  // A leaving raider is out of reach: it got away, so its squad is not destroyed.
-  // Until then it can still be shot (tryKill), and that kill counts for the squad.
-  function gotAway(slot: Slot): void {
+  // A raider the gun did not kill is lost to its squad: the squad is not destroyed.
+  function lostToSquad(slot: Slot): void {
     if (slot.squad === squadId) {
       squadGotAway++
       squadOpen--
     }
+  }
+
+  // A leaving raider is out of reach: it got away. Until then it can still be shot
+  // (tryKill), and that kill counts for the squad.
+  function gotAway(slot: Slot): void {
+    lostToSquad(slot)
     recycle(slot)
+  }
+
+  // Start the death pop at ship-relative z; the director waits a beat before the
+  // replacement enters.
+  function die(slot: Slot, z: number): void {
+    slot.phase = 'dead'
+    slot.popT = 0
+    slot.popZ = z
+    slot.charging = false
+    slot.enemy.setCharge(0)
+    armT = Math.max(armT, ENEMY.WAVE.REINFORCE_DELAY)
   }
 
   function startWave(craft: CraftState): void {
@@ -634,19 +660,12 @@ export function createEnemies(deps: EnemyDeps): Enemies {
         if (!slot.active || slot.phase === 'dead') continue
         const enemyZ = craftDistance - slot.worldDistance
         const dAngle = Math.abs(angleDiff(theta, slot.theta))
-        // the windows follow the drawn size, so a hit on the visible wing counts
-        const drawn = farScale(enemyZ, RENDER.FAR_SCALE.RAIDER_GAIN)
-        if (dAngle < GUN.HIT_ANGLE * drawn && Math.abs(z - enemyZ) < GUN.HIT_Z) {
+        if (dAngle < raiderHitAngle(enemyZ) && Math.abs(z - enemyZ) < GUN.HIT_Z) {
           // dead-center shot kills outright; a looser hit only chips 1
           slot.hp = dAngle < GUN.HIT_ANGLE_KILL ? 0 : slot.hp - 1
           if (slot.hp <= 0) {
-            slot.phase = 'dead'
-            slot.popT = 0
-            slot.popZ = enemyZ
-            slot.charging = false
-            slot.enemy.setCharge(0)
+            die(slot, enemyZ)
             killed += 1
-            armT = Math.max(armT, ENEMY.WAVE.REINFORCE_DELAY) // a beat before its replacement enters
             const ofSquad = slot.squad === squadId
             if (ofSquad) squadOpen--
             deps.onKill(slot.theta, enemyZ, ofSquad && squadOpen === 0 && squadGotAway === 0)
@@ -658,6 +677,19 @@ export function createEnemies(deps: EnemyDeps): Enemies {
         }
       }
       return false
+    },
+
+    blast(theta: number, z: number): void {
+      for (const slot of slots) {
+        if (!slot.active || slot.phase === 'dead') continue
+        const enemyZ = craftDistance - slot.worldDistance
+        // a raider behind the ship's contact window has passed, like a wall object
+        // behind its capture window: a blast does not reach back for it
+        if (enemyZ >= ENEMY.RAM_Z || !inBlast(theta, slot.theta, enemyZ - z)) continue
+        die(slot, enemyZ)
+        lostToSquad(slot)
+        deps.onBlasted?.(slot.theta, enemyZ)
+      }
     },
 
     setResolution(w: number, h: number): void {

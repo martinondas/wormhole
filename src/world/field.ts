@@ -5,6 +5,7 @@ import { angleDiff, DEG } from '../util/math'
 import { rand } from '../util/rng'
 import { type WallObject } from './wallObject'
 import { farScale } from './farScale'
+import { boltHitsMine, chainLinks, inBlast } from './blast'
 
 // A generic "wall field": a pool of WallObjects fixed to the tube wall at
 // increasing distances. Forward motion scrolls them toward the ship; once one
@@ -65,6 +66,9 @@ export interface FieldConfig {
   onNear?: (theta: number) => void
   // Feed mode (see the header): nothing is laid out or recycled by the field itself.
   feed?: boolean
+  // Fired for every object a strike sets off, the struck one first: `link` is its
+  // place in the chain (0 = struck by the bolt, 1 = reached by that blast, ...).
+  onDetonate?: (theta: number, worldDistance: number, link: number) => void
 }
 
 // Spawn-angle bias keyed by "angle from the bottom" (0 deg = bottom where the
@@ -104,6 +108,14 @@ export interface Field {
   // boundary + (worldDistance - boundary) * ratio (the tube beyond it changed speed). An
   // object whose new spot `drop` rejects is taken off the wall.
   rescale(boundary: number, ratio: number, drop?: (worldDistance: number, theta: number) => boolean): void
+  // Mine field only (it tests the mine's shot window, world/blast.ts): a player bolt
+  // at (theta, worldDistance). If it touches a mine in play, that mine and the chain
+  // it sets off detonate now (onDetonate for each). Returns whether it struck one.
+  strike(theta: number, worldDistance: number): boolean
+  // The blast of a mine at (theta, worldDistance) takes every object in play inside
+  // it off the wall: no pop, each counts as missed (onMiss) and is reported to
+  // `each` with its place.
+  clear(theta: number, worldDistance: number, each: (theta: number, worldDistance: number) => void): void
   readonly consumed: number // items consumed this run (debug / feel only)
   readonly failedSpawns: number // spawn() calls that found the pool empty, since the last reset
 }
@@ -221,6 +233,10 @@ export function createField(cfg: FieldConfig): Field {
     }
     farthest += cfg.spawnSpacing * scaleAt(farthest)
     arm(slot, farthest + rand() * cfg.spawnJitter)
+    // Drawn at its new place at once. update() does not place a slot again in the
+    // step it is recycled, and a blast recycles between updates, so it would
+    // otherwise show at its old place for a frame.
+    place(slot, lastCraftDistance - slot.worldDistance)
   }
 
   // Position on the wall at ship-relative z, drawn larger the farther ahead it is.
@@ -228,6 +244,19 @@ export function createField(cfg: FieldConfig): Field {
     slot.obj.object.position.set(Math.sin(slot.theta) * radius, -Math.cos(slot.theta) * radius, z)
     slot.obj.object.scale.setScalar(farScale(z))
   }
+
+  // A live object is on the wall and armed: it has not been triggered or consumed.
+  // This is what visit() reports.
+  const live = (slot: Slot): boolean => slot.state === 'idle' && !slot.triggered
+  // In play: live and not yet behind the capture window. A shot or a blast reaches
+  // only these; what has passed the ship is over (missed or dodged).
+  const inPlay = (slot: Slot): boolean => live(slot) && !slot.passed
+  // strike() scratch: the objects in play, and the chain among them
+  const chTheta = new Float64Array(cfg.count)
+  const chWd = new Float64Array(cfg.count)
+  const chSlot = new Uint8Array(cfg.count)
+  const chLink = new Int8Array(cfg.count)
+  const chOrder = new Uint8Array(cfg.count)
 
   return {
     object: group,
@@ -240,9 +269,6 @@ export function createField(cfg: FieldConfig): Field {
           slot.popT += dt / cfg.popTime
           const t = Math.min(slot.popT, 1)
           slot.obj.setOpacity(1 - t)
-          // Play the pop at the frozen capture z, NOT the scrolling world z:
-          // otherwise at high speed the object races past the camera before the
-          // pop finishes and the flash is never seen.
           place(slot, slot.popZ)
           slot.obj.object.scale.multiplyScalar(1 + t * (popScale - 1))
           slot.obj.update(dt)
@@ -273,9 +299,13 @@ export function createField(cfg: FieldConfig): Field {
           slot.triggered = true
           if (cfg.onHit(slot.theta, z)) {
             consumed += 1
+            // The pop plays at the ship plane where it was caught, NOT the scrolling
+            // world z: otherwise at high speed the object races past the camera
+            // before the pop finishes and the flash is never seen.
             slot.state = 'popping'
             slot.popT = 0
-            slot.popZ = z // freeze the pop at the ship plane where it was caught
+            slot.popZ = z
+            continue
           }
           // else: not consumed (e.g. invulnerable) - leave it; `triggered`
           // prevents re-fire, it scrolls past and recycles behind.
@@ -315,7 +345,7 @@ export function createField(cfg: FieldConfig): Field {
     },
     visit(fn: (theta: number, worldDistance: number) => void): void {
       for (const slot of slots) {
-        if (slot.state === 'idle' && !slot.triggered) fn(slot.theta, slot.worldDistance)
+        if (live(slot)) fn(slot.theta, slot.worldDistance)
       }
     },
     spawn(worldDistance: number, theta: number): boolean {
@@ -338,6 +368,40 @@ export function createField(cfg: FieldConfig): Field {
           slot.worldDistance = boundary + (slot.worldDistance - boundary) * ratio
           if (drop?.(slot.worldDistance, slot.theta)) park(slot)
         }
+      }
+    },
+    strike(theta: number, worldDistance: number): boolean {
+      let n = 0
+      let struck = -1
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i]!
+        if (!inPlay(slot)) continue
+        if (struck < 0 && boltHitsMine(theta, slot.theta, slot.worldDistance - worldDistance, lastCraftDistance - slot.worldDistance)) struck = n
+        chTheta[n] = slot.theta
+        chWd[n] = slot.worldDistance
+        chSlot[n] = i
+        n++
+      }
+      if (struck < 0) return false
+      const count = chainLinks(chTheta, chWd, n, struck, chLink, chOrder)
+      // the whole chain is off the wall before the first report, so a report that
+      // looks at this field sees the wall after the shot
+      for (let k = 0; k < count; k++) {
+        consumed += 1
+        recycle(slots[chSlot[chOrder[k]!]!]!)
+      }
+      for (let k = 0; k < count; k++) {
+        const c = chOrder[k]!
+        cfg.onDetonate?.(chTheta[c]!, chWd[c]!, chLink[c]!)
+      }
+      return true
+    },
+    clear(theta: number, worldDistance: number, each: (theta: number, worldDistance: number) => void): void {
+      for (const slot of slots) {
+        if (!inPlay(slot) || !inBlast(theta, slot.theta, slot.worldDistance - worldDistance)) continue
+        cfg.onMiss?.()
+        each(slot.theta, slot.worldDistance)
+        recycle(slot)
       }
     },
     get consumed(): number {

@@ -53,6 +53,7 @@ export const SCALAR_KEYS = [
   'livesLostMine',
   'livesLostBolt',
   'livesLostRam',
+  'livesLostBlast', // lives lost to the blast of a mine the player shot (or its chain)
   'hitsPerMin',
   'timeToFirstHit', // seconds until the first life was lost (run time if never)
   // --- progression
@@ -116,6 +117,11 @@ export const SCALAR_KEYS = [
   'wavesClearedPerMin', // raider waves destroyed to the last member, per minute
   'raiderFreeShare', // share of time with no raider in play and no enemy bolt in flight (breathers)
   'boltMinePerMin', // seconds per minute with an enemy bolt in flight and a mine less than 1 s ahead
+  // --- mine blasts
+  'minesShot', // mines detonated by a player bolt
+  'minesChained', // mines detonated by the blast of another mine (in the same instant as the shot)
+  'raidersBlasted', // raiders destroyed by a mine blast (not kills: they pay nothing)
+  'gemsBlasted', // gems destroyed by a mine blast (counted as offered, not collected)
 ] as const
 export type ScalarKey = (typeof SCALAR_KEYS)[number]
 
@@ -256,7 +262,8 @@ export function createRecorder(session: Session): Recorder {
       r.livesLost++
       if (cause === 'mine') r.livesLostMine++
       else if (cause === 'bolt') r.livesLostBolt++
-      else r.livesLostRam++
+      else if (cause === 'ram') r.livesLostRam++
+      else r.livesLostBlast++
       if (cause === 'bolt') boltsHit++
       if (cause === 'mine') threat() // a mine that hit never "passes", count it here
       lvl().livesLost++
@@ -332,6 +339,24 @@ export function createRecorder(session: Session): Recorder {
     },
     playerBoltHit: () => {
       shotHits++
+    },
+    mineDetonated: (_theta, _z, link) => {
+      if (link > 0) r.minesChained++
+      else r.minesShot++
+    },
+    raiderBlasted: () => {
+      r.raidersBlasted++
+    },
+    // a blast destroys only pickups that have not passed the ship, so none of them
+    // was counted as offered yet: it is counted here
+    pickupBlasted: (kind) => {
+      const l = lvl()
+      l.pickups++
+      if (kind === 'gem') {
+        r.gemsBlasted++
+        r.gemsOffered++
+        l.gemsOffered++
+      } else if (kind === 'orb') r.orbsOffered++
     },
   }
 
@@ -631,7 +656,7 @@ export function aggregate(bot: string, difficulty: string, maxSeconds: number, r
   const n = Math.max(runs.length, 1)
   const stats = Object.fromEntries(SCALAR_KEYS.map((k) => [k, stat(runs.map((r) => r[k]))])) as Record<ScalarKey, Stat>
 
-  const deathCauses: Record<string, number> = { mine: 0, bolt: 0, ram: 0, none: 0 }
+  const deathCauses: Record<string, number> = { mine: 0, bolt: 0, ram: 0, blast: 0, none: 0 }
   for (const r of runs) deathCauses[r.deathCause] = (deathCauses[r.deathCause] ?? 0) + 1 / n
 
   const meanHist = (pick: (r: RunResult) => number[]): number[] => {

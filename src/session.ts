@@ -14,6 +14,7 @@ import { createSequencer, type Sequencer, type PlacedPhrase } from './world/sequ
 import { createGame, type Game } from './game'
 import { createGun, type Gun } from './gun'
 import { randRange } from './util/rng'
+import { inBlast } from './world/blast'
 import { SPEED, SHIP, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, LIFE_SHARD, SPAWN_CLEAR, ENERGY, GUN, ENEMY, FEEL, GATE } from './config'
 
 // The gameplay session: every system that decides what happens in a run (craft,
@@ -31,8 +32,9 @@ import { SPEED, SHIP, PICKUP, TREASURE, HAZARD, EXTRA_LIFE, LIFE_SHARD, SPAWN_CL
 // The caller owns the gating (title screen, pause, game-over): it simply does not
 // call preUpdate/step while the run is not live.
 
-export type DamageCause = 'mine' | 'bolt' | 'ram'
-export type FieldKind = 'orb' | 'gem' | 'mine' | 'life' | 'shard'
+export type DamageCause = 'mine' | 'bolt' | 'ram' | 'blast'
+export type PickupKind = 'orb' | 'gem' | 'life' | 'shard' // every field kind but the mine
+export type FieldKind = PickupKind | 'mine'
 
 // Presentation + observation hooks. All optional; (theta, z) is where it happened
 // (z is ship-relative). The browser plays sounds / flashes / bursts here; the
@@ -56,6 +58,12 @@ export interface SessionFx {
   enemyKilled?(theta: number, z: number): void
   playerFired?(theta: number): void
   playerBoltHit?(): void // a player bolt struck a raider (a chip or the kill)
+  // a mine went off at (theta, z). link 0: shot by the player; link n: reached by
+  // the blast of a link n-1 mine, in the same step. Fires before the events of what
+  // its own blast destroys.
+  mineDetonated?(theta: number, z: number, link: number): void
+  raiderBlasted?(theta: number, z: number): void // a mine blast destroyed a raider: no score, no charge, no shard
+  pickupBlasted?(kind: PickupKind, theta: number, z: number): void // a mine blast destroyed this pickup (a gem also reports gemMissed)
   dryFired?(): void // trigger pulled with no charge
   tierUp?(): void // the craft entered a faster section (not fired for the speed step at a level gate)
   levelUp?(level: number): void // the craft passed the level gate; `level` is the new 0-based level
@@ -105,7 +113,7 @@ interface FieldConsts {
   POP_SCALE: number
 }
 type FieldOpts = Partial<
-  Pick<FieldConfig, 'growTime' | 'count' | 'feed' | 'sampleTheta' | 'spacingScaleAt' | 'avoid' | 'onMiss' | 'nearAngle' | 'onNear'>
+  Pick<FieldConfig, 'growTime' | 'count' | 'feed' | 'sampleTheta' | 'spacingScaleAt' | 'avoid' | 'onMiss' | 'nearAngle' | 'onNear' | 'onDetonate'>
 >
 function makeField(
   create: () => WallObject,
@@ -219,9 +227,11 @@ export function createSession(fx: SessionFx = {}): Session {
   fields.push(gems)
   // mines: a life is lost only outside i-frames (hitHazard returns false then), so
   // an invuln graze is not consumed and stays silent. (theta, z) is the mine's own
-  // position - the detonation blooms where the mine was.
+  // position - the detonation blooms where the mine was. A mine the ship rides into
+  // does not blast; one a player bolt reaches does (detonate below).
   const mines = makeField(createHazard, HAZARD, (theta, z) => takeHit('mine', theta, z), {
     feed: true,
+    onDetonate: (theta, wd, link) => detonate(theta, wd, link),
     // a near miss counts only while the ship can be hurt, and at most one per
     // NEAR_THROTTLE so a dense stretch does not stack cues
     nearAngle: HAZARD.CAPTURE_ANGLE + FEEL.NEAR_MINE_EXTRA,
@@ -277,10 +287,29 @@ export function createSession(fx: SessionFx = {}): Session {
   const fieldKinds: readonly FieldKind[] = ['orb', 'gem', 'mine', 'life', 'shard']
   const fieldByKind: Record<FieldKind, Field> = { orb: orbs, gem: gems, mine: mines, life: crosses, shard: shards }
 
-  // A raider killed at (theta, z) leaves a shard there, on
-  // the line the player shot along. It is never closer than LEAD_SECONDS of flight
-  // (a kill at close range or at high speed puts it farther down the same line), and
-  // it steps forward off a mine. With the pool empty the kill drops nothing.
+  // A mine went off at (theta, wd): its blast (config BLAST), applied now. Inside
+  // it raiders die unpaid, pickups are destroyed (a gem counts as missed) and the
+  // ship loses a life. The mines inside it are links of the same chain: the mine
+  // field reports each of them here in this same step. In the step that ends a run
+  // it still clears the wall; i-frames keep a chain from costing a second life.
+  const blastable: readonly PickupKind[] = ['orb', 'gem', 'life', 'shard']
+  let blastedKind: PickupKind = 'orb' // the kind being cleared (hoisted: no closure per blast)
+  const reportBlasted = (theta: number, wd: number): void => fx.pickupBlasted?.(blastedKind, theta, craft.distance - wd)
+  const detonate = (theta: number, wd: number, link: number): void => {
+    const z = craft.distance - wd
+    fx.mineDetonated?.(theta, z, link)
+    enemies.blast(theta, z)
+    for (const kind of blastable) {
+      blastedKind = kind
+      fieldByKind[kind].clear(theta, wd, reportBlasted)
+    }
+    if (inBlast(craft.theta, theta, z - SHIP.Z)) takeHit('blast', craft.theta, SHIP.Z)
+  }
+
+  // A raider killed at (theta, z) leaves a shard there, on the line the player shot
+  // along. It is never closer than LEAD_SECONDS of flight (a kill at close range or at
+  // high speed puts it farther down the same line), and it steps forward off a mine.
+  // With the pool empty the kill drops nothing.
   let squadsCleared = 0 // fully destroyed squads since the last cross
   const dropShard = (theta: number, z: number, last: boolean): void => {
     if (game.over) return
@@ -364,15 +393,19 @@ export function createSession(fx: SessionFx = {}): Session {
     },
     onChargeStart: (theta, z) => fx.enemyChargeStarted?.(theta, z),
     onChip: (theta, z) => fx.enemyChipped?.(theta, z),
+    onBlasted: (theta, z) => fx.raiderBlasted?.(theta, z),
   })
 
   // Hoisted projectile-update context (mutated each step, not re-allocated) so the
   // fixed update does no per-frame allocation; the two callbacks are stable.
   const projCtx = {
-    tryKillEnemy: (theta: number, z: number): boolean => {
-      const struck = enemies.tryKill(theta, z)
-      if (struck) fx.playerBoltHit?.()
-      return struck
+    // a player bolt strikes a raider, or else a mine, which detonates and stops it
+    strike: (theta: number, z: number): boolean => {
+      if (enemies.tryKill(theta, z)) {
+        fx.playerBoltHit?.()
+        return true
+      }
+      return mines.strike(theta, craft.distance - z)
     },
     shipTheta: 0,
     onShipHit: (): boolean => takeHit('bolt', craft.theta, SHIP.Z),

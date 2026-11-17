@@ -153,7 +153,6 @@ export const DIFFICULTY = {
 // stays open and whatever flies behind the gate stays readable.
 export const GATE = {
   AHEAD: 290,          // units ahead of the craft: past the last drawn ring and SEQUENCE.HORIZON, so it comes out of the fog
-  RADIUS: 0.985,       // outer ring radius as a share of TUBE.RADIUS (on the wall, clear of the wall lines)
   INNER: 0.95,         // inner ring radius as a share of TUBE.RADIUS (a narrow band: wall objects ride well inside it)
   SEGMENTS: 64,        // straight segments per ring (smooth at full screen size)
   LINE_WIDTH: 1.5,     // px, thinner than a wall object's edges: the gate frames the view and covers nothing
@@ -171,6 +170,7 @@ export const TUBE = {
   RINGS_VISIBLE: 30,      // rings drawn ahead (render distance = this * spacing; kept near FOG_FAR/spacing so far rings aren't drawn past the fog)
   SEGMENTS_PER_RING: 48,  // smoothness of each ring circle
   LONGITUDINAL_LINES: 24, // lines running down the length of the tube
+  ON_WALL: 0.985,         // a line drawn on the wall (the gate, a blast rim's echo) sits at this share of RADIUS: on it, clear of the wall lines
 }
 
 // --- ship -------------------------------------------------------------------
@@ -384,6 +384,31 @@ export const HAZARD = {
   CAPTURE_ANGLE: 0.62, // ship wing half-width + mine horn reach
   POP_TIME: 0.10,      // fast + big -> reads as an explosion on a real hit
   POP_SCALE: 2.6,
+  // A player bolt that reaches a mine detonates it (see BLAST). The window follows
+  // the drawn mine: SHOT_ANGLE is the core ball and most of the horns at draw scale
+  // 1, and grows with the far scale (RENDER.FAR_SCALE GAIN), like the raider's outer
+  // window.
+  SHOT_ANGLE: 0.32,
+  SHOT_Z: 2.0,         // along-tube half-window (u): the mine's half-extent. Tunnel-free while the bolt
+                       // and the mine close by less than 2 * SHOT_Z per substep: (GUN.BOLT_SPEED +
+                       // craft speed) / PHYSICS.HZ.
+}
+
+// --- blast (a shot mine explodes) ---------------------------------------------
+// One rule for everything near a detonating mine: inside RADIUS raiders die, pickups
+// are destroyed, other mines detonate too, and the ship loses a life (normal
+// i-frames, so one shot costs at most one life). The whole chain is decided in the
+// instant the bolt lands, with the positions of that instant, so the only question
+// for the player is how close the ship was when the shot landed. The gun pays, the
+// blast only clears: nothing a blast destroys gives score, charge or a cross.
+// The rules are in world/blast.ts.
+export const BLAST = {
+  // Reach (u) from the mine on the unrolled wall: arc length at RIDE_RADIUS and
+  // distance along the tube. At the mine's own depth it covers the mine's side of
+  // the wall and a little more, and along the tube it reaches well past a mine
+  // contact (HAZARD.CAPTURE_Z). A mine shot at point-blank range costs a life; one
+  // shot early does not.
+  RADIUS: 8.5,
 }
 
 // --- extra life (bright-green medkit cross; ride-into = +1 life) -------------
@@ -533,6 +558,7 @@ export const ENERGY = {
 export const FEEL = {
   TUBE_FLASH: { PEAK: 1.2, DECAY: 0.25 }, // tube line brightness boost on a level-up; DECAY = time constant (s)
   LOOP_FLASH: 0.4,     // a loop over the top flashes the tube at this fraction of PEAK
+  BLAST_FLASH: 0.3,    // a shot mine (the first link of a chain) flashes the tube at this fraction of PEAK
   LOOP_CUE_GAP: 2.0,   // s: a loop gets its sound + flash only this long after the last loop cue (a held spin stays quiet)
   CHAIN_STEPS: 8,      // gem chime climbs this many pentatonic steps along a gem chain, then holds
   NEAR_MINE_EXTRA: 0.45, // rad past HAZARD.CAPTURE_ANGLE that still counts as a near miss
@@ -541,7 +567,9 @@ export const FEEL = {
   // Camera shake (render/shake.ts): one trauma value in 0..1 that decays linearly at
   // DECAY per second; the offset scales with trauma squared, so small events stay
   // small. Applied to the view only, never to the craft or the aim.
-  SHAKE: { MAX_ROLL_DEG: 3.0, MAX_OFFSET: 0.8, DECAY: 1.6, DAMAGE: 0.6, KILL: 0.2, NEAR: 0.12 },
+  // BLAST (a shot mine) sits between a kill and a lost life: it is the player's own
+  // doing, but bigger than a raider. BLAST_LINK is added for each further chain link.
+  SHAKE: { MAX_ROLL_DEG: 3.0, MAX_OFFSET: 0.8, DECAY: 1.6, DAMAGE: 0.6, KILL: 0.2, NEAR: 0.12, BLAST: 0.35, BLAST_LINK: 0.1 },
   // Hit slow-down: on a lost life the game runs at SCALE for HOLD seconds, then eases
   // back to full speed over EASE seconds, so the cause of the hit is visible. Only
   // the browser loop applies it; the headless harness steps the session directly.
@@ -664,8 +692,14 @@ export const ENEMY = {
   FIRE_COOLDOWN: 1.15, // seconds between shots, ENGAGE only (tuning level LEVELS.AGGRESSION_FROM)
   FIRE_COOLDOWN_EARLY: 3.0, // ... at tuning level 0: the first squads fire slowly (eases to FIRE_COOLDOWN)
   FIRE_COOLDOWN_DEEP: 0.7, // ... at full aggression (LEVELS.AGGRESSION_*)
-  DEEP_COOLDOWN_K: 0.5, // the cooldown is multiplied by 1 .. this as the deep pressure rises (LEVELS.DEEP_*)
-  DEEP_STAGGER_K: 0.6,  // FIRE_STAGGER is multiplied by 1 .. this the same way (tells arrive closer together)
+  // Shots that miss a raider fly on and clear mines, which makes deep levels easier for a
+  // skilled player. These two factors carry the pressure that offsets it.
+  // At full deep pressure the cooldown (FIRE_COOLDOWN_DEEP x DEEP_COOLDOWN_K) is shorter
+  // than FIRE_JITTER, so many draws are zero or negative and the raider is ready again
+  // at once. The fire slots, FIRE_STAGGER and the minimum tell-to-arrival time then set
+  // the rhythm, so with the bots a lower value (0.2) gave no clear change.
+  DEEP_COOLDOWN_K: 0.25, // the cooldown is multiplied by 1 .. this as the deep pressure rises (LEVELS.DEEP_*)
+  DEEP_STAGGER_K: 0.3,  // FIRE_STAGGER is multiplied by 1 .. this the same way (tells arrive closer together)
   FIRE_STAGGER: 0.35, // minimum s between two charge starts, so tells arrive one at a time
   FIRE_MIN_AHEAD: 31.5, // a charge starts only this far ahead or more, so CHARGE_TIME plus the
                       // bolt's travel at BULLET_SPEED leaves a fair time from tell to arrival
@@ -752,6 +786,56 @@ export const BURST = {
   DAMAGE_LINE_WIDTH: 6.0, // fat shards = more bright pixels = more bloom glow at close range
 }
 
+// --- blast look (world/blastFx.ts; drawing only, nothing here changes the game) --
+// A mine blast is a rim on the wall, a wave running out to it, the mine's shards, and
+// the debris of what it destroyed (the parts are described in world/blastFx.ts). The
+// rim's size is BLAST.RADIUS itself, not a value here. Colours stay in the mine's red
+// / orange family with blue below 1: bloom cannot turn them white, which is reserved
+// for a raider's firing tell. The whole effect is brief, so tells, bolts and other
+// mines stay readable around it.
+export const BLAST_FX = {
+  // Each chain link shows its wave, pop and shards and sounds this many seconds after
+  // the link before it, so a chain reads as a quick crackle along the wall. Short
+  // enough that the wall has scrolled little, so each burst is still near its mine.
+  RIPPLE: 0.04,
+  RING_SEGMENTS: 48,   // line segments per ring: round at full size, still cheap
+  RIM_LIFE: 0.34,      // s the rim takes to fade, from full brightness at the shot
+  RIM_WALL_GAIN: 0.4,  // brightness of the rim's echo on the tube wall; the rim where objects ride leads
+  WAVE_TIME: 0.13,     // s the wave takes from the mine to the rim: fast enough to read as a blast
+  WAVE_GAIN: 0.8,      // brightness of the wave against the rim
+  RING_WIDTH: 3.2,     // px
+  RING_RGB: [3.4, 0.55, 0.10] as [number, number, number], // hot orange-red
+
+  PIECE_POOL: 280,     // shards and debris streaks at once; a streak that finds the pool full is not drawn
+  PIECE_WIDTH: 3.4,    // px (fatter than hull edges, so the streaks carry the bloom)
+  DRAG: 3.2,           // per second: streaks burst out and slow down, like the kill burst
+  CORE_RGB: [5.0, 1.9, 0.30] as [number, number, number], // the brief hot core: yellow-orange, never white
+  HOT_FRACTION: 0.3,   // a mine shard cools from CORE_RGB to its own colour over this share of its life
+
+  // the mine's horns and shell
+  MINE_SHARDS: 22,
+  SHARD_RGB: [4.5, 0.40, 0.12] as [number, number, number], // the mine's red, much brighter
+  SHARD_SPEED: [7, 20] as [number, number],   // u/s
+  SHARD_INWARD: 4,     // u/s extra toward the tube axis (the wall is behind the mine)
+  SHARD_LIFE: [0.25, 0.45] as [number, number], // s
+  SHARD_LEN: [0.5, 1.3] as [number, number],  // u
+
+  // debris: an object the blast destroyed breaks into streaks of its own colour that
+  // fly away from the centre
+  DEBRIS_PIECES: 5,    // per pickup
+  DEBRIS_GAIN: 1.8,    // brightness of a pickup's streaks against its edge colour: they are thin and brief
+  DEBRIS_ORB_GAIN: 3.6, // the same for the orb: higher, because its blue edge is dim on its own
+  DEBRIS_RAIDER_PIECES: 9,
+  // a blasted raider's streaks are dimmer than its hull, with no flash and no kill
+  // burst: the blast destroyed it, not the gun, and it pays nothing
+  DEBRIS_RAIDER_DIM: 0.7,
+  DEBRIS_SPEED: [9, 24] as [number, number], // u/s at the rim .. at the centre of the blast
+  DEBRIS_SPREAD: 0.5,  // rad: how far the streaks fan out
+  DEBRIS_INWARD: 0.35, // up to this share of the speed goes toward the tube axis
+  DEBRIS_LIFE: [0.3, 0.5] as [number, number],
+  DEBRIS_LEN: [0.6, 1.4] as [number, number],
+}
+
 // --- input key bindings (KeyboardEvent.code) --------------------------------
 export const INPUT = {
   left: ['ArrowLeft', 'KeyA'],
@@ -795,6 +879,15 @@ export const AUDIO = {
   // tier steps up (target speed increases). Plays SECONDS then fades out, and
   // ducks the music to DUCK of its volume meanwhile so the sting cuts through.
   ACCEL: { SRC: 'audio/accelerate.mp3', VOLUME: 1.6, SECONDS: 3, FADE: 0.4, DUCK: 0.4 },
+  // the boom of a shot mine (synth 'blast'). The loudness of a boom falls evenly over
+  // its time, so it is heard for about half of it. Each further chain link sounds
+  // shorter, LINK_SEMITONES higher and LINK_GAIN quieter, so a chain is heard as a run.
+  BLAST: {
+    BOOM_TIME: 3.5,      // s the boom of the shot mine lasts: a long, dark rumble
+    BOOM_TIME_LINK: 1.2, // s for each further link: a thump over the first link's rumble
+    LINK_SEMITONES: 2,
+    LINK_GAIN: 0.82,
+  },
   // key = event name used in main.ts: audio.play('shoot') etc. `src` = file,
   // `synth` = procedural generator id (audio.ts SYNTHS). Same name space either way.
   SFX: {
@@ -816,5 +909,6 @@ export const AUDIO = {
     whoosh:    { synth: 'whoosh',    volume: 0.6 },  // a mine near miss (panned)
     waveClear: { synth: 'waveClear', volume: 0.6 },  // a raider wave cleared
     cross:     { synth: 'cross',     volume: 0.8 },  // a whole-life cross appeared ahead (panned)
+    blast:     { synth: 'blast',     volume: 1.5 },  // a mine detonation: a rumbling explosion (panned; step = chain link)
   },
 }

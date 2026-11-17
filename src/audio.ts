@@ -1,4 +1,4 @@
-import { AUDIO, ENEMY, FEEL } from './config'
+import { AUDIO, BLAST_FX, ENEMY, FEEL } from './config'
 import { clamp } from './util/math'
 
 // Web Audio mixer for the game. Architecture mirrors the rest of the codebase:
@@ -139,6 +139,43 @@ export function createAudio(): Audio {
     src.onended = (): void => { src.disconnect(); filt.disconnect(); g.disconnect() }
   }
 
+  // An explosion in three layers: a sharp crack, a noise body whose low-pass sweeps
+  // from `bright` Hz down into a long rumble, and a sub boom from `subHz` underneath.
+  function boom(out: AudioNode, now: number, dur: number, bright: number, subHz: number, subDur: number, peak: number): void {
+    // body + rumble: the slow exponential decay is the lingering tail
+    const body = ctx.createBufferSource()
+    body.buffer = noiseBuf
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.setValueAtTime(bright, now)
+    lp.frequency.exponentialRampToValueAtTime(35, now + dur)
+    const bg = ctx.createGain()
+    bg.gain.setValueAtTime(1.1 * peak, now)
+    bg.gain.exponentialRampToValueAtTime(0.0001, now + dur)
+    body.connect(lp); lp.connect(bg); bg.connect(out)
+    body.loop = true // a boom can outlast the noise buffer
+    body.start(now, Math.random() * 0.3) // a random offset so the links of a chain do not sound identical
+    body.stop(now + dur + 0.02)
+    body.onended = (): void => { body.disconnect(); lp.disconnect(); bg.disconnect() }
+
+    // crack: a very short bright noise transient for the initial punch
+    const crack = ctx.createBufferSource()
+    crack.buffer = noiseBuf
+    const hp = ctx.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = 1200
+    const cg = ctx.createGain()
+    cg.gain.setValueAtTime(0.95 * peak, now)
+    cg.gain.exponentialRampToValueAtTime(0.0001, now + 0.05)
+    crack.connect(hp); hp.connect(cg); cg.connect(out)
+    crack.start(now)
+    crack.stop(now + 0.08)
+    crack.onended = (): void => { crack.disconnect(); hp.disconnect(); cg.disconnect() }
+
+    // sub boom: the chest-thump low end
+    blip(out, now, 'sine', subHz, 22, subDur, 1.2 * peak)
+  }
+
   const SYNTHS: Record<string, Synth> = {
     // two-note chime; the upper note climbs the gem ladder with the chain
     gem(out, now, step) {
@@ -222,44 +259,19 @@ export function createAudio(): Audio {
       blip(out, now + 0.075, 'triangle', n * 1.5, n * 1.5, 0.16, 0.5)
     },
     gameover(out, now) { blip(out, now, 'triangle', 440, 90, 0.9, 0.7) },
-    hit(out, now) {
-      // bomb blast, three layers: a sharp CRACK, a booming filtered-noise BODY that
-      // sweeps down into a long low RUMBLE, and a SUB boom underneath. Big + long
-      // (~2.6s) so losing a life detonates rather than pops.
-      const dur = 2.6
-
-      // body + rumble: noise through a lowpass sweeping from a bright onset down to
-      // a deep rumble over the whole blast; slow exponential decay = lingering tail.
-      const body = ctx.createBufferSource()
-      body.buffer = noiseBuf
-      const lp = ctx.createBiquadFilter()
-      lp.type = 'lowpass'
-      lp.frequency.setValueAtTime(3500, now)
-      lp.frequency.exponentialRampToValueAtTime(35, now + dur)
-      const bg = ctx.createGain()
-      bg.gain.setValueAtTime(1.1, now)
-      bg.gain.exponentialRampToValueAtTime(0.0001, now + dur)
-      body.connect(lp); lp.connect(bg); bg.connect(out)
-      body.start(now)
-      body.stop(now + dur + 0.02)
-      body.onended = (): void => { body.disconnect(); lp.disconnect(); bg.disconnect() }
-
-      // crack: a very short bright noise transient for the sharp initial punch
-      const crack = ctx.createBufferSource()
-      crack.buffer = noiseBuf
-      const hp = ctx.createBiquadFilter()
-      hp.type = 'highpass'
-      hp.frequency.value = 1200
-      const cg = ctx.createGain()
-      cg.gain.setValueAtTime(0.95, now)
-      cg.gain.exponentialRampToValueAtTime(0.0001, now + 0.05)
-      crack.connect(hp); hp.connect(cg); cg.connect(out)
-      crack.start(now)
-      crack.stop(now + 0.08)
-      crack.onended = (): void => { crack.disconnect(); hp.disconnect(); cg.disconnect() }
-
-      // sub boom: the chest-thump low end, sweeping deep with a slow ~1.6s decay
-      blip(out, now, 'sine', 90, 22, 1.6, 1.2)
+    // a life lost: the loudest boom in the game, so it lands like a bomb
+    hit(out, now) { boom(out, now, 2.6, 3500, 90, 1.6, 1) },
+    // A mine detonation: the same kind of boom, darker, deeper and longer than the
+    // life-lost one, so the two are told apart: a rumble, not a bang. Its noise
+    // starts at the top of the band of the charge whine (the `charge` synth) and sinks
+    // below it in about a second while it fades, so a raider's tell is heard through it.
+    // `step` is the chain link (AUDIO.BLAST), so a chain is one long rumble with a run
+    // of thumps on top.
+    blast(out, now, step) {
+      const at = now + step * BLAST_FX.RIPPLE
+      const pitch = Math.pow(2, (step * AUDIO.BLAST.LINK_SEMITONES) / 12)
+      const dur = step === 0 ? AUDIO.BLAST.BOOM_TIME : AUDIO.BLAST.BOOM_TIME_LINK
+      boom(out, at, dur, 900, 55 * pitch, dur * 0.8, Math.pow(AUDIO.BLAST.LINK_GAIN, step))
     },
   }
 

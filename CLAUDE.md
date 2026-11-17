@@ -42,9 +42,12 @@ An orientation, not a specification. Read the code for behaviour and `src/config
 - Raiders arrive as squads. A wave director sets formations, depth lanes and breathers. One
   member can be a hunter that follows the player. A cap limits how many raiders fire at once,
   and every shot is announced.
-- Lives are lost to mines, bolts and rams, and are earned back through kills: destroyed raiders
-  leave green crosses to catch. Now and then a rare bonus cross appears on its own. Lives
-  reaching zero is the only way a run ends.
+- Lives are lost to mines, bolts, rams and blasts, and are earned back through kills: raiders
+  the gun destroys leave green crosses to catch. Now and then a rare bonus cross appears on its
+  own. Lives reaching zero is the only way a run ends.
+- A player bolt detonates a mine. Within a fixed distance on the wall, the blast destroys
+  raiders, gems, orbs and crosses, sets off other mines, and costs a life if the ship is in it.
+  The gun pays, the blast only clears: nothing a blast destroys pays.
 - Weapon charge is the gun's ammunition. Blue orbs, kills and green crosses refill it. An empty
   gun does not end the run.
 - Score comes from gems and kills, times a level multiplier. Passive flight earns nothing.
@@ -105,6 +108,8 @@ The craft's position is an angle `theta` around the circular cross-section of th
   it flies in, holds a depth lane and leaves. Raiders and bolts ride at the same radius, so
   aiming, dodging and ramming use the same angle-only test.
 - Gem lines: phrases are data in `src/world/phrases.ts`. The director is `src/world/sequencer.ts`.
+- Mine blasts: the rules are pure functions in `src/world/blast.ts`, used by the game and the
+  bots. `src/world/blastFx.ts` only draws a blast that the game has already decided.
 - The feel layer (speed field of view, shake, hit-stop, hull attitude, far-object scale) is
   visual only and does not touch the craft state.
 - Fields, raiders and bolts expose a read-only `visit()`. The bots see the world only through it.
@@ -137,15 +142,13 @@ The craft's position is an angle `theta` around the circular cross-section of th
 
 ## Open questions
 - Deep levels are clearly easier for the skilled bot since the hit area follows the drawn size
-  of a raider. The likely lever is raider fire at deep levels.
+  of a raider. Tighter deep raider fire offsets the exploding mines, not this easing.
 - Weapon charge: the bots aim better than a person, so they cannot calibrate it.
 - Camping: a player who never shoots earns no lives and little score, but is hit no more often
   than a fighter.
 - Far raiders are small at deep-level speeds.
-- Next, agreed with the owner but not built: mines that explode when shot. A shot destroys a
-  mine, and the blast destroys raiders and mines near it and hurts the player who is too
-  close. It will make the game easier, so measure it with a bot that shoots every mine on its
-  line, and tighten raider fire at deep levels in the same pass.
+- Exploding mines: the risk of a player's own blast, the gems a blast costs, and the look and
+  sound. See the last note of "Exploding mines" in `docs/next-level-spec.md`.
 - The perfect bot is hit a little more often on the middle mode since the level gate, though
   it never dies. The hits are not near a gate. The cause is not found.
 - A beginner loses more ships to mines since the slalom mines sit near the floor. If it is too

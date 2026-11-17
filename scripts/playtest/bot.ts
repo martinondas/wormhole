@@ -17,6 +17,17 @@
 //                the steering push and the gravity pull by up to this fraction, so it
 //                overshoots or stops short the way a player does.
 //   lapse      - occasional short loss of attention (keys released).
+//   mineShots  - whether it shoots mines on purpose (a shot mine explodes, see config
+//                BLAST). Every bot that fires, except the spinner (it holds the fire
+//                key regardless), knows the blast rule (world/blast.ts) and tries not
+//                to fire a bolt that would set a mine off inside the danger distance,
+//                and the planning bots steer clear of the detonations their bolts in
+//                flight will cause. It judges this through the limits above: the mines
+//                and its own line as it saw them `reaction` ago, mine angles off by
+//                thetaNoise and aimError, only the `attention` nearest wall objects in
+//                mind, a fresh look only decisionHz times a second, and the fire key
+//                held at least minHold. So a bot with limits is sometimes hurt by its
+//                own blast; the oracle never is.
 //   topAversion- reluctance to hang upside down near the top of the tube. This is an
 //                ASSUMPTION about human comfort, not a measured fact: without it the
 //                bots loop over the top about 20 times a minute, because holding one
@@ -33,7 +44,9 @@ import { type Session } from '../../src/session'
 import { updateCraft, type CraftState } from '../../src/craft'
 import { type InputState } from '../../src/input'
 import { createRng } from '../../src/util/rng'
-import { ENERGY, ENEMY, EXTRA_LIFE, GUN, HAZARD, LIFE_SHARD, LIVES, PICKUP, TREASURE } from '../../src/config'
+import { BLAST, ENERGY, ENEMY, EXTRA_LIFE, GUN, HAZARD, LIFE_SHARD, LIVES, PICKUP, RIDE_RADIUS, SHIP, TREASURE } from '../../src/config'
+import { blastHalfAngle, boltHitsMine, chainLinks, wallDistance } from '../../src/world/blast'
+import { raiderHitAngle } from '../../src/world/enemies'
 import {
   createPerception,
   createSnapshot,
@@ -92,6 +105,10 @@ export interface BotProfile {
   lapsePerSec: number // chance per second of an attention lapse
   lapseMax: number // s
   keepOut: number // rad: camper keeps this far from every raider (0 = off)
+  // 'never': a mine is hit only by a bolt meant for a raider. 'cornered': it also
+  // shoots the mine on its line when its best plan still ends in a mine. 'all': it
+  // shoots every mine on its line. Always only outside the danger distance.
+  mineShots: 'never' | 'cornered' | 'all'
   topAversion: number // cost per second spent near the top of the tube (upside down)
   wGem: number
   wAim: number
@@ -103,6 +120,7 @@ const base = {
   steers: true,
   fires: true,
   keepOut: 0,
+  mineShots: 'never' as BotProfile['mineShots'],
   wGem: 100,
   wAim: 80,
   nearBias: 0.15,
@@ -207,6 +225,7 @@ export const PROFILES: Record<string, BotProfile> = {
     // (the good bot, which sees less far, collected those gems). A strong bias toward
     // the next pickup fixes that; dodging is not affected.
     nearBias: 0.9,
+    mineShots: 'cornered',
     reaction: 0,
     decisionHz: 30,
     lookAhead: 400,
@@ -273,6 +292,14 @@ export const PROFILES: Record<string, BotProfile> = {
   },
 }
 
+// The good player who also shoots every mine on its line: the upper limit of how
+// much shooting mines helps.
+PROFILES.miner = {
+  ...PROFILES.good!,
+  about: 'the good player, and it shoots every mine on its line that is outside the danger distance',
+  mineShots: 'all',
+}
+
 // A key plan: up to three (action, seconds) segments, then coast.
 type Plan = [number, number, number, number, number, number]
 
@@ -312,6 +339,10 @@ const MAX_TARGETS = 8
 const DEATH = 1000
 const TAP_SECONDS = 0.15 // tapper: length of its dodge tap
 const TOP_ZONE = (120 * Math.PI) / 180 // farther than this from the bottom counts as near the top
+// The danger distance of a mine blast is BLAST.RADIUS plus this margin (u), for the
+// craft's own swing between the shot and the blast.
+const BLAST_CLEARANCE = 2
+const BLAST_WINDOW = 0.05 // s: half time window of a predicted detonation (it is one instant)
 
 export interface Bot {
   profile: BotProfile
@@ -343,7 +374,20 @@ export function createBot(profile: BotProfile, session: Session): Bot {
   const evWin = new Float64Array(MAX_EVENTS)
   const evW = new Float64Array(MAX_EVENTS)
   const evMargin = new Float64Array(MAX_EVENTS)
+  const evMine = new Uint8Array(MAX_EVENTS) // 1 = a mine on the wall (what a 'cornered' bot shoots)
   let nEv = 0
+  // mines in sight, and the detonations one player bolt would set off among them
+  const mnTheta = new Float64Array(HAZARD.COUNT)
+  const mnWd = new Float64Array(HAZARD.COUNT)
+  const mnLink = new Int8Array(HAZARD.COUNT) // predictBlast: its chain link (-1 = it does not go off)
+  const mnOrder = new Uint8Array(HAZARD.COUNT)
+  let nMn = 0
+  let mnFirst = -1 // predictBlast: the mine the bolt reaches (-1 = none)
+  let blastT = 0 // predictBlast: s from now until the bolt lands and the whole chain goes off
+  let blast: 'none' | 'safe' | 'unsafe' = 'none' // what a bolt fired now would do, as judged at the last look
+  let blastTargetWd = 0 // ... and the mine it would reach
+  let nextBlastLook = 0
+  let cornered = false // the plan chosen last still rides into a mine
   // raiders worth aiming at / keeping away from
   const tgTheta = new Float64Array(MAX_TARGETS)
   const tgOm = new Float64Array(MAX_TARGETS)
@@ -388,6 +432,9 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       spinDir = seed % 2 === 0 ? -1 : 1 // by seed parity: drawing from rng would shift every bot's noise
       tapUntil = -1
       tapDir = 0
+      cornered = false
+      blast = 'none'
+      nextBlastLook = 0
       answered.fill(0)
       bot.steer = 0
       bot.fire = false
@@ -426,7 +473,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
         if (lapsed) desired = 0
         else if (t >= nextDecision) {
           nextDecision = t + 1 / profile.decisionHz
-          desired = decide(t, seen, prev)
+          desired = decide(t, seen, prev, ring[head]!)
         }
         if (desired !== bot.steer && t >= steerLock) {
           if (profile.motorJitter > 0 && pendingAt < 0) pendingAt = t + rng() * profile.motorJitter
@@ -439,7 +486,12 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       }
 
       if (profile.fires) {
-        const want = !lapsed && wantsFire(t, seen, prev)
+        // it looks at the mines on its line as often as it re-plans, not every tick
+        if (t >= nextBlastLook) {
+          nextBlastLook = t + 1 / profile.decisionHz
+          blast = shotBlast(t, seen, prev)
+        }
+        const want = !lapsed && blast !== 'unsafe' && wantsFire(t, seen, prev, ring[head]!, blast === 'safe')
         if (want !== bot.fire && t >= fireLock) {
           bot.fire = want
           fireLock = t + profile.minHold
@@ -468,7 +520,84 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       if (z < -6 && z > -profile.fireRange && d < profile.fireTol) onLine = true
     }
     bot.steer = t < tapUntil ? tapDir : 0
-    bot.fire = onLine && session.game.energy >= GUN.COST
+    bot.fire = onLine && session.game.energy >= GUN.COST && shotBlast(t, seen, seen) !== 'unsafe'
+  }
+
+  // The mines the bot has in mind, where it judges them to be: in sight `reaction`
+  // ago, among the `attention` nearest wall objects still ahead, each angle off by
+  // its thetaNoise error and by the wandering aimError.
+  function gatherMines(seen: Snapshot): void {
+    nMn = 0
+    const dist = session.craft.distance
+    for (let i = 0; i < seen.nObj && nMn < HAZARD.COUNT; i++) {
+      const wd = seen.objWd[i]!
+      if (seen.objKind[i] !== KIND_MINE || !inMind(seen, wd)) continue
+      let nearer = 0
+      for (let k = 0; k < seen.nObj; k++) if (seen.objWd[k]! < wd && inMind(seen, seen.objWd[k]!)) nearer++
+      if (nearer >= profile.attention) continue
+      const far = Math.min(1, Math.max(0, (wd - dist) / Math.max(profile.lookAhead, 1)))
+      mnTheta[nMn] = seen.objTheta[i]! + profile.thetaNoise * (0.25 + 0.75 * far) * objectError(wd, salt) + aimOffset
+      mnWd[nMn] = wd
+      nMn++
+    }
+  }
+  // a wall object at `wd` was out of the fog in `seen` and has not passed the ship
+  function inMind(seen: Snapshot, wd: number): boolean {
+    return wd - seen.dist <= profile.lookAhead && wd - session.craft.distance >= -HAZARD.CAPTURE_Z
+  }
+
+  // What a player bolt at ship-relative `boltZ` down `boltTheta`, with `ttl` seconds
+  // left, sets off among the gathered mines, by the game's own rules (world/blast.ts)
+  // applied to the judged positions: the first mine it touches (mnFirst), after
+  // blastT seconds, and with it the whole chain (mnLink). A raider it reaches first
+  // takes the bolt. `sweep` (rad) also tries the line that far to the side. Returns
+  // whether any mine goes off.
+  function predictBlast(t: number, seen: Snapshot, prev: Snapshot, boltTheta: number, boltZ: number, ttl: number, sweep = 0): boolean {
+    const craft = session.craft
+    const closing = GUN.BOLT_SPEED + craft.speed // the mine comes toward the bolt at the craft's speed
+    mnFirst = -1
+    blastT = Math.max(ttl, 0)
+    for (let i = 0; i < nMn; i++) {
+      const z = craft.distance - mnWd[i]! // ship-relative now
+      const hitT = (boltZ - z) / closing
+      if (hitT < 0 || hitT > blastT) continue
+      const zHit = z + craft.speed * hitT
+      if (!boltHitsMine(boltTheta, mnTheta[i]!, 0, zHit) && !(sweep !== 0 && boltHitsMine(boltTheta + sweep, mnTheta[i]!, 0, zHit))) continue
+      mnFirst = i
+      blastT = hitT
+    }
+    if (mnFirst < 0) return false
+    // raiders hold their depth ahead of the ship, so the bolt closes on one at its own speed
+    const age = t - seen.t
+    for (let i = 0; i < seen.nEn; i++) {
+      estimate(seen, prev, i)
+      const z = seen.enZ[i]! + estZVel * age
+      const hitT = (boltZ - z) / GUN.BOLT_SPEED
+      if (hitT < 0 || hitT >= blastT) continue
+      const om = seen.enCharge[i]! > 0.05 ? 0 : estOm // a charging raider holds its line
+      const theta = seen.enTheta[i]! + aimOffset + om * (age + hitT) * profile.lead
+      if (gap(boltTheta, theta) < raiderHitAngle(z)) return false
+    }
+    chainLinks(mnTheta, mnWd, nMn, mnFirst, mnLink, mnOrder)
+    return true
+  }
+
+  // A bolt fired before the next tick: 'none' if it reaches no mine, 'unsafe' if a
+  // detonation it sets off would be inside the danger distance of the craft, else
+  // 'safe'. The bot judges its own line as it saw it `reaction` ago, carried on at
+  // the spin it had then, and swept by how far the craft swings until the next tick.
+  function shotBlast(t: number, seen: Snapshot, prev: Snapshot): 'none' | 'safe' | 'unsafe' {
+    gatherMines(seen)
+    const craft = session.craft
+    const line = seen.theta + seen.omega * (t - seen.t)
+    if (!predictBlast(t, seen, prev, line, SHIP.Z, GUN.BOLT_TTL, seen.omega / TICK_HZ)) return 'none'
+    blastTargetWd = mnWd[mnFirst]!
+    for (let i = 0; i < nMn; i++) {
+      if (mnLink[i]! < 0) continue
+      const z = craft.distance + craft.speed * blastT - mnWd[i]! // ship-relative when the bolt lands
+      if (wallDistance(line, mnTheta[i]!, z - SHIP.Z) < BLAST.RADIUS + BLAST_CLEARANCE) return 'unsafe'
+    }
+    return 'safe'
   }
 
   // angular + closing speed of a raider, from the two snapshots (0 if just seen)
@@ -489,8 +618,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
     }
   }
 
-  function wantsFire(t: number, seen: Snapshot, prev: Snapshot): boolean {
-    if (session.game.energy < GUN.COST) return false
+  function raiderOnLine(t: number, seen: Snapshot, prev: Snapshot): boolean {
     const age = t - seen.t
     const craft = session.craft
     for (let i = 0; i < seen.nEn; i++) {
@@ -505,8 +633,24 @@ export function createBot(profile: BotProfile, session: Session): Bot {
     return false
   }
 
-  function addEvent(t: number, theta: number, hw: number, win: number, w: number, margin: number): void {
+  // Fire at a raider on the line, or (by profile) at the mine a bolt fired now would
+  // reach (`mineOnLine`: the last look found one at a safe distance), unless one of
+  // its own bolts (`own`, the newest snapshot) is already on its way to that mine.
+  function wantsFire(t: number, seen: Snapshot, prev: Snapshot, own: Snapshot, mineOnLine: boolean): boolean {
+    if (session.game.energy < GUN.COST) return false
+    if (raiderOnLine(t, seen, prev)) return true
+    if (!mineOnLine || profile.mineShots === 'never' || (profile.mineShots === 'cornered' && !cornered)) return false
+    gatherMines(seen)
+    for (let i = 0; i < own.nShot; i++) {
+      const z = own.shotZ[i]! - GUN.BOLT_SPEED * (t - own.t)
+      if (predictBlast(t, seen, prev, own.shotTheta[i]!, z, GUN.BOLT_TTL - (SHIP.Z - z) / GUN.BOLT_SPEED) && mnWd[mnFirst] === blastTargetWd) return false
+    }
+    return true
+  }
+
+  function addEvent(t: number, theta: number, hw: number, win: number, w: number, margin: number, mine = false): void {
     if (nEv >= MAX_EVENTS || t < -win) return
+    evMine[nEv] = mine ? 1 : 0
     evT[nEv] = t
     evTheta[nEv] = theta
     evHw[nEv] = hw
@@ -516,7 +660,9 @@ export function createBot(profile: BotProfile, session: Session): Bot {
     nEv++
   }
 
-  function buildEvents(t: number, seen: Snapshot, prev: Snapshot): void {
+  // `own` is the newest snapshot: the bot knows where its own bolts are, like it
+  // feels its own craft.
+  function buildEvents(t: number, seen: Snapshot, prev: Snapshot, own: Snapshot): void {
     nEv = 0
     nTg = 0
     const craft = session.craft
@@ -541,7 +687,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       const win = captureZ / speed
       if (kind === KIND_MINE) {
         if (tArr + win < invuln) continue // will pass while still flickering
-        addEvent(tArr, theta, HAZARD.CAPTURE_ANGLE, win, -death, 0.3)
+        addEvent(tArr, theta, HAZARD.CAPTURE_ANGLE, win, -death, 0.3, true)
       } else if (kind === KIND_GEM) {
         addEvent(tArr, theta, TREASURE.CAPTURE_ANGLE * 0.85, win, profile.wGem, 0)
       } else if (kind === KIND_ORB) {
@@ -568,6 +714,23 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       evWin[worst] = evWin[nEv]!
       evW[worst] = evW[nEv]!
       evMargin[worst] = evMargin[nEv]!
+      evMine[worst] = evMine[nEv]!
+    }
+
+    // its own bolts in flight: when one lands on a mine, every mine of the chain goes
+    // off, lethal inside the blast radius, which at a mine's depth then is a stretch
+    // of the wall around it
+    gatherMines(seen)
+    for (let i = 0; i < own.nShot; i++) {
+      const z = own.shotZ[i]! - GUN.BOLT_SPEED * (t - own.t)
+      if (!predictBlast(t, seen, prev, own.shotTheta[i]!, z, GUN.BOLT_TTL - (SHIP.Z - z) / GUN.BOLT_SPEED) || blastT < invuln) continue
+      for (let j = 0; j < nMn; j++) {
+        if (mnLink[j]! < 0) continue
+        const mineZ = craft.distance + craft.speed * blastT - mnWd[j]! // ship-relative when the bolt lands
+        const halfAngle = blastHalfAngle(mineZ - SHIP.Z)
+        if (halfAngle === 0) continue
+        addEvent(blastT, mnTheta[j]!, halfAngle, BLAST_WINDOW, -death, BLAST_CLEARANCE / RIDE_RADIUS)
+      }
     }
 
     // enemy bolts in flight: lethal at the ship plane
@@ -610,8 +773,10 @@ export function createBot(profile: BotProfile, session: Session): Bot {
     }
   }
 
+  let planMine = false // scorePlan: the plan just scored rides into a mine
   function scorePlan(): number {
     let score = 0
+    planMine = false
     const H = nSteps * ROLL_DT
     const endTheta = th[nSteps]! + (th[nSteps]! - th[nSteps - 1]!) * 4 // drift ~0.13 s past the horizon
     for (let i = 0; i < nEv; i++) {
@@ -629,8 +794,10 @@ export function createBot(profile: BotProfile, session: Session): Bot {
         }
         if (w < 0) {
           const margin = evMargin[i]!
-          if (minD < hw) score += w
-          else if (minD < hw + margin) score += w * 0.25 * (1 - (minD - hw) / margin)
+          if (minD < hw) {
+            score += w
+            if (evMine[i]) planMine = true
+          } else if (minD < hw + margin) score += w * 0.25 * (1 - (minD - hw) / margin)
         } else if (minD < hw) score += w * (1 - profile.nearBias * (t / H))
         else score += w * 0.2 * Math.max(0, 1 - (minD - hw) / 1.2)
       } else if (t < H + 1) {
@@ -668,8 +835,8 @@ export function createBot(profile: BotProfile, session: Session): Bot {
     return score
   }
 
-  function decide(t: number, seen: Snapshot, prev: Snapshot): number {
-    buildEvents(t, seen, prev)
+  function decide(t: number, seen: Snapshot, prev: Snapshot, own: Snapshot): number {
+    buildEvents(t, seen, prev, own)
     const craft = session.craft
     const g = session.gravity() * gravityFeel
     let bestScore = -Infinity
@@ -699,6 +866,7 @@ export function createBot(profile: BotProfile, session: Session): Bot {
       if (score > bestScore) {
         bestScore = score
         bestAction = plan[1] > 0 ? plan[0] : 0
+        cornered = planMine
       }
     }
     return bestAction

@@ -33,8 +33,10 @@ Options of `npm run playtest`:
 - `--difficulty milkyway,orion,quasar` or `all` (default `orion`)
 - `--runs <n>` seeded runs per bot and mode, `--seed <n>` the first seed
 - `--max-seconds <n>` time cap per run
-- `--matrix baseline` the baseline set: every bot on ORION, kid on MILKY WAY, good on QUASAR
-- `--matrix next` the baseline set plus the oracle on MILKY WAY and on QUASAR
+- `--matrix baseline` the baseline set: every bot except the miner on ORION, kid on MILKY WAY,
+  good on QUASAR
+- `--matrix next` the baseline set plus the oracle on MILKY WAY and on QUASAR, and the miner on
+  ORION and on QUASAR
 - `--out file.json` machine-readable results (`--keep-runs` adds every single run)
 - `--compare file.json` prints deltas against an earlier `--out` file
 - `--levels` adds the per-level table for each bot
@@ -75,11 +77,17 @@ and aims best. The limits in `scripts/playtest/bot.ts` make the difference.
 | spinner | Holds one steer key and the fire key for the whole run. Shows whether an endless spin pays |
 | tapper | Rests at the bottom, collects nothing, shoots a raider on its line and taps away from a firing tell. Its bolt hits are the "I dodged and it still hit me" case |
 | passive | No input |
+| miner | The good player, and it shoots every mine on its line outside the danger distance. The upper limit of what shooting mines gives |
 
 Every bot except the oracle has limits: delayed sight, fog distance, error in judged angles,
 a wandering aim, a limited number of objects in mind, key presses that land late, and a
 slightly wrong feel for the swing. The bots do not read hidden state. They see the angle and
 distance of wall objects, raiders and bolts, and a raider's firing tell.
+
+Every bot that fires, except the spinner, avoids a shot that would set off a mine close to
+itself, judged through its limits, so a bot with limits is sometimes hurt by its own blast. Only
+the miner, and the oracle when it would otherwise ride into a mine, shoot mines on purpose (see
+`mineShots` in `scripts/playtest/bot.ts`).
 
 The bot limits are estimates, not measurements of people. Two observations anchor them: how
 far a child once got in the game, and the owner's report that many raiders at once are hard
@@ -123,7 +131,7 @@ Per run, then mean, median, p10 and p90 over the runs of one bot and mode. `SCAL
 
 - **Outcome**: `time`, `level`, `score`, `capped` (alive at the time cap).
 - **Damage**: `hitsPerMin`, `livesLost` and by cause (`livesLostMine`, `livesLostBolt`,
-  `livesLostRam`),
+  `livesLostRam`, `livesLostBlast`),
   `timeToFirstHit`, `chainHits` (a life lost right after the invulnerability of the previous
   hit ended).
 - **Progression**: `secondsPerLevel` (mean seconds a completed level took), `gateSeconds` (of
@@ -148,6 +156,9 @@ Per run, then mean, median, p10 and p90 over the runs of one bot and mode. `SCAL
   (time more than 105 degrees from the bottom), `wallBinsUsed`, `loops`, `loopsPerMin`.
 - **Input**: `reversalsPerMin`, `pressesPerMin`, `steerDuty`.
 - **Mines**: `mineCloseCalls`, `nearMissPerMin`.
+- **Mine blasts**: `minesShot`, `minesChained` (set off by another mine's blast),
+  `raidersBlasted` (not kills, they pay nothing), `gemsBlasted` (counted as offered, not
+  collected).
 - **Per level** (`--levels`): for each level, how many runs reached it and ended there, the
   main measures above at that level, `level time` (seconds the level took, over the runs that
   passed its gate) and `gate wait` (of which after the quota was met).
@@ -158,7 +169,7 @@ Each sim is a fast headless check of one part of the game.
 
 | Command | What it checks |
 |---|---|
-| `npm run sim` | Combat: gun, raiders, waves, the cap on simultaneous fire, tells, bolts, crosses from kills, the bonus cross, lives |
+| `npm run sim` | Combat: gun, raiders, waves, the cap on simultaneous fire, tells, bolts, crosses from kills, the bonus cross, lives, mines that explode when shot (the blast rule, chains, the squad count) |
 | `npm run sim:levels` | Level math: speeds, the gem quota and the level gate, waves per mode |
 | `npm run sim:fields` | Wall fields: placement, separation between kinds, miss and near-miss events |
 | `npm run sim:sequence` | Gem lines: every phrase can be flown and its mines stay clear of the line, budgets, section boundaries, input jitter, a difficulty change on the title |
@@ -176,6 +187,8 @@ Each sim is a fast headless check of one part of the game.
   gate is not listed: it is harmless and cannot be missed, so the bots do not need to see it.
 - The bots read hit windows and speeds from `src/config.ts`. A mechanic that config does not
   describe must be taught to the bot.
+- The blast rule of a shot mine is in `src/world/blast.ts`, and the bots call the same
+  functions as the game. A change to the rule reaches the bots without teaching them.
 - A raider's role is not reported. A hunter looks like any raider, and the bots know it only
   by how it moves and by its firing tell.
 

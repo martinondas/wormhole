@@ -95,8 +95,9 @@ raiders at once are hard to manage, and fire from all of them reads as luck, not
   did not grow with them, and the owner's shots through the visible wing did not count. Chosen:
   the outer hit area follows the drawn size (a wing hit damages, a second one kills), and the
   instant-kill centre has one size at every distance. Consequence, open: the game is clearly
-  easier for the skilled bot at deep levels. Making lives more expensive did not help. The
-  likely lever is raider fire at deep levels.
+  easier for the skilled bot at deep levels. Making lives more expensive did not help. Raider
+  fire at deep levels was tightened later, but to offset the exploding mines (see there), so
+  this easing is still open.
 - 2026-11 - A squad whose last raider is shot while it flies away: the owner found it
   frustrating that this did not count. Chosen: a squad counts as destroyed when every member is
   killed, also one shot while it flies away. A member that gets out of reach means the squad is
@@ -164,10 +165,70 @@ a tube made only of lines feels like rails, and the same line too often feels re
 - 2026-11 - A mine budget above a certain point forced the same mine phrases into every slow
   section and pushed the rings out of fast sections. Chosen: a floor on how dense mines get.
 - 2026-11 - Mines are a weak threat next to raider fire, because they sit off the lines by
-  design. A mine pattern that asks more of a skilled player without causing deaths by luck is
-  open design work.
+  design. Shots that miss a raider also clear mines (see Exploding mines). A mine pattern that
+  asks more of a skilled player without causing deaths by luck is open design work.
 - Earlier - The gate exists because a player could coast through levels by dodging alone.
   Score has no distance term for the same reason: passive flight earned more than progress.
+
+## Exploding mines
+
+**Experience.** A shot mine explodes, as a player expects. The rule is short: shoot it early or
+dodge it.
+
+**Trade-off.** A blast that clears the wall makes the game easier, and a blast that pays turns
+mines into a source of score. A blast must also be a danger, or there is no reason to shoot early.
+
+**Current choice.**
+- A player bolt that reaches a mine detonates it, and the bolt is used up. Raider bolts pass
+  through mines. A mine the ship rides into costs a life without a blast.
+- One rule for everything within a fixed distance of the mine on the wall: raiders are
+  destroyed, other mines go off in a chain, gems, orbs and green crosses are destroyed, and the
+  ship loses a life. The invulnerability after a hit means one shot costs at most one life.
+- The gun pays, the blast only clears. A shot mine pays nothing. A raider destroyed by a blast
+  pays no score and no charge, leaves no cross, and its squad does not count as destroyed. A
+  gem destroyed by a blast counts as missed.
+- The whole chain is decided at the moment the bolt lands. The ripple along the chain is
+  drawing only.
+- A rim, a ring on the wall at the blast distance, stands in the moment of the blast, so the
+  drawn rim is the danger distance. It then fades, and the ship can fly through what is left.
+  Objects in the blast break into streaks that fly away from the centre. The blast stays in the
+  mine's orange-red, never white. A raider destroyed by a blast is drawn dimmer, without the
+  kill burst and the kill sound, so the player reads that it paid nothing.
+- The rules are in `src/world/blast.ts`. The game and the bots use the same functions.
+
+**Notes.**
+- 2026-11 - A shot used to pass through a mine, which made no sense to a player. Chosen with the
+  owner: a shot destroys a mine, with one blast rule for everything near it.
+- 2026-11 - Who is paid. The first proposal paid blast kills like gun kills. The owner chose "the
+  gun pays, the blast only clears".
+- 2026-11 - Rejected by reasoning: raider bolts that set off mines. A blast the player did not
+  cause can read as a death by luck.
+- 2026-11 - The owner's idea of a pressure wave that pushes objects away was not built as
+  gameplay. Gems sit on the path a simulated pilot has flown, and a pushed gem leaves that path.
+  The wave is drawn instead, as the streaks.
+- 2026-11 - The chain first went off link by link with a delay. A review found that the ship
+  then flew into a chain running toward it and lost a life after a shot from a safe distance.
+  Chosen: the whole chain is decided at the shot.
+- 2026-11 - Measured with the bots, all of the easing came from one source: shots aimed at
+  raiders that miss fly on and clear mines. Raiders destroyed by blasts and deliberate mine
+  shooting added nothing measurable to survival. The skilled bot was clearly easier, the
+  average and the weakest bot were not harder, and the weakest bot on the gentle mode was
+  clearly easier.
+- 2026-11 - The blast distance did not move difficulty. It trades raiders caught against gems
+  lost, so it was set for the look.
+- 2026-11 - Offsetting the easing. Chosen: tighter raider fire at deep levels (shorter
+  cooldowns and tells closer together in the deep ramp), which brought the skilled bot back to
+  where it was. Rejected: starting the deep ramp earlier (the average bot became clearly
+  harder). Not taken: denser mines at deep levels. It worked, but it goes below the mine floor
+  of the gem lines, which protects their variety, and the harness has no measure of that variety.
+- 2026-11 - The miner bot shoots every mine on its line. It stays somewhat easier than the
+  skilled bot was before. It is the upper limit of what the mechanic gives.
+- 2026-11 - Open. The average bot leans slightly harder after the fire change: inside the
+  noise, but in the same direction in every variant. The bots lose almost no lives to their own
+  blasts, also with their avoidance switched off, so it is not known whether "never at close
+  range" bites for a person. A blast destroys the gems near it, which costs a skilled bot a
+  noticeable number of gems per run and may feel like a penalty. Not judged by a person: the
+  look and the sound of the blast, and whether players shoot mines at all, since it pays nothing.
 
 ## Lives and economy
 
@@ -179,7 +240,7 @@ player close to unkillable. And charge scarce enough to matter, without leaving 
 aims less well than a bot with an empty gun.
 
 **Current choice.**
-- Every destroyed raider leaves a small green cross on the wall ahead. While a ship is
+- Every raider the gun destroys leaves a small green cross on the wall ahead. While a ship is
   missing, caught crosses fill a bar, and a full bar restores a ship. With all ships intact a
   cross pays score.
 - The last raider of every Nth fully destroyed squad leaves a large cross that restores a whole

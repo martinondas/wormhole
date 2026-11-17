@@ -158,7 +158,7 @@ const CSS = `
 `
 
 // Game-over cause line, by the cause of the last life lost.
-const CAUSE_TEXT: Record<DamageCause, string> = { mine: 'HIT BY MINE', bolt: 'RAIDER BOLT', ram: 'RAIDER RAM' }
+const CAUSE_TEXT: Record<DamageCause, string> = { mine: 'HIT BY MINE', bolt: 'RAIDER BOLT', ram: 'RAIDER RAM', blast: 'MINE BLAST' }
 
 // Score multiplier as shown on the level banner: 1.5 -> "1.5", 2 -> "2", 2.25 -> "2.25".
 function fmtMult(m: number): string {

@@ -2,14 +2,15 @@
 // Runs seeded bot players through src/session.ts - the same gameplay module the
 // browser runs - and reports playability metrics. See playtest/README.md.
 //
-//   --bot <names>        comma list or "all" (kid, average, good, oracle, camper, spinner, tapper, passive)
+//   --bot <names>        comma list or "all" (kid, average, good, oracle, camper, spinner, tapper, passive, miner)
 //   --difficulty <modes> comma list or "all" (milkyway, orion, quasar)   default orion
 //   --runs <n>           seeded runs per bot x mode                      default 40
 //   --seed <n>           first seed (runs use seed, seed+1, ...)         default 1
 //   --max-seconds <n>    time cap per run                                default 600
-//   --matrix baseline    the baseline set: every bot on ORION, kid on MILKY WAY, good on QUASAR
+//   --matrix baseline    the baseline set: every bot but the miner on ORION, kid on MILKY WAY, good on QUASAR
 //   --matrix next        the baseline set plus the oracle on MILKY WAY and on QUASAR (the
-//                        fairness guard in every mode); playtest/next-level.json holds it
+//                        fairness guard in every mode) and the miner on ORION and on QUASAR;
+//                        playtest/next-level.json holds it
 //   --out <file.json>    write the aggregated results (add --keep-runs for every run)
 //   --compare <file>     print baseline-vs-current deltas against an earlier --out file
 //   --levels             also print the per-level pacing table for each entry
@@ -75,9 +76,13 @@ let jobs: { bot: string; mode: number }[] = []
 const matrix = opt('matrix', '')
 if (matrix === 'baseline' || matrix === 'next') {
   const orion = modeIndex('orion')
-  jobs = Object.keys(PROFILES).map((bot) => ({ bot, mode: orion }))
+  // the miner is not in the baseline set: playtest/baseline.json was recorded without it
+  jobs = Object.keys(PROFILES).filter((bot) => bot !== 'miner').map((bot) => ({ bot, mode: orion }))
   jobs.push({ bot: 'kid', mode: modeIndex('milkyway') }, { bot: 'good', mode: modeIndex('quasar') })
-  if (matrix === 'next') jobs.push({ bot: 'oracle', mode: modeIndex('milkyway') }, { bot: 'oracle', mode: modeIndex('quasar') })
+  if (matrix === 'next') {
+    jobs.push({ bot: 'oracle', mode: modeIndex('milkyway') }, { bot: 'oracle', mode: modeIndex('quasar') })
+    jobs.push({ bot: 'miner', mode: orion }, { bot: 'miner', mode: modeIndex('quasar') })
+  }
 } else {
   if (matrix !== '') throw new Error(`unknown --matrix "${matrix}" (have: baseline, next)`)
   const botArg = opt('bot', 'average')

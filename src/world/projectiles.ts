@@ -7,7 +7,7 @@ import { angleDiff } from '../util/math'
 
 // ONE pooled bolt system for BOTH sides. A bolt is a small camera-facing diamond
 // glyph; only the travel direction (z) and color differ:
-//   player bolts travel -Z (forward, away down the tube) and try to kill enemies;
+//   player bolts travel -Z (forward, away down the tube) and strike raiders and mines;
 //   enemy bolts travel +Z (toward the ship plane at z=0) and can cost a life.
 // (A bolt is seen nearly END-ON looking down the tube, so a Z-aligned streak would
 //  foreshorten to an invisible dot. A fronto-parallel diamond in the XY plane stays
@@ -21,7 +21,7 @@ export type BoltSide = 'player' | 'enemy'
 // What the bolt update needs from the rest of the world, injected by main.ts so
 // projectiles import neither enemies nor game directly.
 export interface ProjectileCtx {
-  tryKillEnemy(theta: number, z: number): boolean // true if the bolt struck an enemy (consume it)
+  strike(theta: number, z: number): boolean // a player bolt at (theta, z): true if it struck something (consume it)
   shipTheta: number
   onShipHit(): boolean // lethal hit on the ship (routes to game.hitHazard)
 }
@@ -144,7 +144,7 @@ export function createProjectiles(): Projectiles {
 
         let consumed = false
         if (b.side === 'player') {
-          if (ctx.tryKillEnemy(b.theta, b.z)) consumed = true
+          if (ctx.strike(b.theta, b.z)) consumed = true
         } else {
           // enemy bolt: lethal at the ship plane; if it sails past, it missed.
           if (
